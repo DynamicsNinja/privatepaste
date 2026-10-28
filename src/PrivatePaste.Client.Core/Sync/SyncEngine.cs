@@ -94,14 +94,14 @@ public sealed class SyncEngine(
             (_loop, _stop) = (null, null);
         }
         if (stop is null) return;
-        await stop.CancelAsync();
-        await loop!;   // never throws
+        await stop.CancelAsync().ConfigureAwait(false);
+        await loop!.ConfigureAwait(false);   // never throws
         stop.Dispose();
         SaveIfDirty();
         if (_state != SyncState.SignedOut) SetState(SyncState.Offline);
     }
 
-    public async ValueTask DisposeAsync() => await StopAsync();
+    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
 
     private async Task RunAsync(CancellationToken stop)
     {
@@ -114,12 +114,12 @@ public sealed class SyncEngine(
                     _resumingFromPause = true;
                     var poll = Task.Delay(PollInterval, time, stop);   // timer exists before the state is visible
                     SetState(SyncState.Paused);
-                    await poll;
+                    await poll.ConfigureAwait(false);
                     continue;
                 }
 
                 SetState(SyncState.Connecting);
-                switch (await RunConnectionAsync(stop))
+                switch (await RunConnectionAsync(stop).ConfigureAwait(false))
                 {
                     case Outcome.Revoked:
                         SignOut();
@@ -133,7 +133,7 @@ public sealed class SyncEngine(
 
                 var delay = Task.Delay(backoff.Next(), time, stop);
                 SetState(SyncState.Offline);
-                await delay;
+                await delay.ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
@@ -150,7 +150,7 @@ public sealed class SyncEngine(
         WebSocket socket;
         try
         {
-            socket = await connect(lifetime.Token);
+            socket = await connect(lifetime.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
@@ -159,7 +159,7 @@ public sealed class SyncEngine(
         catch (Exception e)
         {
             Report("Could not connect to the server.", e);
-            return await ProbeAuthAsync(stop);
+            return await ProbeAuthAsync(stop).ConfigureAwait(false);
         }
 
         var link = new Link(socket, lifetime);
@@ -168,8 +168,8 @@ public sealed class SyncEngine(
         DateTimeOffset? connectedAt = null;
         try
         {
-            await CatchUpAsync(lifetime.Token);
-            await coordinator.FlushQueueAsync(lifetime.Token);
+            await CatchUpAsync(lifetime.Token).ConfigureAwait(false);
+            await coordinator.FlushQueueAsync(lifetime.Token).ConfigureAwait(false);
             if (isPaused()) return Outcome.Paused;
 
             link.LastPingAt = time.GetUtcNow();
@@ -177,7 +177,7 @@ public sealed class SyncEngine(
             monitor = MonitorAsync(link, timer);
             connectedAt = time.GetUtcNow();
             SetState(SyncState.Connected);
-            return await ReceiveLoopAsync(link);
+            return await ReceiveLoopAsync(link).ConfigureAwait(false);
         }
         catch (UnauthorizedApiException)
         {
@@ -204,10 +204,10 @@ public sealed class SyncEngine(
         }
         finally
         {
-            try { await lifetime.CancelAsync(); } catch (ObjectDisposedException) { }
+            try { await lifetime.CancelAsync().ConfigureAwait(false); } catch (ObjectDisposedException) { }
             socket.Abort();
             timer?.Dispose();
-            if (monitor is not null) await monitor;   // never throws
+            if (monitor is not null) await monitor.ConfigureAwait(false);   // never throws
             socket.Dispose();
             SaveIfDirty();
             // Only a connection that proved stable resets the delays (runs on the loop thread, after the monitor ended).
@@ -220,7 +220,7 @@ public sealed class SyncEngine(
     {
         try
         {
-            await api.SyncAsync(cache.HighestSeq, limit: 1, ct: stop);
+            await api.SyncAsync(cache.HighestSeq, limit: 1, ct: stop).ConfigureAwait(false);
         }
         catch (UnauthorizedApiException)
         {
@@ -241,7 +241,7 @@ public sealed class SyncEngine(
         while (true)
         {
             var before = cache.HighestSeq;
-            var page = await api.SyncAsync(before, ct: ct);
+            var page = await api.SyncAsync(before, ct: ct).ConfigureAwait(false);
             foreach (var clip in page.Clips)
             {
                 changed |= cache.Upsert(clip);
@@ -264,7 +264,7 @@ public sealed class SyncEngine(
             .Where(c => c.SourceDeviceId != ownDeviceId && present.TryGetValue(c.Id, out var seq) && seq == c.Seq)
             .MaxBy(c => (c.LastCopiedAt, c.Seq));
         if (newest is not null && !isPaused() && newest.LastCopiedAt > lastApplied)
-            await ApplyAsync(newest, ct);
+            await ApplyAsync(newest, ct).ConfigureAwait(false);
     }
 
     private async Task<Outcome> ReceiveLoopAsync(Link link)
@@ -278,7 +278,7 @@ public sealed class SyncEngine(
             WebSocketReceiveResult result;
             do
             {
-                result = await link.Socket.ReceiveAsync(buffer, ct);
+                result = await link.Socket.ReceiveAsync(buffer, ct).ConfigureAwait(false);
                 if (result.MessageType == WebSocketMessageType.Close)
                     return result.CloseStatus == WebSocketCloseStatus.PolicyViolation ? Outcome.Revoked : Outcome.Failed;
                 message.Write(buffer, 0, result.Count);
@@ -296,7 +296,7 @@ public sealed class SyncEngine(
                 Report("Ignored an unreadable message from the server.", e);
                 continue;
             }
-            if (msg is not null) await HandleAsync(msg, link, ct);
+            if (msg is not null) await HandleAsync(msg, link, ct).ConfigureAwait(false);
         }
     }
 
@@ -315,7 +315,7 @@ public sealed class SyncEngine(
                 {
                     // A slow image fetch blocks this loop, and with it the pong: don't let that count as a dead link.
                     link.SetBusy(true);
-                    try { await ApplyAsync(clip, ct); }
+                    try { await ApplyAsync(clip, ct).ConfigureAwait(false); }
                     finally { link.SetBusy(false); }
                 }
                 if (added) OnHistoryChanged();
@@ -331,7 +331,7 @@ public sealed class SyncEngine(
     {
         try
         {
-            await coordinator.ApplyRemoteAsync(clip, ct);
+            await coordinator.ApplyRemoteAsync(clip, ct).ConfigureAwait(false);
             _lastApplied = (clip.Id, clip.Seq);
         }
         catch (UnauthorizedApiException) { throw; }
@@ -347,7 +347,7 @@ public sealed class SyncEngine(
     {
         try
         {
-            while (await timer.WaitForNextTickAsync(link.Token))
+            while (await timer.WaitForNextTickAsync(link.Token).ConfigureAwait(false))
             {
                 if (isPaused())
                 {
@@ -361,7 +361,7 @@ public sealed class SyncEngine(
                         link.Abort(AbortReason.PongTimeout);
                         return;
                     case PingDue.Send:
-                        await link.Socket.SendAsync(PingBytes, WebSocketMessageType.Text, true, link.Token);
+                        await link.Socket.SendAsync(PingBytes, WebSocketMessageType.Text, true, link.Token).ConfigureAwait(false);
                         break;
                 }
                 SaveIfDue();

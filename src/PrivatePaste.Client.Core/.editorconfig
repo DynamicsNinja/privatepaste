@@ -1,0 +1,5 @@
+root = false
+
+# Library code never needs the caller's context: every await must use ConfigureAwait(false).
+[*.cs]
+dotnet_diagnostic.CA2007.severity = warning

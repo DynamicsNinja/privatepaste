@@ -21,20 +21,20 @@ public sealed class PrivatePasteApi(HttpClient http)
     {
         using var req = Request(HttpMethod.Post, "api/auth/login");
         req.Content = JsonContent.Create(new LoginRequest(password, deviceName, platform), options: ProtocolJson.Options);
-        return await SendJsonAsync<LoginResponse>(req, ct);
+        return await SendJsonAsync<LoginResponse>(req, ct).ConfigureAwait(false);
     }
 
     public async Task LogoutAsync(CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Post, "api/auth/logout");
-        using var _ = await SendAsync(req, ct);
+        using var _ = await SendAsync(req, ct).ConfigureAwait(false);
     }
 
     public async Task<ClipDto> UploadTextAsync(string text, DateTimeOffset? copiedAt, bool backfill, CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Post, "api/clips/text");
         req.Content = JsonContent.Create(new TextClipUpload(text, copiedAt, backfill), options: ProtocolJson.Options);
-        return await SendJsonAsync<ClipDto>(req, ct);
+        return await SendJsonAsync<ClipDto>(req, ct).ConfigureAwait(false);
     }
 
     public async Task<ClipDto> UploadImageAsync(byte[] png, DateTimeOffset? copiedAt, bool backfill, CancellationToken ct = default)
@@ -48,7 +48,7 @@ public sealed class PrivatePasteApi(HttpClient http)
         form.Add(new StringContent(backfill ? "true" : "false"), "backfill");
         using var req = Request(HttpMethod.Post, "api/clips/image");
         req.Content = form;
-        return await SendJsonAsync<ClipDto>(req, ct);
+        return await SendJsonAsync<ClipDto>(req, ct).ConfigureAwait(false);
     }
 
     public async Task<ClipPage> ListAsync(string? query, string? cursor, int limit = 50, CancellationToken ct = default)
@@ -57,19 +57,19 @@ public sealed class PrivatePasteApi(HttpClient http)
         if (!string.IsNullOrEmpty(query)) url += "&q=" + Uri.EscapeDataString(query);
         if (!string.IsNullOrEmpty(cursor)) url += "&cursor=" + Uri.EscapeDataString(cursor);
         using var req = Request(HttpMethod.Get, url);
-        return await SendJsonAsync<ClipPage>(req, ct);
+        return await SendJsonAsync<ClipPage>(req, ct).ConfigureAwait(false);
     }
 
     public async Task<ClipDto> RestoreAsync(Guid id, CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Post, $"api/clips/{id}/restore");
-        return await SendJsonAsync<ClipDto>(req, ct);
+        return await SendJsonAsync<ClipDto>(req, ct).ConfigureAwait(false);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Delete, $"api/clips/{id}");
-        using var _ = await SendAsync(req, ct);
+        using var _ = await SendAsync(req, ct).ConfigureAwait(false);
     }
 
     public Task<byte[]> GetImageAsync(Guid id, CancellationToken ct = default) => GetBytesAsync($"api/clips/{id}/image", ct);
@@ -79,14 +79,14 @@ public sealed class PrivatePasteApi(HttpClient http)
     public async Task<SyncResponse> SyncAsync(long afterSeq, int limit = 200, CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Get, $"api/sync?afterSeq={afterSeq.ToString(CultureInfo.InvariantCulture)}&limit={limit.ToString(CultureInfo.InvariantCulture)}");
-        return await SendJsonAsync<SyncResponse>(req, ct);
+        return await SendJsonAsync<SyncResponse>(req, ct).ConfigureAwait(false);
     }
 
     private async Task<byte[]> GetBytesAsync(string url, CancellationToken ct)
     {
         using var req = Request(HttpMethod.Get, url);
-        using var res = await SendAsync(req, ct);
-        return await res.Content.ReadAsByteArrayAsync(ct);
+        using var res = await SendAsync(req, ct).ConfigureAwait(false);
+        return await res.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
     }
 
     // Relative URLs without a leading slash so a sub-path in BaseAddress is preserved.
@@ -99,10 +99,10 @@ public sealed class PrivatePasteApi(HttpClient http)
 
     private async Task<T> SendJsonAsync<T>(HttpRequestMessage req, CancellationToken ct)
     {
-        using var res = await SendAsync(req, ct);
+        using var res = await SendAsync(req, ct).ConfigureAwait(false);
         try
         {
-            return await res.Content.ReadFromJsonAsync<T>(ProtocolJson.Options, ct)
+            return await res.Content.ReadFromJsonAsync<T>(ProtocolJson.Options, ct).ConfigureAwait(false)
                 ?? throw new HttpRequestException("Unexpected response from server.");
         }
         catch (Exception e) when (e is JsonException or NotSupportedException)
@@ -114,7 +114,7 @@ public sealed class PrivatePasteApi(HttpClient http)
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
     {
         HttpResponseMessage res;
-        try { res = await http.SendAsync(req, ct); }
+        try { res = await http.SendAsync(req, ct).ConfigureAwait(false); }
         catch (TaskCanceledException e) when (!ct.IsCancellationRequested)
         {
             throw new HttpRequestException("Request timed out.", e.InnerException ?? e);
@@ -122,7 +122,7 @@ public sealed class PrivatePasteApi(HttpClient http)
         if (res.IsSuccessStatusCode) return res;
         try
         {
-            var message = await ReadMessageAsync(res, ct);
+            var message = await ReadMessageAsync(res, ct).ConfigureAwait(false);
             throw res.StatusCode == System.Net.HttpStatusCode.Unauthorized
                 ? new UnauthorizedApiException(message)
                 : new ApiException(res.StatusCode, message);
@@ -134,7 +134,7 @@ public sealed class PrivatePasteApi(HttpClient http)
     {
         try
         {
-            var body = await res.Content.ReadAsStringAsync(ct);
+            var body = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (body.Length > 0)
             {
                 using var doc = JsonDocument.Parse(body);

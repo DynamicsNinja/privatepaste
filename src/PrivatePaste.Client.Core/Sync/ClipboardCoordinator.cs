@@ -34,12 +34,12 @@ public sealed class ClipboardCoordinator(
     {
         if (isPaused()) return;
         // Read before waiting on the gate so copies made during a slow upload are each captured, in order.
-        var content = await clipboard.ReadAsync(ct);
+        var content = await clipboard.ReadAsync(ct).ConfigureAwait(false);
         if (content is null) return;
         var readAt = time.GetUtcNow();
 
         // Ordering of captures relies on SemaphoreSlim granting the gate to async waiters in FIFO order.
-        await _gate.WaitAsync(ct);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (isPaused()) return;
@@ -90,7 +90,7 @@ public sealed class ClipboardCoordinator(
             var copiedAt = time.GetUtcNow();
             try
             {
-                var result = await UploadAsync(content, copiedAt, backfill: false, ct);
+                var result = await UploadAsync(content, copiedAt, backfill: false, ct).ConfigureAwait(false);
                 _lastLocalHash = hash;
                 cache.Upsert(result);
                 TrySaveCache();
@@ -114,8 +114,8 @@ public sealed class ClipboardCoordinator(
     /// </summary>
     public async Task OnResumedAsync(CancellationToken ct)
     {
-        var content = await clipboard.ReadAsync(ct);
-        await _gate.WaitAsync(ct);
+        var content = await clipboard.ReadAsync(ct).ConfigureAwait(false);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             _lastLocalHash = null;
@@ -139,7 +139,7 @@ public sealed class ClipboardCoordinator(
     public async Task FlushQueueAsync(CancellationToken ct)
     {
         if (isPaused()) return;
-        await _gate.WaitAsync(ct);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             while (!isPaused() && queue.TryPeek(out var item))
@@ -147,7 +147,7 @@ public sealed class ClipboardCoordinator(
                 ClipDto result;
                 try
                 {
-                    result = await UploadAsync(item.Content, item.CopiedAt, backfill: true, ct);
+                    result = await UploadAsync(item.Content, item.CopiedAt, backfill: true, ct).ConfigureAwait(false);
                 }
                 catch (Exception e) when (IsTransient(e))
                 {
@@ -178,7 +178,7 @@ public sealed class ClipboardCoordinator(
         ClipboardContent content;
         if (clip.Kind == ClipKind.Image)
         {
-            var png = await api.GetImageAsync(clip.Id, ct);
+            var png = await api.GetImageAsync(clip.Id, ct).ConfigureAwait(false);
             try { ImageHashing.HashPng(png); }
             catch (InvalidDataException) { return; }   // e.g. a captive-portal page: transient, skip without side effects
             content = new ClipboardContent.Image(png);
@@ -189,7 +189,7 @@ public sealed class ClipboardCoordinator(
             content = new ClipboardContent.Text(clip.Text);
         }
 
-        await _gate.WaitAsync(ct);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (isPaused()) return;
@@ -199,7 +199,7 @@ public sealed class ClipboardCoordinator(
             _ownWriteAt = content is ClipboardContent.Image ? time.GetUtcNow() : null;   // text relies on the exact-hash echo
             try
             {
-                await clipboard.WriteAsync(content, ct);
+                await clipboard.WriteAsync(content, ct).ConfigureAwait(false);
             }
             catch
             {
