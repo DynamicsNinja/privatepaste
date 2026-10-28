@@ -129,3 +129,18 @@ public class DibConverterTests
         Assert.Throws<InvalidDataException>(() => DibConverter.FromPng([1, 2, 3]));
     }
 }
+
+public class DibConverterLimitTests
+{
+    [Fact]
+    public void Oversize_dimensions_are_rejected_before_allocating()
+    {
+        var dib = new byte[40 + 16];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(dib, 40);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(4), 30000);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(8), 30000);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(dib.AsSpan(12), 1);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(dib.AsSpan(14), 24);
+        Assert.Throws<InvalidDataException>(() => DibConverter.ToPng(dib));
+    }
+}

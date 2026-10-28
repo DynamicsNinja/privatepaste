@@ -13,6 +13,7 @@ public static class DibConverter
 {
     private const int BiRgb = 0, BiBitfields = 3, BiAlphaBitfields = 6;
     private const int InfoHeaderSize = 40;
+    private const long MaxPixels = 100_000_000;
 
     /// <exception cref="InvalidDataException">The DIB is malformed or uses an unsupported format.</exception>
     public static byte[] ToPng(byte[] dib)
@@ -29,7 +30,8 @@ public static class DibConverter
 
         var topDown = rawHeight < 0;
         var height = Math.Abs((long)rawHeight);
-        if (width <= 0 || height <= 0 || width > 32768 || height > 32768) throw new InvalidDataException("Bad DIB dimensions.");
+        if (width <= 0 || height <= 0 || width > 32768 || height > 32768 || (long)width * height > MaxPixels)
+            throw new InvalidDataException("Bad or oversize DIB dimensions.");
         if (compression is not (BiRgb or BiBitfields or BiAlphaBitfields)) throw new InvalidDataException("Unsupported DIB compression.");
 
         uint rMask, gMask, bMask, aMask = 0;
@@ -67,7 +69,7 @@ public static class DibConverter
         var stride = ((long)width * bitCount + 31) / 32 * 4;
         if (offset + stride * height > dib.Length) throw new InvalidDataException("DIB pixel data truncated.");
 
-        var rgba = new byte[width * (int)height * 4];
+        var rgba = new byte[checked((int)(width * height * 4))];
         var anyAlpha = false;
         var dst = 0;
         for (var y = 0; y < height; y++)
@@ -108,14 +110,15 @@ public static class DibConverter
     {
         using var codec = SKCodec.Create(new MemoryStream(png)) ?? throw new InvalidDataException("Not a decodable image.");
         var size = codec.Info;
-        if (size.Width <= 0 || size.Height <= 0) throw new InvalidDataException("Image has no pixels.");
+        if (size.Width <= 0 || size.Height <= 0 || (long)size.Width * size.Height > MaxPixels)
+            throw new InvalidDataException("Image has no pixels or is too large.");
         var info = new SKImageInfo(size.Width, size.Height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
         using var bitmap = SKBitmap.Decode(codec, info) ?? throw new InvalidDataException("Image could not be decoded.");
         var pixels = bitmap.GetPixelSpan();
         var rowBytes = info.Width * 4;
         if (pixels.Length != rowBytes * info.Height) throw new InvalidDataException("Unexpected pixel buffer size.");
 
-        var dib = new byte[InfoHeaderSize + pixels.Length];
+        var dib = new byte[checked(InfoHeaderSize + pixels.Length)];
         var h = dib.AsSpan();
         BinaryPrimitives.WriteInt32LittleEndian(h, InfoHeaderSize);
         BinaryPrimitives.WriteInt32LittleEndian(h[4..], info.Width);

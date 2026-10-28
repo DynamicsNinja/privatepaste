@@ -35,6 +35,37 @@ public class WindowsClipboardTests : IDisposable
     }
 
     [Fact]
+    public void Dispose_twice_is_safe()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var clip = new WindowsClipboard();
+        clip.Dispose();
+        clip.Dispose();
+    }
+
+    [Fact]
+    public async Task Dispose_while_changed_handler_blocks_does_not_throw()
+    {
+        if (!Enabled) return;
+        var clip = new WindowsClipboard();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unhandled = new List<Exception>();
+        UnhandledExceptionEventHandler h = (_, e) => unhandled.Add((Exception)e.ExceptionObject);
+        AppDomain.CurrentDomain.UnhandledException += h;
+        try
+        {
+            clip.Changed += (_, _) => { entered.TrySetResult(); Thread.Sleep(1500); };
+            await clip.WriteAsync(new ClipboardContent.Text("blocker " + Guid.NewGuid()), default);
+            await WithinAsync(entered.Task.ContinueWith(_ => true), TimeSpan.FromSeconds(2));
+            clip.Dispose();
+            clip.Dispose();
+            await Task.Delay(1500);
+            Assert.Empty(unhandled);
+        }
+        finally { AppDomain.CurrentDomain.UnhandledException -= h; }
+    }
+
+    [Fact]
     public async Task Windows_text_roundtrip()
     {
         if (!Enabled) return;
@@ -91,6 +122,8 @@ public class WindowsClipboardTests : IDisposable
 
         await coordinator.ApplyRemoteAsync(remote, default);
         await WithinAsync(changed.Task.ContinueWith(_ => true), TimeSpan.FromSeconds(2));
+        var back = Assert.IsType<ClipboardContent.Image>(await clip.ReadAsync(default));
+        Assert.Equal(remote.Hash, ImageHashing.HashPng(back.Png));   // the PNG format round-trips the exact pixels
         await coordinator.OnClipboardChangedAsync(default);   // deliver the event the watcher raised
 
         var observer = await server.LoginAsync("Observer");

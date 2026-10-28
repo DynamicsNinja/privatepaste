@@ -14,7 +14,8 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
     public static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly Action<string>? _log;
-    private readonly CancellationTokenSource _stop = new();
+    private readonly ManualResetEventSlim _stop = new(false);
+    private int _disposed;
     private readonly Thread _watcher;
     // Held while this app writes, so the watcher sees the whole write as one change rather than one per format.
     private readonly object _writeLock = new();
@@ -31,7 +32,7 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
 
     private void Watch()
     {
-        while (!_stop.Token.WaitHandle.WaitOne(PollInterval))
+        while (!_stop.Wait(PollInterval))
         {
             try
             {
@@ -56,14 +57,19 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
 
     public async Task WriteAsync(ClipboardContent content, CancellationToken ct)
     {
-        // Convert before touching the clipboard so a bad image never leaves it emptied.
-        var plan = content switch
+        if (content is not (ClipboardContent.Text or ClipboardContent.Image))
+            throw new ArgumentException("Unsupported clipboard content.", nameof(content));
+        // Decoding/conversion happens off the caller's thread, and before the clipboard is touched so a bad image never leaves it emptied.
+        var ok = await Task.Run(async () =>
         {
-            ClipboardContent.Text t => new WritePlan(Utf16Z(ToCrlf(t.Value)), null, null),
-            ClipboardContent.Image i => new WritePlan(null, i.Png, DibConverter.FromPng(i.Png)),
-            _ => throw new ArgumentException("Unsupported clipboard content.", nameof(content)),
-        };
-        var ok = await Task.Run(() => ClipboardRetry.RunAsync(() => WriteOnce(plan), log: _log, ct: ct), ct);
+            var plan = content switch
+            {
+                ClipboardContent.Text t => new WritePlan(Utf16Z(ToCrlf(t.Value)), null, null),
+                ClipboardContent.Image i => new WritePlan(null, i.Png, DibConverter.FromPng(i.Png)),
+                _ => throw new ArgumentException("Unsupported clipboard content.", nameof(content)),
+            };
+            return await ClipboardRetry.RunAsync(() => WriteOnce(plan), log: _log, ct: ct);
+        }, ct);
         if (!ok) throw new IOException("The clipboard is in use by another application.");
     }
 
@@ -87,18 +93,13 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
     private ClipboardContent? ReadOnce()
     {
         using var session = new Win32Clipboard.Session();
-
-        if (session.Get(Win32Clipboard.PngFormat) is { } png) return new ClipboardContent.Image(png);
-
-        foreach (var format in new[] { Win32Clipboard.CF_DIBV5, Win32Clipboard.CF_DIB })
+        return ClipboardSelector.Select(f => session.Get(f switch
         {
-            if (session.Get(format) is not { } dib) continue;
-            try { return new ClipboardContent.Image(DibConverter.ToPng(dib)); }
-            catch (InvalidDataException e) { _log?.Invoke("Skipped an unsupported clipboard bitmap: " + e.Message); }
-        }
-
-        if (session.Get(Win32Clipboard.CF_UNICODETEXT) is { } text) return new ClipboardContent.Text(FromUtf16Z(text));
-        return null;
+            ClipboardFormat.Png => Win32Clipboard.PngFormat,
+            ClipboardFormat.DibV5 => Win32Clipboard.CF_DIBV5,
+            ClipboardFormat.Dib => Win32Clipboard.CF_DIB,
+            _ => Win32Clipboard.CF_UNICODETEXT,
+        }), _log);
     }
 
     /// <summary>LF to CRLF without doubling existing CRLF.</summary>
@@ -106,17 +107,10 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
 
     private static byte[] Utf16Z(string s) => Encoding.Unicode.GetBytes(s + "\0");
 
-    private static string FromUtf16Z(byte[] bytes)
-    {
-        var chars = Encoding.Unicode.GetString(bytes, 0, bytes.Length & ~1);
-        var end = chars.IndexOf('\0');
-        return end < 0 ? chars : chars[..end];
-    }
-
     public void Dispose()
     {
-        _stop.Cancel();
+        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
+        _stop.Set();   // _stop is deliberately never disposed: the watcher may still be running after a timed-out Join
         if (Thread.CurrentThread != _watcher) _watcher.Join(TimeSpan.FromSeconds(1));
-        _stop.Dispose();
     }
 }
