@@ -45,7 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Per connection: connect ([links]), catch up via `/api/sync` (applying at most the newest caught-up clip from
  * another device), run [flushQueue], then receive pushes, with an app-level `{"type":"ping"}` every 25 s and a 10 s
- * pong timeout. While connected, a non-empty [queue] is flushed again every 30 s. A 1008 close or a 401 from any call
+ * pong timeout ([probe] pings at once, with a 3 s timeout). While connected, a non-empty [queue] is flushed again every 30 s. A 1008 close or a 401 from any call
  * (including [flushQueue] and thumbnail fetches) emits [revoked] once and stops for good ([state] = SIGNED_OUT); any
  * other failure sets OFFLINE and reconnects after [Backoff.next]. The backoff is reset only after a link stayed up
  * 25 s, or by [nudge].
@@ -97,6 +97,10 @@ class SyncEngine(
     private val revokeRequested = AtomicBoolean(false)
     private val wake = Channel<Unit>(Channel.CONFLATED)
     @Volatile private var attempt: Job? = null
+
+    /** The connected link, for [probe]; null while not CONNECTED. */
+    private class Live(val link: WsLink, val pings: Pings, val scope: CoroutineScope)
+    @Volatile private var live: Live? = null
 
     /** The run scope: thumbnail fetches outlive a single link. */
     @Volatile private var workers: CoroutineScope? = null
@@ -178,6 +182,30 @@ class SyncEngine(
         nudged.set(true)          // before reading attempt: the loop checks the flag after publishing attempt
         attempt?.cancel()
         wake.trySend(Unit)
+    }
+
+    /**
+     * The device just woke (screen on, unlock): checks the current link at once instead of waiting for the next 25 s
+     * ping. Sends a ping now; when no pong arrives within 3 s, drops the link and reconnects as [nudge] does (backoff
+     * reset). A healthy link stays up. Without a live link it is a [nudge]. Thread-safe; no effect while stopped.
+     */
+    fun probe() {
+        val l = live ?: return nudge()
+        val mark = l.pings.pongs()
+        if (!l.link.send(PING)) return nudge()
+        l.scope.launch { awaitProbe(l.pings, mark) }   // ends with the link
+    }
+
+    /** Nudges unless a pong arrives within [PROBE_TIMEOUT_MS] of loop time that was not busy applying a clip. */
+    private suspend fun awaitProbe(pings: Pings, mark: Long) {
+        var quiet = 0L
+        while (quiet < PROBE_TIMEOUT_MS) {
+            delay(PROBE_STEP_MS)
+            if (pings.pongs() != mark) return
+            quiet = if (pings.isBusy()) 0L else quiet + PROBE_STEP_MS   // a slow apply holds up the pong
+        }
+        Log.i(TAG, "No pong after waking: reconnecting")
+        nudge()
     }
 
     private suspend fun run() {
@@ -268,6 +296,7 @@ class SyncEngine(
                 val pings = Pings(clock.instant())
                 connectedAt = clock.instant()
                 _state.value = SyncState.CONNECTED
+                live = Live(link, pings, this)
                 val monitor = launch { monitor(link, pings) }
                 link.events.collect { handle(it, pings) }
                 monitor.cancel()  // the server closed the socket (1001 or another non-1008 code)
@@ -283,6 +312,7 @@ class SyncEngine(
             report("Connection to the server lost", e)
             return Outcome.FAILED
         } finally {
+            live = null
             link.close(NORMAL_CLOSURE, "")
             saveIfDirty()
             // Only a link that proved stable resets the delays: a server that accepts and drops at once still backs off.
@@ -493,6 +523,7 @@ class SyncEngine(
 
         private var sentAt: Instant? = null
         private var busy = false
+        private var pongCount = 0L
 
         @Synchronized
         fun check(now: Instant): Due {
@@ -511,7 +542,15 @@ class SyncEngine(
         @Synchronized
         fun pong() {
             sentAt = null
+            pongCount++
         }
+
+        /** How many pongs arrived on this link so far. */
+        @Synchronized
+        fun pongs(): Long = pongCount
+
+        @Synchronized
+        fun isBusy(): Boolean = busy
 
         @Synchronized
         fun setBusy(value: Boolean) {
@@ -526,6 +565,8 @@ class SyncEngine(
         const val TICK_MS = 1_000L
         const val PING_INTERVAL_MS = 25_000L
         const val PONG_TIMEOUT_MS = 10_000L
+        const val PROBE_TIMEOUT_MS = 3_000L
+        const val PROBE_STEP_MS = 500L
         const val FLUSH_INTERVAL_MS = 30_000L
         const val SAVE_INTERVAL_MS = 2_000L
         const val MAX_THUMBNAIL_FETCHES = 2

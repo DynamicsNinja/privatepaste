@@ -179,6 +179,41 @@ class SyncServiceTest {
     }
 
     @Test
+    fun wakeNudgesAnOfflineEngine() {
+        server.ws = { MockResponse().setResponseCode(503) }
+        app.signInTo(server)
+        startService()
+        // Fails at once, then after ~1 s and ~2 s: now waiting ~4 s (±20%).
+        awaitUntil("third attempt") { server.wsRequests.get() >= 3 }
+        val before = server.wsRequests.get()
+
+        app.sendBroadcast(Intent(Intent.ACTION_SCREEN_ON))
+        awaitUntil("reconnects at once on wake", timeoutMs = 1_500) { server.wsRequests.get() > before }
+    }
+
+    @Test
+    fun wakeProbesAConnectedLinkAndKeepsIt() {
+        app.signInTo(server)
+        startService()
+        awaitUntil("connected") { app.uiDeps.syncState.value == SyncState.CONNECTED }
+
+        app.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT))
+        idleFor(3_500)   // past the probe timeout: the server answered the ping
+
+        assertEquals(SyncState.CONNECTED, app.uiDeps.syncState.value)
+        assertEquals("a healthy link stays up", 1, server.wsRequests.get())
+    }
+
+    @Test
+    fun destroyUnregistersTheWakeReceiver() {
+        app.signInTo(server)
+        startService()
+        assertEquals(1, shadowOf(app).registeredReceivers.count { it.intentFilter.hasAction(Intent.ACTION_SCREEN_ON) })
+        controller!!.destroy()
+        assertEquals(0, shadowOf(app).registeredReceivers.count { it.intentFilter.hasAction(Intent.ACTION_SCREEN_ON) })
+    }
+
+    @Test
     fun pendingStartSurvivesSignOut() {
         app.signInTo(server)
         val service = startService()   // start id 1

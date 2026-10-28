@@ -20,13 +20,14 @@ import xyz.ficdev.privatepaste.sync.SyncState
 /**
  * The foreground service that owns the sync engine's lifecycle while signed in: it starts the current session's
  * engine on every start command and stops it in [onDestroy], so the engine never runs without it. It shows the
- * connection state, nudges the engine on network changes, and stops itself once the session is gone (sign-out or
+ * connection state, nudges the engine on network changes, probes or nudges it when the screen comes on, and stops itself once the session is gone (sign-out or
  * revoke). Sticky: after process death the system restarts it, and it picks the session up from storage.
  */
 class SyncService : Service() {
 
     private var scope: CoroutineScope? = null
     private var watcher: NetworkWatcher? = null
+    private var wakeWatcher: WakeWatcher? = null
 
     /** The newest start id delivered to [onStartCommand]. Stopping by it never drops a start still pending. */
     private var lastStartId = 0
@@ -66,6 +67,11 @@ class SyncService : Service() {
             }
         }
         watcher = NetworkWatcher(this, s) { graph.current.value?.engine?.nudge() }.also { it.start() }
+        // Screen on / unlock: delays did not run in deep sleep. Check a live link now, or skip the backoff wait.
+        wakeWatcher = WakeWatcher(this) {
+            val engine = graph.current.value?.engine ?: return@WakeWatcher
+            if (engine.state.value == SyncState.CONNECTED) engine.probe() else engine.nudge()
+        }.also { it.start() }
     }
 
     private fun goForeground(state: SyncState): Boolean = try {
@@ -91,6 +97,8 @@ class SyncService : Service() {
     override fun onDestroy() {
         watcher?.stop()
         watcher = null
+        wakeWatcher?.stop()
+        wakeWatcher = null
         scope?.cancel()
         scope = null
         // The state updates re-post the same id: make sure no "connected" notification outlives the service.

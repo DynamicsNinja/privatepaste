@@ -551,6 +551,59 @@ class SyncEngineTest {
     }
 
     @Test
+    fun probeKeepsAHealthyLink() = runTest {
+        val engine = engine()
+        engine.start()
+        runCurrent()
+        val link = links.last
+
+        engine.probe()   // the screen came on: ping now
+        runCurrent()
+        assertEquals(listOf("""{"type":"ping"}"""), link.sent)
+
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertFalse("the pong arrived: the link stays", link.closed)
+        assertEquals(1, links.connects)
+        assertEquals(SyncState.CONNECTED, engine.state.value)
+    }
+
+    @Test
+    fun probeOnADeadLinkReconnectsAfterThreeSecondsWithFreshBackoff() = runTest {
+        links.failure = IOException("offline")
+        links.autoPong = false   // the link looks up but is dead (a NAT dropped it during deep sleep)
+        val engine = engine()
+        engine.start()
+        runCurrent()
+        links.failure = null
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(2, links.connects)
+        assertEquals(SyncState.CONNECTED, engine.state.value)   // up < 25 s: the backoff would wait 2 s next
+        val dead = links.last
+
+        engine.probe()
+        runCurrent()
+        assertEquals(listOf("""{"type":"ping"}"""), dead.sent)
+        links.failure = IOException("still waking up")
+
+        advanceTimeBy(2_999)
+        runCurrent()
+        assertFalse("not before the 3 s probe timeout", dead.closed)
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(dead.closed)
+        assertEquals("reconnects at once, no backoff wait", 3, links.connects)
+
+        // The backoff was reset: the failed reconnect waits 1 s, not 2 s.
+        advanceTimeBy(999)
+        assertEquals(3, links.connects)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(4, links.connects)
+    }
+
+    @Test
     fun stopEndsTheLinkAndSaves() = runTest {
         val engine = engine()
         engine.start()
