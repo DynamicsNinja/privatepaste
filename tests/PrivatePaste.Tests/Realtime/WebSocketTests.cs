@@ -1,9 +1,14 @@
+using System.Diagnostics;
+using System.IO.Pipelines;
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using PrivatePaste.Protocol;
+using PrivatePaste.Server.Auth;
+using PrivatePaste.Server.Realtime;
 
 namespace PrivatePaste.Tests.Realtime;
 
@@ -11,13 +16,23 @@ public class WebSocketTests
 {
     private static readonly TimeSpan ReceiveTimeout = TimeSpan.FromSeconds(5);
 
-    private static async Task<WebSocket> ConnectAsync(PrivatePasteFactory factory, string? token)
+    /// <summary>
+    /// Connects and, unless <paramref name="sync"/> is false, does a ping/pong round trip so the server has
+    /// certainly registered the socket before the test acts.
+    /// </summary>
+    private static async Task<WebSocket> ConnectAsync(PrivatePasteFactory factory, string? token, bool sync = true)
     {
         var ws = factory.Server.CreateWebSocketClient();
         if (token is not null)
             ws.ConfigureRequest = r => r.Headers.Authorization = "Bearer " + token;
         using var cts = new CancellationTokenSource(ReceiveTimeout);
-        return await ws.ConnectAsync(new Uri(factory.Server.BaseAddress, "/ws"), cts.Token);
+        var socket = await ws.ConnectAsync(new Uri(factory.Server.BaseAddress, "/ws"), cts.Token);
+        if (sync)
+        {
+            await SendTextAsync(socket, """{"type":"ping"}""");
+            Assert.Equal(WsTypes.Pong, (await ReceiveMessageAsync(socket)).Type);
+        }
+        return socket;
     }
 
     private static async Task<(WebSocketReceiveResult Result, string Text)> ReceiveAsync(WebSocket socket)
@@ -198,5 +213,103 @@ public class WebSocketTests
         await PostText(a, "still works");
 
         Assert.Equal("still works", (await ReceiveMessageAsync(c)).Clip!.Text);
+    }
+
+    [Fact]
+    public async Task Revoking_one_device_leaves_other_sockets_open()
+    {
+        using var factory = new PrivatePasteFactory();
+        var (client, idA, tokenA) = await factory.LoginDeviceAsync("A");
+        var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
+        using var a = await ConnectAsync(factory, tokenA);
+        using var b = await ConnectAsync(factory, tokenB);
+
+        (await client.DeleteAsync($"/api/devices/{idA}")).EnsureSuccessStatusCode();
+
+        Assert.Equal(WebSocketMessageType.Close, (await ReceiveAsync(a)).Result.MessageType);
+        await SendTextAsync(b, """{"type":"ping"}""");
+        Assert.Equal(WsTypes.Pong, (await ReceiveMessageAsync(b)).Type);
+        Assert.Equal(WebSocketState.Open, b.State);
+    }
+
+    [Fact]
+    public async Task Stalled_client_does_not_block_uploads_or_other_clients()
+    {
+        using var factory = new PrivatePasteFactory();
+        var (a, _, _) = await factory.LoginDeviceAsync("A");
+        var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
+        var (_, _, tokenC) = await factory.LoginDeviceAsync("C");
+        using var stalled = await ConnectAsync(factory, tokenB); // never reads again
+        using var healthy = await ConnectAsync(factory, tokenC);
+
+        const int uploads = 12;
+        var received = Task.Run(async () =>
+        {
+            var texts = new List<string>();
+            while (texts.Count < uploads)
+                texts.Add((await ReceiveMessageAsync(healthy)).Clip!.Text![..9]);
+            return texts;
+        });
+
+        // Large enough in total to overflow any transport buffer of the stalled client.
+        var worst = TimeSpan.Zero;
+        for (var i = 0; i < uploads; i++)
+        {
+            var sw = Stopwatch.StartNew();
+            await PostText(a, $"clip{i:D4} " + new string('x', 200_000));
+            if (sw.Elapsed > worst) worst = sw.Elapsed;
+        }
+
+        Assert.True(worst < TimeSpan.FromSeconds(1), $"slowest upload took {worst}");
+        Assert.Equal(Enumerable.Range(0, uploads).Select(i => $"clip{i:D4} "), await received);
+    }
+
+    [Fact]
+    public async Task Socket_registered_after_revoke_is_closed()
+    {
+        using var factory = new PrivatePasteFactory();
+        var (_, idB, _) = await factory.LoginDeviceAsync("B");
+        // Revoke without going through the endpoint, as if it raced the handshake and CloseDeviceAsync ran too early.
+        await factory.Services.GetRequiredService<DeviceRepository>().RevokeAsync(idB);
+        var hub = factory.Services.GetRequiredService<ConnectionHub>();
+        var (serverSocket, clientSocket) = CreateSocketPair();
+
+        var run = hub.RunAsync(idB, serverSocket, CancellationToken.None);
+
+        var (result, _) = await ReceiveAsync(clientSocket);
+        Assert.Equal(WebSocketMessageType.Close, result.MessageType);
+        Assert.Equal(WebSocketCloseStatus.PolicyViolation, result.CloseStatus);
+        Assert.Equal("revoked", result.CloseStatusDescription);
+        try { await run.WaitAsync(ReceiveTimeout); } catch (TimeoutException) { Assert.Fail("RunAsync did not finish; server state " + serverSocket.State); }
+    }
+
+    private static (WebSocket Server, WebSocket Client) CreateSocketPair()
+    {
+        var toServer = new Pipe();
+        var toClient = new Pipe();
+        var server = WebSocket.CreateFromStream(
+            new DuplexStream(toServer.Reader.AsStream(), toClient.Writer.AsStream()),
+            new WebSocketCreationOptions { IsServer = true });
+        var client = WebSocket.CreateFromStream(
+            new DuplexStream(toClient.Reader.AsStream(), toServer.Writer.AsStream()),
+            new WebSocketCreationOptions { IsServer = false });
+        return (server, client);
+    }
+
+    private sealed class DuplexStream(Stream input, Stream output) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => output.Flush();
+        public override Task FlushAsync(CancellationToken ct) => output.FlushAsync(ct);
+        public override int Read(byte[] buffer, int offset, int count) => input.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => input.ReadAsync(buffer, ct);
+        public override void Write(byte[] buffer, int offset, int count) => output.Write(buffer, offset, count);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => output.WriteAsync(buffer, ct);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 }

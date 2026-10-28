@@ -1,45 +1,65 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json;
+using System.Threading.Channels;
 using PrivatePaste.Protocol;
+using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Clips;
 
 namespace PrivatePaste.Server.Realtime;
 
 /// <summary>
-/// Tracks the connected WebSockets and pushes clip changes to all of them. Broadcasts never throw:
-/// a socket whose send fails or times out is dropped and the others are unaffected.
+/// Tracks the connected WebSockets and pushes clip changes to all of them. Every socket has a bounded outbox
+/// drained by its own writer loop, so broadcasting only enqueues and never waits on a slow client. A socket
+/// whose outbox is full, or whose send fails or times out, is dropped and the others are unaffected.
 /// </summary>
-public sealed class ConnectionHub(ILogger<ConnectionHub> logger) : IClipBroadcaster
+public sealed class ConnectionHub(DeviceRepository devices, ILogger<ConnectionHub> logger) : IClipBroadcaster
 {
     private const int MaxIncomingMessageBytes = 4096;
+    private const int OutboxCapacity = 64;
     private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly byte[] PongBytes = JsonSerializer.SerializeToUtf8Bytes(new WsMessage(WsTypes.Pong), ProtocolJson.Options);
 
     private readonly ConcurrentDictionary<Connection, byte> _connections = new();
 
-    private sealed class Connection(Guid deviceId, WebSocket socket)
+    /// <summary>One outbox entry: a text frame, or (when <see cref="Close"/> is set) a final close frame.</summary>
+    private readonly record struct Outgoing(byte[]? Payload, (WebSocketCloseStatus Status, string Description)? Close);
+
+    private sealed class Connection(Guid deviceId, WebSocket socket, CancellationTokenSource lifetime)
     {
+        public CancellationTokenSource Lifetime { get; } = lifetime;
         public Guid DeviceId { get; } = deviceId;
         public WebSocket Socket { get; } = socket;
-        public SemaphoreSlim SendLock { get; } = new(1, 1);
+
+        // The single writer loop is the only sender, which serializes frames and keeps their order.
+        public Channel<Outgoing> Outbox { get; } = Channel.CreateBounded<Outgoing>(
+            new BoundedChannelOptions(OutboxCapacity) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+
+        public volatile bool Closing;
     }
 
     public Task ClipChangedAsync(ClipDto clip, bool live) =>
-        BroadcastAsync(new WsMessage(WsTypes.ClipCreated, Clip: clip, Live: live));
+        Broadcast(new WsMessage(WsTypes.ClipCreated, Clip: clip, Live: live));
 
     public Task ClipDeletedAsync(Guid id, long seq) =>
-        BroadcastAsync(new WsMessage(WsTypes.ClipDeleted, Id: id, Seq: seq));
+        Broadcast(new WsMessage(WsTypes.ClipDeleted, Id: id, Seq: seq));
 
     /// <summary>Registers the socket, serves it until it closes, and unregisters it.</summary>
     public async Task RunAsync(Guid deviceId, WebSocket socket, CancellationToken ct)
     {
-        var connection = new Connection(deviceId, socket);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var connection = new Connection(deviceId, socket, lifetime);
         _connections[connection] = 0;
+        var writer = WriteLoopAsync(connection);
         try
         {
-            await ReceiveLoopAsync(connection, ct);
+            // Registered first, then checked: a revoke that raced the handshake is caught here, and one
+            // that comes later finds the registration in CloseDeviceAsync.
+            if (!await devices.IsActiveAsync(deviceId))
+                EnqueueClose(connection, WebSocketCloseStatus.PolicyViolation, "revoked");
+
+            await ReceiveLoopAsync(connection, lifetime.Token);
         }
         catch (Exception ex) when (ex is WebSocketException or OperationCanceledException or ObjectDisposedException)
         {
@@ -47,45 +67,25 @@ public sealed class ConnectionHub(ILogger<ConnectionHub> logger) : IClipBroadcas
         }
         finally
         {
+            connection.Outbox.Writer.TryComplete();
+            await writer; // bounded: every send has a timeout, and the loop never throws
             Drop(connection);
         }
     }
 
-    /// <summary>Closes every socket of the device with a policy-violation "revoked" status.</summary>
-    public async Task CloseDeviceAsync(Guid deviceId)
+    /// <summary>Queues a policy-violation "revoked" close for every socket of the device. Does not wait for delivery.</summary>
+    public Task CloseDeviceAsync(Guid deviceId)
     {
-        var targets = _connections.Keys.Where(c => c.DeviceId == deviceId).ToList();
-        await Task.WhenAll(targets.Select(async connection =>
-        {
-            try
-            {
-                using var cts = new CancellationTokenSource(SendTimeout);
-                await connection.SendLock.WaitAsync(cts.Token);
-                try
-                {
-                    await connection.Socket.CloseOutputAsync(WebSocketCloseStatus.PolicyViolation, "revoked", cts.Token);
-                }
-                finally
-                {
-                    connection.SendLock.Release();
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Closing a revoked socket failed");
-            }
-            finally
-            {
-                // Don't wait for the peer's close handshake; the close frame has already been sent.
-                Drop(connection);
-            }
-        }));
+        foreach (var connection in _connections.Keys.Where(c => c.DeviceId == deviceId))
+            EnqueueClose(connection, WebSocketCloseStatus.PolicyViolation, "revoked");
+        return Task.CompletedTask;
     }
 
     private async Task ReceiveLoopAsync(Connection connection, CancellationToken ct)
     {
         var socket = connection.Socket;
         var buffer = new byte[MaxIncomingMessageBytes];
+        var scratch = new byte[256];
         while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
             var length = 0;
@@ -94,8 +94,8 @@ public sealed class ConnectionHub(ILogger<ConnectionHub> logger) : IClipBroadcas
             do
             {
                 var free = buffer.AsMemory(length);
-                // Keep reading into an empty-but-valid slice once full so oversize frames are drained and discarded.
-                result = await socket.ReceiveAsync(free.IsEmpty ? new byte[256] : free, ct);
+                // Once the buffer is full, keep draining into scratch so an oversize message is discarded.
+                result = await socket.ReceiveAsync(free.IsEmpty ? scratch : free, ct);
                 if (result.MessageType == WebSocketMessageType.Close)
                     break;
                 if (free.IsEmpty)
@@ -106,13 +106,12 @@ public sealed class ConnectionHub(ILogger<ConnectionHub> logger) : IClipBroadcas
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
-                if (socket.State == WebSocketState.CloseReceived)
-                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, ct);
+                EnqueueClose(connection, WebSocketCloseStatus.NormalClosure, null);
                 return;
             }
 
             if (!tooLarge && result.MessageType == WebSocketMessageType.Text && IsPing(buffer.AsSpan(0, length)))
-                await SendAsync(connection, PongBytes);
+                Enqueue(connection, new Outgoing(PongBytes, null));
         }
     }
 
@@ -133,50 +132,79 @@ public sealed class ConnectionHub(ILogger<ConnectionHub> logger) : IClipBroadcas
         }
     }
 
-    private async Task BroadcastAsync(WsMessage message)
+    private Task Broadcast(WsMessage message)
     {
         try
         {
             var payload = JsonSerializer.SerializeToUtf8Bytes(message, ProtocolJson.Options);
-            await Task.WhenAll(_connections.Keys.Select(c => SendAsync(c, payload)));
+            foreach (var connection in _connections.Keys)
+                Enqueue(connection, new Outgoing(payload, null));
         }
         catch (Exception ex)
         {
             // A broadcast must never fail the HTTP request that triggered it.
             logger.LogWarning(ex, "WebSocket broadcast failed");
         }
+        return Task.CompletedTask;
     }
 
-    /// <summary>Sends one text frame; on any failure the connection is dropped. Never throws.</summary>
-    private async Task SendAsync(Connection connection, byte[] payload)
+    private void EnqueueClose(Connection connection, WebSocketCloseStatus status, string? description)
+    {
+        if (connection.Closing) return;
+        Enqueue(connection, new Outgoing(null, (status, description ?? "")));
+        connection.Closing = true;
+    }
+
+    /// <summary>Never blocks. A full outbox means the client is not keeping up, so the connection is dropped.</summary>
+    private void Enqueue(Connection connection, Outgoing item)
+    {
+        if (connection.Closing) return;
+        if (!connection.Outbox.Writer.TryWrite(item) && !connection.Outbox.Reader.Completion.IsCompleted)
+        {
+            logger.LogDebug("WebSocket outbox full; dropping the connection");
+            Drop(connection);
+        }
+    }
+
+    private async Task WriteLoopAsync(Connection connection)
     {
         try
         {
-            using var cts = new CancellationTokenSource(SendTimeout);
-            await connection.SendLock.WaitAsync(cts.Token);
-            try
+            await foreach (var item in connection.Outbox.Reader.ReadAllAsync())
             {
+                using var cts = new CancellationTokenSource(SendTimeout);
+                if (item.Close is { } close)
+                {
+                    await connection.Socket.CloseOutputAsync(close.Status, close.Description, cts.Token);
+                    return;
+                }
                 if (connection.Socket.State != WebSocketState.Open)
-                    throw new WebSocketException("Socket is not open.");
-                await connection.Socket.SendAsync(payload, WebSocketMessageType.Text, true, cts.Token);
-            }
-            finally
-            {
-                connection.SendLock.Release();
+                    return;
+                await connection.Socket.SendAsync(item.Payload!, WebSocketMessageType.Text, true, cts.Token);
             }
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex, "WebSocket send failed; dropping the connection");
+        }
+        finally
+        {
+            // Nothing is sent after a close frame or a failure; abort so the receive loop ends too.
             Drop(connection);
         }
     }
 
     private void Drop(Connection connection)
     {
+        connection.Closing = true;
         if (!_connections.TryRemove(connection, out _))
             return;
-        try { connection.Socket.Abort(); }
+        try
+        {
+            connection.Socket.Abort();
+            // Abort alone doesn't always interrupt a pending receive; cancel it explicitly.
+            connection.Lifetime.Cancel();
+        }
         catch (ObjectDisposedException) { }
     }
 }
