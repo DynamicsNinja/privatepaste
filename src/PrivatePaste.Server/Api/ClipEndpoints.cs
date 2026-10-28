@@ -14,7 +14,7 @@ public static class ClipEndpoints
 {
     public static void MapClipEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api").RequireAuthorization(AuthSchemes.OwnerPolicy);
+        var group = app.MapGroup("/api").RequireAuthorization(AuthSchemes.OwnerPolicy).RequireAntiforgeryForCookieAuth();
         group.AddEndpointFilter(async (ctx, next) =>
         {
             try

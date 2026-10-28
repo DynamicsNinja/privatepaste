@@ -8,7 +8,7 @@ public static class DeviceEndpoints
 {
     public static void MapDeviceEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/devices").RequireAuthorization(AuthSchemes.OwnerPolicy);
+        var group = app.MapGroup("/api/devices").RequireAuthorization(AuthSchemes.OwnerPolicy).RequireAntiforgeryForCookieAuth();
 
         group.MapGet("", async (ClaimsPrincipal user, DeviceRepository devices) =>
             Results.Ok(await devices.ListAsync(user.DeviceId())));

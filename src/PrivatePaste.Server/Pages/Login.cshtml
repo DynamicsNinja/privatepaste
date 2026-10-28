@@ -1,0 +1,15 @@
+@page
+@model LoginModel
+@{
+    ViewData["Title"] = "Sign in";
+}
+<form method="post" class="card narrow">
+    <h1>Sign in</h1>
+    @if (Model.Failed)
+    {
+        <p class="error" role="alert">Wrong password.</p>
+    }
+    <label for="Password">Password</label>
+    <input asp-for="Password" type="password" autocomplete="current-password" autofocus required>
+    <button type="submit" class="primary">Sign in</button>
+</form>

@@ -1,0 +1,35 @@
+@using Microsoft.AspNetCore.Antiforgery
+@inject IAntiforgery Antiforgery
+@{
+    var signedIn = User.Identity?.IsAuthenticated == true;
+}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="csrf-token" content="@Antiforgery.GetAndStoreTokens(Context).RequestToken">
+    <title>@(ViewData["Title"] ?? "PrivatePaste") - PrivatePaste</title>
+    <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<header class="bar">
+    <a class="brand" href="/">PrivatePaste</a>
+    @if (signedIn)
+    {
+        <nav>
+            <a href="/">History</a>
+            <a href="/devices">Devices</a>
+            <form method="post" asp-page="/Devices" asp-page-handler="SignOut" class="inline">
+                <button type="submit" class="link">Sign out</button>
+            </form>
+        </nav>
+    }
+</header>
+<main>
+    @RenderBody()
+</main>
+<script src="/site.js"></script>
+</body>
+</html>
