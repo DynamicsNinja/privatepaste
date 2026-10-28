@@ -6,6 +6,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using PrivatePaste.Protocol;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Realtime;
@@ -296,6 +297,47 @@ public class WebSocketTests
         // Cancelling the request token (as a host shutdown would) lets both RunAsync calls finish.
         await shutdown.CancelAsync();
         await Task.WhenAll(stalledRun, healthyRun).WaitAsync(ReceiveTimeout);
+    }
+
+    [Fact]
+    public async Task Host_shutdown_closes_sockets_with_going_away_and_stops_promptly()
+    {
+        var factory = new PrivatePasteFactory();
+        try
+        {
+            var (_, _, token) = await factory.LoginDeviceAsync("A");
+            using var ws = await ConnectAsync(factory, token);
+
+            factory.Services.GetRequiredService<IHostApplicationLifetime>().StopApplication();
+
+            var (result, _) = await ReceiveAsync(ws);
+            Assert.Equal(WebSocketMessageType.Close, result.MessageType);
+            Assert.Equal(WebSocketCloseStatus.EndpointUnavailable, result.CloseStatus);
+        }
+        finally
+        {
+            // Disposing stops the host; it must not wait on the (now closed) socket.
+            await Task.Run(factory.Dispose).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+    }
+
+    [Fact]
+    public async Task Socket_registered_after_shutdown_began_is_closed()
+    {
+        using var factory = new PrivatePasteFactory();
+        var (_, idA, _) = await factory.LoginDeviceAsync("A");
+        var hub = factory.Services.GetRequiredService<ConnectionHub>();
+        factory.Services.GetRequiredService<IHostApplicationLifetime>().StopApplication();
+        var (serverSocket, clientSocket) = CreateSocketPair();
+        using var _1 = serverSocket;
+        using var _2 = clientSocket;
+
+        var run = hub.RunAsync(idA, serverSocket, CancellationToken.None);
+
+        var (result, _) = await ReceiveAsync(clientSocket);
+        Assert.Equal(WebSocketMessageType.Close, result.MessageType);
+        Assert.Equal(WebSocketCloseStatus.EndpointUnavailable, result.CloseStatus);
+        await run.WaitAsync(ReceiveTimeout);
     }
 
     [Fact]

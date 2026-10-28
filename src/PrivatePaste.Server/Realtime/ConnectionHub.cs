@@ -12,16 +12,30 @@ namespace PrivatePaste.Server.Realtime;
 /// Tracks the connected WebSockets and pushes clip changes to all of them. Every socket has a bounded outbox
 /// drained by its own writer loop, so broadcasting only enqueues and never waits on a slow client. A socket
 /// whose outbox is full, or whose send fails or times out, is dropped and the others are unaffected.
+/// When the host starts stopping, every socket gets a "going away" close and is torn down after a short grace
+/// period, so open WebSockets never hold up shutdown.
 /// </summary>
-public sealed class ConnectionHub(DeviceRepository devices, ILogger<ConnectionHub> logger) : IClipBroadcaster
+public sealed class ConnectionHub : IClipBroadcaster
 {
     private const int MaxIncomingMessageBytes = 4096;
     private const int OutboxCapacity = 64;
     private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ShutdownGrace = TimeSpan.FromSeconds(2);
+    private const string ShutdownReason = "server shutting down";
 
     private static readonly byte[] PongBytes = JsonSerializer.SerializeToUtf8Bytes(new WsMessage(WsTypes.Pong), ProtocolJson.Options);
 
     private readonly ConcurrentDictionary<Connection, byte> _connections = new();
+    private readonly DeviceRepository devices;
+    private readonly ILogger<ConnectionHub> logger;
+    private volatile bool _stopping;
+
+    public ConnectionHub(DeviceRepository devices, ILogger<ConnectionHub> logger, IHostApplicationLifetime lifetime)
+    {
+        this.devices = devices;
+        this.logger = logger;
+        lifetime.ApplicationStopping.Register(CloseAllForShutdown);
+    }
 
     /// <summary>One outbox entry: a text frame, or (when <see cref="Close"/> is set) a final close frame.</summary>
     private readonly record struct Outgoing(byte[]? Payload, (WebSocketCloseStatus Status, string Description)? Close);
@@ -56,7 +70,9 @@ public sealed class ConnectionHub(DeviceRepository devices, ILogger<ConnectionHu
         {
             // Registered first, then checked: a revoke that raced the handshake is caught here, and one
             // that comes later finds the registration in CloseDeviceAsync.
-            if (!await devices.IsActiveAsync(deviceId))
+            if (_stopping)
+                CloseForShutdown(connection);
+            else if (!await devices.IsActiveAsync(deviceId))
                 EnqueueClose(connection, WebSocketCloseStatus.PolicyViolation, "revoked");
 
             await ReceiveLoopAsync(connection, lifetime.Token);
@@ -79,6 +95,28 @@ public sealed class ConnectionHub(DeviceRepository devices, ILogger<ConnectionHu
         foreach (var connection in _connections.Keys.Where(c => c.DeviceId == deviceId))
             EnqueueClose(connection, WebSocketCloseStatus.PolicyViolation, "revoked");
         return Task.CompletedTask;
+    }
+
+    private void CloseAllForShutdown()
+    {
+        // Set first, so a socket registering concurrently either is in the snapshot below or sees the flag.
+        _stopping = true;
+        foreach (var connection in _connections.Keys)
+            CloseForShutdown(connection);
+    }
+
+    /// <summary>Queues a "going away" close, and tears the socket down if the client hasn't let go within the grace period.</summary>
+    private void CloseForShutdown(Connection connection)
+    {
+        EnqueueClose(connection, WebSocketCloseStatus.EndpointUnavailable, ShutdownReason);
+        try
+        {
+            connection.Lifetime.CancelAfter(ShutdownGrace);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The connection already finished.
+        }
     }
 
     private async Task ReceiveLoopAsync(Connection connection, CancellationToken ct)
