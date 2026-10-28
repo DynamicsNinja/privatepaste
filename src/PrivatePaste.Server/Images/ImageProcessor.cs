@@ -34,7 +34,8 @@ public sealed class ImageProcessor
         if (decoded.GetPixelSpan().Length != decodeInfo.Width * decodeInfo.Height * 4)
             throw new InvalidImageException("Decoded pixel buffer has an unexpected size.");
 
-        using var bitmap = ApplyOrigin(decoded, codec.EncodedOrigin);
+        using var rotated = ApplyOrigin(decoded, codec.EncodedOrigin);
+        var bitmap = rotated ?? decoded;
         var info = bitmap.Info;
         var pixels = bitmap.GetPixelSpan();
         var hash = ContentHash.ForPixels(pixels, info.Width, info.Height);
@@ -59,10 +60,10 @@ public sealed class ImageProcessor
         return new ProcessedImage(png, thumb, info.Width, info.Height, hash);
     }
 
-    /// <summary>Returns the pixels rotated/flipped upright (a lossless copy); the source when already upright.</summary>
-    private static SKBitmap ApplyOrigin(SKBitmap src, SKEncodedOrigin origin)
+    /// <summary>Returns a lossless rotated/flipped copy of the pixels, or null when the image is already upright.</summary>
+    private static SKBitmap? ApplyOrigin(SKBitmap src, SKEncodedOrigin origin)
     {
-        if (origin is SKEncodedOrigin.TopLeft or SKEncodedOrigin.Default) return src.Copy();
+        if (origin is SKEncodedOrigin.TopLeft or SKEncodedOrigin.Default) return null;
 
         var w = src.Width;
         var h = src.Height;
