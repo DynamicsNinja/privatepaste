@@ -45,7 +45,11 @@ public sealed class BlobStore
         return plaintext;
     }
 
-    public void Delete(string name) => File.Delete(PathFor(name));
+    public void Delete(string name)
+    {
+        var path = PathFor(name);
+        if (File.Exists(path)) File.Delete(path);
+    }
 
     private string PathFor(string name)
     {

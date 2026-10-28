@@ -61,6 +61,13 @@ public sealed class BlobStoreTests : IDisposable
     }
 
     [Fact]
+    public void Delete_on_fresh_store_without_blobs_dir_is_noop()
+    {
+        Assert.False(Directory.Exists(Path.Combine(dir, "blobs")));
+        store.Delete("never-written.png");
+    }
+
+    [Fact]
     public async Task Same_plaintext_encrypts_differently()
     {
         var b = new byte[] { 1, 2, 3 };
