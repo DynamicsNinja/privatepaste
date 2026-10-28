@@ -141,8 +141,7 @@ public partial class App : Application
         if (host is null) return;
         try
         {
-            // Event handlers only Post to the UI thread, so waiting here cannot deadlock.
-            host.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
+            if (!host.DisposeWithin(TimeSpan.FromSeconds(5))) Log?.Error("Shutdown timed out.");
         }
         catch (Exception e) { Log?.Error("Shutdown failed.", e); }
         _tray?.Dispose();
