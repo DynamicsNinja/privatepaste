@@ -8,6 +8,7 @@ public partial class SignInWindow : Window
     public SignInWindow()
     {
         InitializeComponent();
+        TitleBar.Prepare(this);
         Opened += OnOpened;
     }
 

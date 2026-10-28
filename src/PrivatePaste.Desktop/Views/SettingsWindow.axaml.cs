@@ -9,6 +9,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
+        TitleBar.Prepare(this);
         // Enter or leaving the box applies the hotkey, like the Apply button.
         HotkeyBox.KeyDown += (_, e) =>
         {
