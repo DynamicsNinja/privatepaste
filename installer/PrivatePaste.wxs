@@ -27,6 +27,11 @@
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
+    <!-- File costing runs before RemoveExistingProducts and, by default, keeps an exe of the same file version.
+         An RC and its final (0.2.0-rc1 / 0.2.0 both stamp 0.2.0.0), or a hand-copied exe at the install path, would
+         then be kept and deleted with the old product: always copy our files instead (ICE40 warning is expected). -->
+    <Property Id="REINSTALLMODE" Value="amus" />
+
     <!-- Add/Remove Programs -->
     <Icon Id="AppIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
