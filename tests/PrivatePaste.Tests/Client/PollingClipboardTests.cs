@@ -1,15 +1,18 @@
+using Microsoft.Extensions.Time.Testing;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Desktop.Platform.Polling;
 
 namespace PrivatePaste.Tests.Client;
 
+/// <summary>Polls are driven by <see cref="PollingClipboard.TickAsync"/> (or a FakeTimeProvider), never by real time.</summary>
 public class PollingClipboardTests
 {
     private sealed class FakeBackend : IClipboardBackend
     {
         public ClipboardContent? Current { get; set; }
         public ClipboardContent? Written { get; private set; }
-        public Task<ClipboardContent?> ReadAsync(CancellationToken ct) => Task.FromResult(Current);
+        public int Reads;
+        public Task<ClipboardContent?> ReadAsync(CancellationToken ct) { Interlocked.Increment(ref Reads); return Task.FromResult(Current); }
         public Task WriteAsync(ClipboardContent content, CancellationToken ct) { Written = content; Current = content; return Task.CompletedTask; }
     }
 
@@ -22,84 +25,101 @@ public class PollingClipboardTests
         public Task WriteAsync(ClipboardContent content, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private static async Task<bool> WaitFor(Func<bool> cond)
+    private static async Task<bool> WaitUntil(Func<bool> cond)
     {
-        for (var i = 0; i < 300 && !cond(); i++) await Task.Delay(10);
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!cond() && DateTime.UtcNow < deadline) await Task.Yield();
         return cond();
+    }
+
+    private static (PollingClipboard Clip, Func<int> Count) Create(IClipboardBackend backend)
+    {
+        var clip = new PollingClipboard(backend, TimeSpan.FromMilliseconds(500));
+        var count = 0;
+        clip.Changed += (_, _) => Interlocked.Increment(ref count);
+        return (clip, () => Volatile.Read(ref count));
     }
 
     [Fact]
     public async Task Raises_Changed_on_text_change_but_not_when_unchanged()
     {
         var backend = new FakeBackend { Current = new ClipboardContent.Text("a") };
-        using var clip = new PollingClipboard(backend, TimeSpan.FromMilliseconds(10));
-        var count = 0;
-        clip.Changed += (_, _) => Interlocked.Increment(ref count);
-        clip.Start();
-        await Task.Delay(100);
-        Assert.Equal(0, count);   // the initial content is the baseline
+        var (clip, count) = Create(backend);
+        await clip.TickAsync();
+        await clip.TickAsync();
+        Assert.Equal(0, count());   // the initial content is the baseline
 
         backend.Current = new ClipboardContent.Text("b");
-        Assert.True(await WaitFor(() => count == 1));
-        await Task.Delay(100);
-        Assert.Equal(1, count);
+        await clip.TickAsync();
+        Assert.Equal(1, count());
+        await clip.TickAsync();
+        Assert.Equal(1, count());
     }
 
     [Fact]
     public async Task Detects_image_byte_changes()
     {
         var backend = new FakeBackend { Current = new ClipboardContent.Image([1, 2, 3]) };
-        using var clip = new PollingClipboard(backend, TimeSpan.FromMilliseconds(10));
-        var count = 0;
-        clip.Changed += (_, _) => Interlocked.Increment(ref count);
-        clip.Start();
-        await Task.Delay(60);
+        var (clip, count) = Create(backend);
+        await clip.TickAsync();
         backend.Current = new ClipboardContent.Image([1, 2, 3]);   // same bytes: no event
-        await Task.Delay(60);
-        Assert.Equal(0, count);
+        await clip.TickAsync();
+        Assert.Equal(0, count());
         backend.Current = new ClipboardContent.Image([1, 2, 4]);
-        Assert.True(await WaitFor(() => count == 1));
+        await clip.TickAsync();
+        Assert.Equal(1, count());
     }
 
     [Fact]
     public async Task Clearing_the_clipboard_does_not_raise_Changed()
     {
         var backend = new FakeBackend { Current = new ClipboardContent.Text("a") };
-        using var clip = new PollingClipboard(backend, TimeSpan.FromMilliseconds(10));
-        var count = 0;
-        clip.Changed += (_, _) => Interlocked.Increment(ref count);
-        clip.Start();
-        await Task.Delay(50);
+        var (clip, count) = Create(backend);
+        await clip.TickAsync();
         backend.Current = null;
-        await Task.Delay(100);
-        Assert.Equal(0, count);
+        await clip.TickAsync();
+        Assert.Equal(0, count());
     }
 
     [Fact]
-    public async Task Write_goes_to_the_backend_and_raises_Changed()
+    public async Task Write_goes_to_the_backend_and_the_next_poll_raises_Changed()
     {
         var backend = new FakeBackend { Current = new ClipboardContent.Text("a") };
-        using var clip = new PollingClipboard(backend, TimeSpan.FromMilliseconds(10));
-        var count = 0;
-        clip.Changed += (_, _) => Interlocked.Increment(ref count);
-        clip.Start();
-        await Task.Delay(50);
+        var (clip, count) = Create(backend);
+        await clip.TickAsync();
         await clip.WriteAsync(new ClipboardContent.Text("x"), CancellationToken.None);
         Assert.Equal(new ClipboardContent.Text("x"), backend.Written);
-        Assert.True(await WaitFor(() => count >= 1));
+        await clip.TickAsync();
+        Assert.Equal(1, count());
     }
 
     [Fact]
     public async Task Backend_exceptions_do_not_kill_the_poller()
     {
         var backend = new ThrowingOnceBackend();
-        using var clip = new PollingClipboard(backend, TimeSpan.FromMilliseconds(10));
-        var count = 0;
-        clip.Changed += (_, _) => Interlocked.Increment(ref count);
-        clip.Start();
-        await Task.Delay(50);
+        var (clip, count) = Create(backend);
+        await clip.TickAsync();          // read 1: baseline
+        await clip.TickAsync();          // read 2: throws, swallowed
         backend.Current = new ClipboardContent.Text("b");
-        Assert.True(await WaitFor(() => count == 1));
+        await clip.TickAsync();          // read 3: change detected
+        Assert.Equal(1, count());
+    }
+
+    [Fact]
+    public async Task The_timer_loop_polls_once_per_interval_of_fake_time()
+    {
+        var time = new FakeTimeProvider();
+        var backend = new FakeBackend { Current = new ClipboardContent.Text("a") };
+        using var clip = new PollingClipboard(backend, TimeSpan.FromMilliseconds(500), time);
+        var changed = 0;
+        clip.Changed += (_, _) => Interlocked.Increment(ref changed);
+        clip.Start();
+        Assert.True(await WaitUntil(() => Volatile.Read(ref backend.Reads) == 1));   // immediate first poll = baseline
+
+        backend.Current = new ClipboardContent.Text("b");
+        time.Advance(TimeSpan.FromMilliseconds(500));
+        Assert.True(await WaitUntil(() => Volatile.Read(ref changed) == 1));
+        Assert.Equal(2, Volatile.Read(ref backend.Reads));
     }
 }
 
