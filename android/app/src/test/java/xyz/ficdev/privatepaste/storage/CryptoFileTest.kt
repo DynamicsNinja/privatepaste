@@ -1,9 +1,11 @@
 package xyz.ficdev.privatepaste.storage
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -96,6 +98,61 @@ class CryptoFileTest {
         f.write(plaintext)
         assertTrue(deleted == 1)
         assertArrayEquals(plaintext, f.read())
+    }
+
+    @Test
+    fun transientKeystoreErrorKeepsTheKey() {
+        cryptoFile().write(plaintext)   // an existing file under the same alias must stay readable
+        var calls = 0
+        var deleted = 0
+        val transient = object : KeyProvider {
+            override fun key(alias: String): SecretKey =
+                if (calls++ == 0) throw java.security.ProviderException("Keystore busy") else keys.key(alias)
+
+            override fun deleteKey(alias: String) {
+                deleted++
+                keys.deleteKey(alias)
+            }
+        }
+        cryptoFile("other.bin", transient).write("second".toByteArray())
+        assertEquals(0, deleted)
+        assertArrayEquals("second".toByteArray(), cryptoFile("other.bin").read())
+        assertArrayEquals(plaintext, cryptoFile().read())
+    }
+
+    @Test
+    fun persistentTransientErrorThrowsIOExceptionWithoutDeletingTheKey() {
+        var deleted = 0
+        val broken = object : KeyProvider {
+            override fun key(alias: String): SecretKey = throw java.security.ProviderException("Keystore down")
+            override fun deleteKey(alias: String) {
+                deleted++
+            }
+        }
+        try {
+            cryptoFile(provider = broken).write(plaintext)
+            fail("expected IOException")
+        } catch (_: java.io.IOException) {
+        }
+        assertEquals(0, deleted)
+    }
+
+    @Test
+    fun invalidKeyInTheCauseChainIsRecreated() {
+        var deleted = 0
+        val wrapped = object : KeyProvider {
+            override fun key(alias: String): SecretKey =
+                if (deleted == 0) throw IllegalStateException(java.security.UnrecoverableKeyException("broken"))
+                else keys.key(alias)
+
+            override fun deleteKey(alias: String) {
+                deleted++
+                keys.deleteKey(alias)
+            }
+        }
+        cryptoFile(provider = wrapped).write(plaintext)
+        assertEquals(1, deleted)
+        assertArrayEquals(plaintext, cryptoFile().read())
     }
 
     @Test

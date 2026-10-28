@@ -118,6 +118,17 @@ class HistoryCacheTest {
     }
 
     @Test
+    fun clipOlderThanAFullCacheIsNotAdded() {
+        val c = cache()
+        for (i in 1..200L) c.upsert(clip("c$i", i, minute = 100 + i), fromSync = true)
+        val before = c.items.value
+        assertFalse(c.upsert(clip("old", 500, minute = 1), fromSync = true))
+        assertTrue(c.items.value === before)   // nothing published
+        assertFalse(c.items.value.any { it.id == "old" })
+        assertEquals(500L, c.highestSeq)   // the sync stream was still read that far
+    }
+
+    @Test
     fun markAppliedKeepsTheMaximumAndItsHash() {
         val c = cache()
         c.markApplied(base.plusSeconds(60), "h1")

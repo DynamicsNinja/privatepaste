@@ -26,16 +26,28 @@ data class QueuedClip(
  * Clips copied while offline, in FIFO order, persisted on every change ([file] under the [KeyAliases.QUEUE] key;
  * image bytes in [imageDir], encrypted with the same key). Loads on construction: a missing, corrupt or
  * undecryptable file starts empty, and image files no entry refers to are deleted. Thread-safe.
+ *
+ * [imageDir] must belong to this queue alone (and must not be the directory holding [file]): loading and [clear]
+ * delete every file in it that no entry refers to.
  */
 class OutboundQueue(private val file: CryptoFile, private val imageDir: File, private val keys: KeyProvider) {
 
     private val gate = Any()
     private val entries = ArrayList<QueuedClip>()
 
+    /** Bumped by [clear]; an image written across a clear is dropped instead of queued. Guarded by [gate]. */
+    private var generation = 0L
+
+    /** Test hook: runs after an image file is written, before its entry is added. */
+    internal var afterImageWrite: (() -> Unit)? = null
+
     val isEmpty: Boolean get() = synchronized(gate) { entries.isEmpty() }
     val size: Int get() = synchronized(gate) { entries.size }
 
     init {
+        require(file.file.canonicalFile.parentFile != imageDir.canonicalFile) {
+            "imageDir must not be the queue file's directory"
+        }
         load()
     }
 
@@ -43,12 +55,31 @@ class OutboundQueue(private val file: CryptoFile, private val imageDir: File, pr
         add(QueuedClip(UUID.randomUUID().toString(), ClipKind.TEXT, text, null, null, copiedAt))
     }
 
-    /** Stores [bytes] encrypted, then queues them. @throws IOException when the image cannot be written. */
+    /**
+     * Stores [bytes] encrypted, then queues them. When [clear] runs meanwhile (sign-out), the image is deleted and
+     * not queued. @throws IOException when the image cannot be written.
+     */
     fun enqueueImage(bytes: ByteArray, mime: String, copiedAt: Instant) {
         val id = UUID.randomUUID().toString()
         val name = "$id$SUFFIX"
-        imageFile(name).write(bytes)   // unique name: no lock needed for the (possibly large) write
-        add(QueuedClip(id, ClipKind.IMAGE, null, name, mime, copiedAt))
+        val image = imageFile(name)
+        val gen = synchronized(gate) { generation }
+        try {
+            image.write(bytes)   // unique name: written outside the lock, as it may be large
+        } catch (e: IOException) {
+            // clear() may have deleted the temp file under us: after a sign-out that is not an error.
+            if (synchronized(gate) { generation } != gen) return image.delete()
+            throw e
+        }
+        afterImageWrite?.invoke()
+        synchronized(gate) {
+            if (generation != gen) {
+                image.delete()
+                return
+            }
+            entries.add(QueuedClip(id, ClipKind.IMAGE, null, name, mime, copiedAt))
+            persist()
+        }
     }
 
     fun peek(): QueuedClip? = synchronized(gate) { entries.firstOrNull() }
@@ -82,6 +113,7 @@ class OutboundQueue(private val file: CryptoFile, private val imageDir: File, pr
 
     /** Empties the queue and deletes its file and every image file (sign-out). */
     fun clear() = synchronized(gate) {
+        generation++
         entries.clear()
         file.delete()
         imageDir.listFiles()?.forEach { it.delete() }

@@ -53,7 +53,8 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
 
     /**
      * Adds or replaces a clip. False when nothing changed: the clip is not newer (seq) than the one held for its id,
-     * or its id has a tombstone with a seq ≥ the clip's. [fromSync] is false for the response to this device's own
+     * its id has a tombstone with a seq ≥ the clip's, or it is older (lastCopiedAt) than every item of a full cache.
+     * (A newer version of a held clip that sorts below a full cache drops the held one, so that returns true.) [fromSync] is false for the response to this device's own
      * upload (see [highestSeq]).
      */
     fun upsert(clip: ClipDto, fromSync: Boolean): Boolean = synchronized(gate) {
@@ -63,11 +64,14 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
         if (dead != null && dead >= clip.seq) return false
         val index = list.indexOfFirst { it.id == clip.id }
         if (index >= 0 && clip.seq <= list[index].seq) return false
-        tombstones.remove(clip.id)
         if (index >= 0) list.removeAt(index)
         list.add(clip)
         list.sortWith(NEWEST_FIRST)
         while (list.size > max) list.removeAt(list.lastIndex)
+        val kept = list.any { it === clip }
+        // Not kept: the clip is older than a full cache. Unless it replaced a held version, nothing changed.
+        if (!kept && index < 0) return false
+        if (kept) tombstones.remove(clip.id)
         publish()
         true
     }

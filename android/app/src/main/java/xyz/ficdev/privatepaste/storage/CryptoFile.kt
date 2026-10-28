@@ -7,6 +7,8 @@ import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.InvalidKeyException
+import java.security.UnrecoverableKeyException
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import kotlinx.serialization.json.Json
@@ -44,18 +46,24 @@ class CryptoFile(val file: File, private val keys: KeyProvider, private val alia
     }
 
     /**
-     * Encrypts [bytes] and replaces the file atomically (temp file + rename). When the key fails, it is deleted
-     * and re-created once (older files under the same alias become unreadable, which they already were).
-     * @throws IOException when the file cannot be written or the key cannot be re-created.
+     * Encrypts [bytes] and replaces the file atomically (temp file + rename). Encryption is retried once:
+     * - when the key itself is broken (an [InvalidKeyException], which includes KeyPermanentlyInvalidatedException,
+     *   or an [UnrecoverableKeyException], anywhere in the cause chain), it is deleted and re-created first. Older
+     *   files under the same alias were already unreadable.
+     * - any other failure (a transient ProviderException or KeyStoreException) keeps the key, so the other files
+     *   under the alias stay readable.
+     * @throws IOException when the file cannot be written or encryption fails twice.
      */
     @Synchronized
     fun write(bytes: ByteArray) {
         val sealed = try {
             encrypt(bytes)
         } catch (e: Exception) {
-            Log.w(TAG, "${file.name}: key failed (${e.javaClass.simpleName}); re-creating it")
+            val broken = e.isBrokenKey()
+            Log.w(TAG, "${file.name}: encryption failed (${e.javaClass.simpleName}); " +
+                if (broken) "re-creating the key" else "retrying")
             try {
-                keys.deleteKey(alias)
+                if (broken) keys.deleteKey(alias)
                 encrypt(bytes)
             } catch (retry: Exception) {
                 throw IOException("Cannot encrypt ${file.name}", retry)
@@ -63,6 +71,11 @@ class CryptoFile(val file: File, private val keys: KeyProvider, private val alia
         }
         replace(sealed)
     }
+
+    private fun Throwable.isBrokenKey(): Boolean =
+        generateSequence(this) { t -> t.cause?.takeIf { it !== t } }
+            .take(MAX_CAUSE_DEPTH)
+            .any { it is InvalidKeyException || it is UnrecoverableKeyException }
 
     /** Deletes the file (and any leftover temp file). */
     @Synchronized
@@ -109,6 +122,7 @@ class CryptoFile(val file: File, private val keys: KeyProvider, private val alia
         const val IV_SIZE = 12
         const val TAG_SIZE = 16
         const val MOVE_ATTEMPTS = 10
+        const val MAX_CAUSE_DEPTH = 10
     }
 }
 

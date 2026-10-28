@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -113,6 +114,29 @@ class OutboundQueueTest {
         val q = queue()
         assertTrue(q.isEmpty)
         assertTrue("orphaned image files are removed", imageDir.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun clearDuringEnqueueImageDropsTheImage() {
+        val q = queue()
+        q.afterImageWrite = { q.clear() }   // sign-out lands between the image write and the add
+        q.enqueueImage(png, "image/png", t0)
+        q.afterImageWrite = null
+        assertTrue(q.isEmpty)
+        assertTrue(imageDir.listFiles().orEmpty().isEmpty())
+        assertTrue(queue().isEmpty)
+
+        q.enqueueImage(png, "image/png", t0)   // later enqueues work again
+        assertEquals(1, q.size)
+    }
+
+    @Test
+    fun imageDirMustNotBeTheQueueFileDir() {
+        try {
+            OutboundQueue(CryptoFile(File(tmp.root, "queue.bin"), keys, KeyAliases.QUEUE), tmp.root, keys)
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
     @Test
