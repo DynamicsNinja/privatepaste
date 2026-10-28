@@ -131,4 +131,36 @@ public class WindowsClipboardTests : IDisposable
         var only = Assert.Single(page!.Items);
         Assert.Equal("B", only.SourceDeviceName);
     }
+
+    [Fact]
+    public async Task A_read_that_gives_up_on_a_busy_clipboard_is_retried_on_a_later_tick()
+    {
+        if (!Enabled) return;
+        using var clip = new WindowsClipboard();
+        var changes = 0;
+        clip.Changed += (_, _) => Interlocked.Increment(ref changes);
+        await clip.WriteAsync(new ClipboardContent.Text("busy " + Guid.NewGuid()), default);
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (Volatile.Read(ref changes) == 0 && DateTime.UtcNow < until) await Task.Delay(20);
+        Assert.Equal(1, Volatile.Read(ref changes));
+
+        // Another application holds the clipboard open (with a window: a NULL-owner open does not lock others out) while we read.
+        const string script = "Add-Type -AssemblyName System.Windows.Forms; " +
+            "Add-Type -Namespace W -Name C -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool OpenClipboard(System.IntPtr h); [DllImport(\"user32.dll\")] public static extern bool CloseClipboard();'; " +
+            "$f = New-Object System.Windows.Forms.Form; if ([W.C]::OpenClipboard($f.Handle)) { [Console]::Out.WriteLine('opened'); [Console]::Out.Flush(); [Console]::In.ReadLine() | Out-Null; [W.C]::CloseClipboard() | Out-Null }";
+        using var holder = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe", ["-NoProfile", "-Command", script])
+        {
+            RedirectStandardInput = true, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
+        })!;
+        Assert.Equal("opened", await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20)));
+        var whileBusy = await clip.ReadAsync(default);
+        await holder.StandardInput.WriteLineAsync();
+        await holder.StandardInput.FlushAsync();
+        await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Null(whileBusy);   // gave up after the retries
+        until = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (Volatile.Read(ref changes) < 2 && DateTime.UtcNow < until) await Task.Delay(20);
+        Assert.Equal(2, Volatile.Read(ref changes));   // re-armed: the same change is raised again
+        Assert.IsType<ClipboardContent.Text>(await clip.ReadAsync(default));
+    }
 }

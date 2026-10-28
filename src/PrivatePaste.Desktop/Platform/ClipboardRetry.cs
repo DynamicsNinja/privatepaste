@@ -10,11 +10,11 @@ public static class ClipboardRetry
 
     /// <summary>
     /// Runs <paramref name="attempt"/> up to <paramref name="attempts"/> times while it throws <see cref="ClipboardBusyException"/>,
-    /// waiting <paramref name="delay"/> between tries. After the last failed attempt it logs once and returns <c>default</c>.
-    /// Other exceptions propagate immediately.
+    /// waiting <paramref name="delay"/> between tries. After the last failed attempt it logs once, calls
+    /// <paramref name="gaveUp"/> and returns <c>default</c>. Other exceptions propagate immediately.
     /// </summary>
     public static async Task<T?> RunAsync<T>(Func<T> attempt, int attempts = 5, TimeSpan? delay = null,
-        Action<string>? log = null, CancellationToken ct = default)
+        Action<string>? log = null, CancellationToken ct = default, Action? gaveUp = null)
     {
         ArgumentNullException.ThrowIfNull(attempt);
         var wait = delay ?? DefaultDelay;
@@ -29,6 +29,7 @@ public static class ClipboardRetry
             catch (ClipboardBusyException)
             {
                 log?.Invoke($"Clipboard stayed busy after {attempts} attempts; giving up.");
+                gaveUp?.Invoke();
                 return default;
             }
         }

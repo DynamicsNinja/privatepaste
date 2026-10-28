@@ -39,4 +39,14 @@ public class ClipboardRetryTests
             () => { calls++; throw new InvalidOperationException(); }, delay: Fast));
         Assert.Equal(1, calls);
     }
+
+    [Fact]
+    public async Task Giving_up_is_reported_to_the_caller()
+    {
+        var gaveUp = 0;
+        await ClipboardRetry.RunAsync<int>(() => throw new ClipboardBusyException(), delay: Fast, gaveUp: () => gaveUp++);
+        Assert.Equal(1, gaveUp);
+        await ClipboardRetry.RunAsync(() => 1, delay: Fast, gaveUp: () => gaveUp++);
+        Assert.Equal(1, gaveUp);
+    }
 }

@@ -11,6 +11,32 @@ public enum ClipboardFormat { Png, DibV5, Dib, UnicodeText }
 /// </summary>
 public static class ClipboardSelector
 {
+    /// <summary>
+    /// Copies the raw bytes of the formats <see cref="Select"/> may need, in its order of preference, and nothing else: no
+    /// decoding or conversion, so it is cheap enough to run while the clipboard is held open.
+    /// </summary>
+    public static Dictionary<ClipboardFormat, byte[]> Capture(Func<ClipboardFormat, byte[]?> get)
+    {
+        var captured = new Dictionary<ClipboardFormat, byte[]>();
+        if (get(ClipboardFormat.UnicodeText) is { } raw)
+        {
+            captured[ClipboardFormat.UnicodeText] = raw;
+            if (!string.IsNullOrWhiteSpace(FromUtf16Z(raw))) return captured;
+        }
+        if (get(ClipboardFormat.Png) is { } png)
+        {
+            captured[ClipboardFormat.Png] = png;
+            return captured;
+        }
+        foreach (var format in new[] { ClipboardFormat.DibV5, ClipboardFormat.Dib })
+            if (get(format) is { } dib) captured[format] = dib;
+        return captured;
+    }
+
+    /// <summary>Selects from bytes captured earlier (see <see cref="Capture"/>); DIB to PNG conversion happens here.</summary>
+    public static ClipboardContent? Select(IReadOnlyDictionary<ClipboardFormat, byte[]> captured, Action<string>? log) =>
+        Select(f => captured.GetValueOrDefault(f), log);
+
     public static ClipboardContent? Select(Func<ClipboardFormat, byte[]?> get, Action<string>? log)
     {
         if (get(ClipboardFormat.UnicodeText) is { } raw)
