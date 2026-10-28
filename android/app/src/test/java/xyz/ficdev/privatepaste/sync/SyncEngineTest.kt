@@ -192,7 +192,7 @@ class SyncEngineTest {
         id: String,
         seq: Long,
         minute: Long = seq,
-        device: String = other,
+        device: String? = other,
         kind: ClipKind = ClipKind.TEXT,
         hash: String = "h-$id-$seq",
     ) = ClipDto(
@@ -319,6 +319,36 @@ class SyncEngineTest {
         assertEquals(listOf(x, y), applied)
         assertEquals(x.lastCopiedAt, cache.lastAppliedAt)
         assertEquals(listOf("y", "x"), cache.items.value.map { it.id })
+    }
+
+    @Test
+    fun liveWebClipWithoutSourceDeviceIsApplied() = runTest {
+        engine().start()
+        runCurrent()
+
+        // Copied or restored in the web UI: no source device, so never this device's own clip.
+        val web = clip("web", 1, device = null)
+        links.last.push(WsEvent.ClipCreated(web, live = true))
+        runCurrent()
+
+        assertEquals(listOf(web), applied)
+        assertEquals(web.lastCopiedAt, cache.lastAppliedAt)
+    }
+
+    @Test
+    fun catchUpCompletesWithAWebClipInThePage() = runTest {
+        cache.markApplied(base, "previous")
+        api.pages += page(clip("a", 1), clip("web", 2, device = null), latest = 2)
+        val engine = engine()
+
+        engine.start()
+        runCurrent()
+
+        assertEquals(listOf(0L), api.syncCalls)
+        assertEquals(2L, cache.highestSeq)
+        assertEquals(listOf("web", "a"), cache.items.value.map { it.id })
+        assertEquals(listOf("web"), applied.map { it.id })
+        assertEquals(SyncState.CONNECTED, engine.state.value)
     }
 
     @Test

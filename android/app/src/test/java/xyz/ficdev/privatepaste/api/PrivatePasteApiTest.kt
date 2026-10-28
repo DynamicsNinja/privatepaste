@@ -111,6 +111,15 @@ class PrivatePasteApiTest {
         assertEquals("/api/sync?afterSeq=7&limit=200", take().path)
     }
 
+    @Test fun syncPageWithAWebClipDecodes() = runBlocking<Unit> {
+        // Web-copied clips have no source device: a page holding one must decode, not fail as Transient.
+        val web = clipJson.replace("\"sourceDeviceId\":\"d\"", "\"sourceDeviceId\":null").replace("\"Pc\"", "\"Web\"")
+        server.enqueue(json("""{"clips":[$clipJson,$web],"deletedIds":[],"latestSeq":5,"hasMore":false}"""))
+        val p = api().sync(0)
+        assertEquals(listOf("d", null), p.clips.map { it.sourceDeviceId })
+        assertEquals("Web", p.clips[1].sourceDeviceName)
+    }
+
     @Test fun status401IsUnauthorized() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(401))
         assertThrowsApi<ApiException.Unauthorized> { api().clips(null, null) }

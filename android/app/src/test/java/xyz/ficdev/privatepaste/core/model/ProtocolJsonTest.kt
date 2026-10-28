@@ -72,6 +72,43 @@ class ProtocolJsonTest {
         assertNull(explicitNull.sourceDevicePlatform)
     }
 
+    /** A clip copied or restored in the web UI, exactly as the server sends it: no source device id. */
+    private val webClipJson = """
+        {"id":"w1","seq":43,"kind":"text","text":"from the browser","hash":"wh","width":null,"height":null,
+         "sizeBytes":16,"sourceDeviceId":null,"sourceDeviceName":"Web","sourceDevicePlatform":"web",
+         "lastCopiedAt":"2026-10-28T10:05:00+00:00"}
+    """.trimIndent()
+
+    @Test
+    fun webClipWithNullSourceDeviceIdDecodes() {
+        val clip = json.decodeFromString<ClipDto>(webClipJson)
+        assertNull(clip.sourceDeviceId)
+        assertEquals("Web", clip.sourceDeviceName)
+        assertEquals("web", clip.sourceDevicePlatform)
+        assertEquals(clip, json.decodeFromString<ClipDto>(json.encodeToString(ClipDto.serializer(), clip)))
+        // An absent id decodes the same way.
+        assertNull(json.decodeFromString<ClipDto>(webClipJson.replace("\"sourceDeviceId\":null,", "")).sourceDeviceId)
+    }
+
+    @Test
+    fun syncPageWithAWebClipDecodes() {
+        val page = json.decodeFromString<SyncPage>(
+            """{"clips":[$linkClipJson,$webClipJson],"deletedIds":[],"latestSeq":43,"hasMore":false}""",
+        )
+        assertEquals(listOf("c1", "w1"), page.clips.map { it.id })
+        assertNull(page.clips[1].sourceDeviceId)
+    }
+
+    @Test
+    fun parseWsWebClipCreated() {
+        val event = ProtocolJson.parseWs("""{"type":"clip.created","clip":$webClipJson,"live":true}""")
+        assertTrue(event is WsEvent.ClipCreated)
+        event as WsEvent.ClipCreated
+        assertEquals("w1", event.clip.id)
+        assertNull(event.clip.sourceDeviceId)
+        assertEquals(true, event.live)
+    }
+
     @Test
     fun ignoresUnknownFields() {
         val withExtra = linkClipJson.replaceFirst("{", """{"futureField":{"nested":[1,2]},"other":true,""")

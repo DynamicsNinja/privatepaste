@@ -40,7 +40,12 @@ data class ClipDto(
     val width: Int? = null,
     val height: Int? = null,
     val sizeBytes: Long,
-    val sourceDeviceId: String,
+    /** Null for a clip copied or restored in the web UI (no device): never this device. */
+    val sourceDeviceId: String? = null,
+    /**
+     * The server always sends a name ("Web" for web clips); kept nullable, with fallbacks in the UI, so a missing
+     * name can never fail decoding a whole sync page.
+     */
     val sourceDeviceName: String? = null,
     /** Lowercase platform of the source device ("windows", "macos", "linux", "android", "web", ...); null if unknown. */
     val sourceDevicePlatform: String? = null,

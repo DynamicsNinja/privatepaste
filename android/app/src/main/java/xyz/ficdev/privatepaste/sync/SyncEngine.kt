@@ -345,6 +345,7 @@ class SyncEngine(
         if (!queue.isEmpty) return                          // a local copy still queued is newer than anything here
         val items = cache.items.value
         val present = items.associate { it.id to it.seq }
+        // A null source device (copied or restored in the web UI) is never this device.
         val newest = caught
             .filter { it.sourceDeviceId != ownDeviceId && present[it.id] == it.seq }
             .maxWithOrNull(compareBy<ClipDto> { it.lastCopiedAt }.thenBy { it.seq })
