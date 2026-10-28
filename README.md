@@ -11,6 +11,7 @@ The API, at a high level: log in with the password to get a device token, then u
    - `PP_DB_KEY` (required, at least 16 characters): encryption key for the database and blobs. It must be a high-entropy random value (see [Generating keys](#generating-keys)), not a memorable passphrase.
    - `PP_PASSWORD` (required): the login password.
    - `PP_MAX_IMAGE_MB` (optional, default 20) and `PP_MAX_TEXT_KB` (optional, default 1024).
+   - `PP_TRUST_CLOUDFLARE` (optional, default false). Set to `true` when the server sits behind a Cloudflare tunnel, so the login limit uses the visitor IP from `CF-Connecting-IP` and session cookies are marked Secure (scheme from `Cf-Visitor`). Only enable it if the server is reachable exclusively through Cloudflare; otherwise anyone can set these headers.
 3. Add a domain pointing to service `privatepaste`, port **8080**, with HTTPS enabled. Traefik passes WebSockets through by default.
 4. Optionally point Dokploy's health check at `/health`. The image has no `curl`, so there is no built-in `HEALTHCHECK`.
 

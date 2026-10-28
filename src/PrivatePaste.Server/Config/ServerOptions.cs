@@ -6,6 +6,12 @@ public sealed record ServerOptions(string DbKey, string Password, string DataDir
 {
     private const int MinDbKeyLength = 16;
 
+    /// <summary>
+    /// Behind a Cloudflare tunnel, take the visitor's IP from CF-Connecting-IP and the scheme from Cf-Visitor.
+    /// Only safe when the server cannot be reached except through Cloudflare, since anyone else could set these headers.
+    /// </summary>
+    public bool TrustCloudflare { get; init; }
+
     public static ServerOptions FromConfiguration(IConfiguration config)
     {
         var dbKey = config["PP_DB_KEY"];
@@ -24,7 +30,19 @@ public sealed record ServerOptions(string DbKey, string Password, string DataDir
         var imageMb = ReadPositive(config, "PP_MAX_IMAGE_MB", 20);
         var textKb = ReadPositive(config, "PP_MAX_TEXT_KB", 1024);
 
-        return new ServerOptions(dbKey, password, dataDir, imageMb * 1024 * 1024, textKb * 1024);
+        return new ServerOptions(dbKey, password, dataDir, imageMb * 1024 * 1024, textKb * 1024)
+        {
+            TrustCloudflare = ReadBool(config, "PP_TRUST_CLOUDFLARE"),
+        };
+    }
+
+    private static bool ReadBool(IConfiguration config, string name)
+    {
+        var raw = config[name];
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        if (!bool.TryParse(raw, out var value))
+            throw new InvalidOperationException($"{name} must be 'true' or 'false', got '{raw}'.");
+        return value;
     }
 
     private static long ReadPositive(IConfiguration config, string name, long defaultValue)

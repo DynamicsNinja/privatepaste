@@ -8,6 +8,7 @@ services:
       PP_PASSWORD: ${PP_PASSWORD:?}
       PP_MAX_IMAGE_MB: ${PP_MAX_IMAGE_MB:-20}
       PP_MAX_TEXT_KB: ${PP_MAX_TEXT_KB:-1024}
+      PP_TRUST_CLOUDFLARE: ${PP_TRUST_CLOUDFLARE:-false}
     volumes:
       - privatepaste-data:/data
     expose:

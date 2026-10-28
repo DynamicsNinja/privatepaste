@@ -20,6 +20,23 @@ public class ServerOptionsTests
     public void Missing_password_throws() => Assert.Contains("PP_PASSWORD",
         Assert.Throws<InvalidOperationException>(() => ServerOptions.FromConfiguration(Config(("PP_DB_KEY", GoodKey)))).Message);
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    [InlineData("false", false)]
+    public void Trust_cloudflare_parses(string? raw, bool expected)
+    {
+        var values = new List<(string, string)> { ("PP_DB_KEY", GoodKey), ("PP_PASSWORD", "x") };
+        if (raw is not null) values.Add(("PP_TRUST_CLOUDFLARE", raw));
+        Assert.Equal(expected, ServerOptions.FromConfiguration(Config(values.ToArray())).TrustCloudflare);
+    }
+
+    [Fact]
+    public void Trust_cloudflare_rejects_garbage() => Assert.Contains("PP_TRUST_CLOUDFLARE",
+        Assert.Throws<InvalidOperationException>(() => ServerOptions.FromConfiguration(
+            Config(("PP_DB_KEY", GoodKey), ("PP_PASSWORD", "x"), ("PP_TRUST_CLOUDFLARE", "yes please")))).Message);
+
     [Fact]
     public void Short_db_key_throws()
     {

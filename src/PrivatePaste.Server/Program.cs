@@ -135,6 +135,7 @@ app.Use((context, next) =>
     return next(context);
 });
 app.UseForwardedHeaders();
+app.UseCloudflareTunnel(app.Services.GetRequiredService<ServerOptions>());
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseStaticFiles();
 app.UseAuthentication();
