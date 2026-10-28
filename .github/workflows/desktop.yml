@@ -92,6 +92,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          flags=""
-          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* --title "PrivatePaste ${GITHUB_REF_NAME#desktop-v}" --generate-notes $flags
+          version="${GITHUB_REF_NAME#desktop-v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            flags=""
+            case "$version" in *-*) flags="--prerelease" ;; esac
+            gh release create "$GITHUB_REF_NAME" dist/* --title "PrivatePaste $version" --generate-notes $flags
+          fi
