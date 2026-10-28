@@ -29,4 +29,17 @@ public class ContentHashTests
         var expected = Convert.ToHexString(SHA256.HashData([.. Encoding.UTF8.GetBytes("i:1x1:"), .. px])).ToLowerInvariant();
         Assert.Equal(expected, ContentHash.ForPixels(px, 1, 1));
     }
+
+    // Hard-coded cross-client vectors: the Android and desktop ports must produce exactly these (also in README).
+    [Theory]
+    [InlineData("hello", "1bec6ebade142b8ea787b2744bbb12d1915e0d0d5e8e31f7f5452911840de3a9")]
+    [InlineData("a\nb", "b77cc1fcd69063256ffc07884bde76c875b73e56a786925feedd7ba881f0616c")]
+    [InlineData("a\r\nb", "b77cc1fcd69063256ffc07884bde76c875b73e56a786925feedd7ba881f0616c")]
+    [InlineData("šećer \U0001F680", "812328f074c3d5a025a329dd4674a676d83d5f926bd79af643a51e783ed3ac39")] // "šećer 🚀"
+    public void Text_hash_cross_client_vectors(string text, string expected) => Assert.Equal(expected, ContentHash.ForText(text));
+
+    [Fact]
+    public void Pixel_hash_cross_client_vector_1x1_opaque_red() =>
+        Assert.Equal("8d833d22068fdf91eecbd0d310208548d1f9418c6513c572a7c7d01fc696c49a",
+            ContentHash.ForPixels([255, 0, 0, 255], 1, 1));
 }

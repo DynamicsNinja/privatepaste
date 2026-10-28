@@ -2,9 +2,12 @@ services:
   privatepaste:
     build: .
     restart: unless-stopped
+    stop_grace_period: 15s
     environment:
       PP_DB_KEY: ${PP_DB_KEY:?}
       PP_PASSWORD: ${PP_PASSWORD:?}
+      PP_MAX_IMAGE_MB: ${PP_MAX_IMAGE_MB:-20}
+      PP_MAX_TEXT_KB: ${PP_MAX_TEXT_KB:-1024}
     volumes:
       - privatepaste-data:/data
     expose:

@@ -2,13 +2,13 @@
 
 A self-hosted clipboard sync server. Text and images copied on one device show up on your others. Everything is stored encrypted at rest (SQLite3 Multiple Ciphers database keyed by `PP_DB_KEY`, blobs encrypted with an HKDF-derived key), and no third-party network services are used. History is kept until you delete items.
 
-The API, at a high level: log in with the password to get a device token, then use the token for the clips endpoints (create, list, delete) and for the WebSocket at `/ws`, which pushes live updates. A web UI is served at `/`, and `/health` reports server health.
+The API, at a high level: log in with the password to get a device token, then use the token for the clips endpoints (create, list, delete) and for the WebSocket at `/ws`, which pushes live updates. A web UI is served at `/`, and `/health` reports server health. See [API](#api) for the full reference.
 
 ## Deploy on Dokploy
 
 1. Create a **Compose** application from this repository (it uses `docker-compose.yml`).
 2. Set the environment variables:
-   - `PP_DB_KEY` (required, at least 16 characters): encryption key for the database and blobs.
+   - `PP_DB_KEY` (required, at least 16 characters): encryption key for the database and blobs. It must be a high-entropy random value (see [Generating keys](#generating-keys)), not a memorable passphrase.
    - `PP_PASSWORD` (required): the login password.
    - `PP_MAX_IMAGE_MB` (optional, default 20) and `PP_MAX_TEXT_KB` (optional, default 1024).
 3. Add a domain pointing to service `privatepaste`, port **8080**, with HTTPS enabled. Traefik passes WebSockets through by default.
@@ -22,21 +22,102 @@ Data lives in the named volume `privatepaste-data`, mounted at `/data`.
 openssl rand -base64 32
 ```
 
-Use the output for `PP_DB_KEY` (and a strong, separate value for `PP_PASSWORD`).
+Use the output for `PP_DB_KEY` (and a strong, separate value for `PP_PASSWORD`). `PP_DB_KEY` is used directly as the encryption secret, so it has to be random like this; a passphrase you could remember is too weak.
 
 **Back up `PP_DB_KEY`. Without it the data is unrecoverable.**
 
 ## Changing the password
 
-Edit `PP_PASSWORD` in the environment and redeploy. The password is hashed with Argon2id at startup. Existing device tokens keep working.
+Edit `PP_PASSWORD` in the environment and redeploy. The password is hashed with Argon2id at startup.
+
+Existing device tokens keep working after a password change: changing the password does not log devices out. If you are changing it because it leaked, open the **Devices** page in the web UI and revoke every device you don't recognize.
 
 ## Backups
 
-Copy the `privatepaste-data` volume (the `/data` directory) and store it together with `PP_DB_KEY` (keep the key separate from where you expose the backup, but do not lose it).
+1. Get a consistent copy of `/data` (the `privatepaste-data` volume): either stop the container first (`docker compose stop`, copy, `docker compose start`), or take a snapshot of the volume. Copying the files of a running server can catch the database mid-write.
+2. Store `PP_DB_KEY` separately and safely (for example in a password manager), not next to the backup. The backup is encrypted with it: **without `PP_DB_KEY` a backup is useless**, and anyone who has both the backup and the key can read everything.
 
 ## Proxy and forwarded headers
 
-Login is rate-limited to 5 attempts per minute per client IP. The server trusts `X-Forwarded-For` from the reverse proxy to identify the client IP, so only expose the container through the proxy (Traefik). Do not publish port 8080 directly to the internet, or clients could spoof their IP and bypass the limit.
+Login is rate-limited to 5 attempts per minute per client IP (IPv6 clients per /64 prefix). The server trusts `X-Forwarded-For` from the reverse proxy to identify the client IP, so only expose the container through the proxy (Traefik). Do not publish port 8080 directly to the internet, or clients could spoof their IP and bypass the limit.
+
+## API
+
+All JSON is camelCase; enums are lowercase strings (`kind` is `text`, `link` or `image`). Errors with a message are RFC 7807 problem responses.
+
+### Authentication
+
+`POST /api/auth/login` with the password returns a device token. Send it on every other request as `Authorization: Bearer <token>`, including the WebSocket upgrade request. A token stays valid until the device logs out or is revoked; it is not tied to the password (see [Changing the password](#changing-the-password)).
+
+The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` calls must also send the antiforgery token in a `RequestVerificationToken` header; bearer-authenticated calls don't need it.
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/health` | none | Health check. |
+| `POST` | `/api/auth/login` | none | Body `{password, deviceName, platform}` (device name 1-50 chars). Returns `{deviceId, token}`. 401 on a wrong password, 429 when rate-limited or too many logins are being checked at once. |
+| `POST` | `/api/auth/logout` | bearer | Revokes the calling device's token and closes its WebSockets. 204. |
+| `GET` | `/api/devices` | bearer | Lists devices: `[{id, name, platform, createdAt, lastSeenAt, isCurrent}]`. |
+| `DELETE` | `/api/devices/{id}` | bearer | Revokes a device and closes its WebSockets. 204, or 404. |
+| `POST` | `/api/clips/text` | bearer | Body `{text, copiedAt?, backfill}`. Returns the clip. 400 if empty, 413 if over `PP_MAX_TEXT_KB`. |
+| `POST` | `/api/clips/image` | bearer | `multipart/form-data` (see below). Returns the clip. 400 for an invalid image or body, 413 if over `PP_MAX_IMAGE_MB`. |
+| `GET` | `/api/clips?q=&cursor=&limit=` | bearer | History, newest first (`lastCopiedAt` desc). `q` searches text; `limit` defaults to 50 (max 200). Returns `{items, nextCursor}`; pass `nextCursor` back as `cursor` for the next page. |
+| `GET` | `/api/clips/{id}` | bearer | One clip, or 404. |
+| `GET` | `/api/clips/{id}/image` | bearer | The full image as `image/png`. |
+| `GET` | `/api/clips/{id}/thumbnail` | bearer | A PNG thumbnail that fits in 256x256. |
+| `POST` | `/api/clips/{id}/restore` | bearer | Treats the clip as freshly copied by the caller: bumps it to the top and pushes it live. Returns the clip, or 404. |
+| `DELETE` | `/api/clips/{id}` | bearer | Deletes a clip (and its image). 204, or 404. |
+| `GET` | `/api/sync?afterSeq=&limit=` | bearer | Changes after a sequence number, in `seq` order: `{clips, deletedIds, latestSeq, hasMore}`. `limit` defaults to 200 (max 500). |
+| `GET` | `/ws` | bearer | WebSocket for live updates (see below). |
+
+A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId, sourceDeviceName, lastCopiedAt}`. `text` is null for images; `width`/`height` are null for text. Every change (new clip, dedup bump, restore, delete) gets a new, higher `seq`.
+
+Uploading content that already exists (same `hash`) does not create a duplicate: the existing clip is bumped to the top and returned.
+
+### Image upload
+
+`POST /api/clips/image` takes `multipart/form-data` with these parts, in any order:
+
+- `file` (required): the image (PNG, JPEG, WebP, ...). It is normalized to PNG.
+- `copiedAt` (optional): ISO 8601 time the image was copied. Only used with `backfill`.
+- `backfill` (optional): `true` for a clip queued while offline.
+
+Live uploads always get the server's time. Backfilled uploads keep `copiedAt`, clamped to no later than the server's time, and are never applied to other devices' clipboards. The same applies to `copiedAt`/`backfill` on text uploads.
+
+### WebSocket
+
+Connect to `/ws` with the bearer token in the upgrade request. Messages are JSON text frames:
+
+- `{"type":"clip.created","clip":{...},"live":true}`: a clip was added, bumped or restored. `live` is `false` for backfilled clips.
+- `{"type":"clip.deleted","id":"...","seq":123}`: a clip was deleted.
+- Send `{"type":"ping"}` and the server answers `{"type":"pong"}`. Other messages are ignored.
+
+The server closes the socket with status 1008 (`revoked`) when the device is revoked or logs out, and with 1001 when it shuts down.
+
+### Client rules
+
+- Ignore `clip.created` messages whose `clip.sourceDeviceId` is your own device id; you already have that clip.
+- Only apply `live: true` clips to the clipboard. Backfilled clips go into history only.
+- Order by `seq` (or `lastCopiedAt` for display), not by arrival order: broadcasts can arrive out of `seq` order.
+- On every (re)connect, catch up with `GET /api/sync?afterSeq=<highest seq you have seen>`, repeating while `hasMore` is true, then continue from `latestSeq`. Apply at most the newest caught-up clip to the clipboard, and only if it is newer than what you last applied.
+- Reconnect with backoff after the socket closes, except after a `revoked` close: log in again instead.
+
+### Content hash
+
+`hash` is computed the same way on every client so that echo prevention and dedup work across platforms. The reference implementation is `ContentHash` in `src/PrivatePaste.Protocol/ContentHash.cs`:
+
+- Text: lowercase hex of `SHA-256(UTF-8("t:" + text))`, where `text` has CRLF and lone CR converted to LF (nothing else changes).
+- Image: lowercase hex of `SHA-256(UTF-8("i:{width}x{height}:") ++ pixels)`, where `pixels` is the decoded image as RGBA8888, unpremultiplied, row-major, with no row padding.
+
+Ports must reproduce these test vectors:
+
+| Input | Hash |
+|---|---|
+| text `hello` | `1bec6ebade142b8ea787b2744bbb12d1915e0d0d5e8e31f7f5452911840de3a9` |
+| text `a\nb` (and `a\r\nb`) | `b77cc1fcd69063256ffc07884bde76c875b73e56a786925feedd7ba881f0616c` |
+| text `šećer 🚀` | `812328f074c3d5a025a329dd4674a676d83d5f926bd79af643a51e783ed3ac39` |
+| 1x1 image, RGBA `[255, 0, 0, 255]` | `8d833d22068fdf91eecbd0d310208548d1f9418c6513c572a7c7d01fc696c49a` |
 
 ## Local development
 
