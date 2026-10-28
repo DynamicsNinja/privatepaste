@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using PrivatePaste.Client.Core.Api;
@@ -84,8 +85,9 @@ public sealed class DesktopHost : IAsyncDisposable
         Cache.Changed += OnCacheChanged;
         _queue = OutboundQueue.Load(_queuePath, _cacheKey);
 
-        // ---- Clipboard ----
+        // ---- Clipboard, network and power ----
         platform.Clipboard.Changed += OnClipboardChanged;
+        WatchNetworkAndPower();
     }
 
     public PlatformServices Platform { get; }
@@ -531,6 +533,61 @@ public sealed class DesktopHost : IAsyncDisposable
         _queue = OutboundQueue.Load(_queuePath, _cacheKey);
     }
 
+    // ======================================================================== Network and power changes
+
+    private static readonly TimeSpan NudgeCoalesce = TimeSpan.FromSeconds(2);
+    private long _lastNudgeTicks;
+
+    private void WatchNetworkAndPower()
+    {
+        try
+        {
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+            NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+            if (OperatingSystem.IsWindows()) Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        }
+        catch (Exception e) { _log.Error("Could not watch network and power changes.", e); }
+    }
+
+    private void UnwatchNetworkAndPower()
+    {
+        try
+        {
+            NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+            if (OperatingSystem.IsWindows()) Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        }
+        catch (Exception) { }
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        if (e.IsAvailable) OnNetworkOrPowerChanged("Network available");
+    }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e) => OnNetworkOrPowerChanged("Network address changed");
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == Microsoft.Win32.PowerModes.Resume) OnNetworkOrPowerChanged("Resumed from sleep");
+    }
+
+    /// <summary>
+    /// Resume from sleep or a network change: the socket is likely dead without knowing it, so the engine drops it, resets
+    /// its backoff and reconnects at once (<see cref="SyncEngine.Nudge"/>). Bursts within 2 s count once.
+    /// </summary>
+    public void OnNetworkOrPowerChanged(string what)
+    {
+        var now = _time.GetUtcNow().UtcTicks;
+        var last = Interlocked.Read(ref _lastNudgeTicks);
+        if (last != 0 && now - last < NudgeCoalesce.Ticks) return;
+        if (Interlocked.CompareExchange(ref _lastNudgeTicks, now, last) != last) return;   // another event got there first
+        if (_session is not { } session) return;
+        _log.Info($"{what}: reconnecting.");
+        session.Engine.Nudge();
+    }
+
     // ======================================================================== Shutdown
 
     /// <summary>
@@ -543,6 +600,7 @@ public sealed class DesktopHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Platform.Clipboard.Changed -= OnClipboardChanged;
+        UnwatchNetworkAndPower();
         await _shutdown.CancelAsync();
         await _lifecycle.WaitAsync();
         try

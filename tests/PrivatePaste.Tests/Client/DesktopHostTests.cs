@@ -23,6 +23,7 @@ public class DesktopHostTests : IAsyncLifetime
     private readonly FakeClipboard _clipboard = new();
     private readonly ListNotifier _notes = new();
     private readonly List<DesktopHost> _hosts = [];
+    private int _connects;
 
     public Task InitializeAsync()
     {
@@ -52,6 +53,7 @@ public class DesktopHostTests : IAsyncLifetime
             CreateHandler = handler ?? (() => _server.Server.CreateHandler()),
             Connect = (uri, token, ct) =>
             {
+                Interlocked.Increment(ref _connects);
                 Assert.Equal("ws", uri.Scheme);
                 var client = _server.Server.CreateWebSocketClient();
                 client.ConfigureRequest = r => r.Headers.Authorization = "Bearer " + token;
@@ -129,6 +131,17 @@ public class DesktopHostTests : IAsyncLifetime
         var again = NewHost();
         Assert.True(await again.StartAsync());
         await WaitUntilAsync(() => again.State == SyncState.Connected);
+    }
+
+    [Fact]
+    public async Task A_network_change_or_resume_reconnects_at_once()
+    {
+        var host = await SignedInHostAsync();
+        Assert.Equal(1, Volatile.Read(ref _connects));
+
+        host.OnNetworkOrPowerChanged("test");
+
+        await WaitUntilAsync(() => Volatile.Read(ref _connects) == 2 && host.State == SyncState.Connected);
     }
 
     [Fact]

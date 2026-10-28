@@ -387,6 +387,35 @@ public class SyncEngineTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Nudge_drops_a_live_link_and_reconnects_at_once()
+    {
+        var engine = await StartConnectedAsync();
+        var first = Assert.Single(_sockets);
+
+        engine.Nudge();   // no clock advance: no backoff wait
+
+        await WaitUntilAsync(() => Volatile.Read(ref _connects) == 2 && engine.State == SyncState.Connected);
+        Assert.NotEqual(WebSocketState.Open, first.State);
+        await _apiB.UploadTextAsync("after nudge", null, false);
+        await WaitUntilAsync(() => Written().Contains("after nudge"));
+    }
+
+    [Fact]
+    public async Task Nudge_cuts_the_backoff_wait_short()
+    {
+        _connectFailure = n => n == 1 ? new WebSocketException("network down") : null;
+        var engine = CreateEngine();
+        engine.Start();
+        await WaitUntilAsync(() => Count(SyncState.Offline) == 1);   // waiting out the first backoff step
+        Assert.Equal(1, Volatile.Read(ref _connects));
+
+        engine.Nudge();
+
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+        Assert.Equal(2, Volatile.Read(ref _connects));
+    }
+
+    [Fact]
     public async Task First_catch_up_with_fresh_cache_is_history_only()
     {
         await UploadXyzWhileStoppedAsync();

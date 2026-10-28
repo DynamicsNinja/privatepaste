@@ -53,7 +53,7 @@ public sealed class SyncEngine(
     private static readonly byte[] PingBytes = JsonSerializer.SerializeToUtf8Bytes(new WsMessage(WsTypes.Ping), ProtocolJson.Options);
 
     private enum Outcome { Failed, Revoked, Paused, Stopped }
-    private enum AbortReason { None, Paused, PongTimeout, SendFailed, Revoked }
+    private enum AbortReason { None, Paused, PongTimeout, SendFailed, Revoked, Nudged }
 
     private readonly object _gate = new();
     private CancellationTokenSource? _stop;
@@ -68,6 +68,11 @@ public sealed class SyncEngine(
     /// <summary>Set when a pause is observed; the next successful catch-up is history only. Loop thread only.</summary>
     private bool _resumingFromPause;
     private bool _thumbnailsHooked;
+    // Nudge support: what to cancel right now (connection attempt, live link, backoff wait) and whether a nudge is pending.
+    private volatile CancellationTokenSource? _attempt;
+    private volatile Link? _link;
+    private volatile CancellationTokenSource? _wait;
+    private int _nudged;
 
     public SyncState State => _state;
     public event EventHandler<SyncState>? StateChanged;
@@ -92,6 +97,24 @@ public sealed class SyncEngine(
             _stop = new CancellationTokenSource();
             var token = _stop.Token;
             _loop = Task.Run(() => RunAsync(token));
+        }
+    }
+
+    /// <summary>
+    /// The network or the machine's power state changed (resume from sleep, network up, new address): the current link is
+    /// likely dead without knowing it. Drops the current connection attempt or link, resets the backoff and reconnects at
+    /// once. Thread-safe; a no-op while paused, stopped or signed out.
+    /// </summary>
+    public void Nudge()
+    {
+        Interlocked.Exchange(ref _nudged, 1);
+        if (_link is { } link) link.Abort(AbortReason.Nudged);
+        else Cancel(_attempt);
+        Cancel(_wait);
+
+        static void Cancel(CancellationTokenSource? cts)
+        {
+            try { cts?.Cancel(); } catch (ObjectDisposedException) { }
         }
     }
 
@@ -142,9 +165,23 @@ public sealed class SyncEngine(
                         continue;
                 }
 
-                var delay = Task.Delay(backoff.Next(), time, stop);
+                if (Interlocked.Exchange(ref _nudged, 0) == 1)
+                {
+                    backoff.Reset();   // the network just changed: retry at once, with fresh delays
+                    continue;
+                }
+                using var wait = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                _wait = wait;
+                if (Volatile.Read(ref _nudged) == 1) wait.Cancel();   // nudged before _wait was visible
+                var delay = Task.Delay(backoff.Next(), time, wait.Token);
                 SetState(SyncState.Offline);
-                await delay.ConfigureAwait(false);
+                try { await delay.ConfigureAwait(false); }
+                catch (OperationCanceledException) when (!stop.IsCancellationRequested)
+                {
+                    Interlocked.Exchange(ref _nudged, 0);
+                    backoff.Reset();
+                }
+                finally { _wait = null; }
             }
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
@@ -157,7 +194,9 @@ public sealed class SyncEngine(
 
     private async Task<Outcome> RunConnectionAsync(CancellationToken stop)
     {
+        Interlocked.Exchange(ref _nudged, 0);   // this attempt is the fresh start a nudge asks for
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        _attempt = lifetime;
         WebSocket socket;
         try
         {
@@ -165,15 +204,25 @@ public sealed class SyncEngine(
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
+            _attempt = null;
             return Outcome.Stopped;
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            _attempt = null;
+            return Outcome.Failed;   // nudged: reconnect at once
         }
         catch (Exception e)
         {
+            _attempt = null;
             Report("Could not connect to the server.", e);
             return await ProbeAuthAsync(stop).ConfigureAwait(false);
         }
 
         var link = new Link(socket, lifetime);
+        _link = link;
+        _attempt = null;
+        if (Volatile.Read(ref _nudged) == 1) link.Abort(AbortReason.Nudged);   // nudged while the connect completed
         PeriodicTimer? timer = null;
         Task? monitor = null;
         DateTimeOffset? connectedAt = null;
@@ -206,6 +255,9 @@ public sealed class SyncEngine(
                     return Outcome.Paused;
                 case AbortReason.Revoked:
                     return Outcome.Revoked;
+                case AbortReason.Nudged:
+                    Report("Network or power change; reconnecting.", e);
+                    break;
                 case AbortReason.PongTimeout:
                     Report("No pong from the server; reconnecting.", e);
                     break;
@@ -217,6 +269,7 @@ public sealed class SyncEngine(
         }
         finally
         {
+            _link = null;
             try { await lifetime.CancelAsync().ConfigureAwait(false); } catch (ObjectDisposedException) { }
             socket.Abort();
             timer?.Dispose();
