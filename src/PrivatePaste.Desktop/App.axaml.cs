@@ -189,9 +189,17 @@ public partial class App : Application
             ShowSignIn();
             return;
         }
-        var vm = new PopupViewModel(_host.Cache, SearchServerAsync, ActivateFromPopupAsync, TimeProvider.System);
+        var host = _host;
+        var vm = new PopupViewModel(host.Cache, SearchServerAsync, ActivateFromPopupAsync, TimeProvider.System);
         var window = new PopupWindow { DataContext = vm };
-        window.Closed += (_, _) => { if (_popup == window) _popup = null; };
+        // History that arrives while the popup is open shows up in it (the query and selection are kept).
+        EventHandler onHistory = (_, _) => Dispatcher.UIThread.Post(() => { if (_popup == window) vm.RefreshFromCache(); });
+        host.HistoryChanged += onHistory;
+        window.Closed += (_, _) =>
+        {
+            host.HistoryChanged -= onHistory;
+            if (_popup == window) _popup = null;
+        };
         _popup = window;
         window.ShowAt(cursor);
     }

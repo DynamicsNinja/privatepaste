@@ -134,6 +134,27 @@ public sealed partial class PopupViewModel : ObservableObject
     public Task ActivateSelectedAsync() =>
         SelectedIndex >= 0 && SelectedIndex < Items.Count ? _activate(Items[SelectedIndex].Clip) : Task.CompletedTask;
 
+    /// <summary>
+    /// The history changed while the popup is open: re-runs the current filter over the cache, keeps server hits that the
+    /// cache does not hold, and keeps the selection on the same clip (or the same row if that clip is gone). Call on the
+    /// thread that owns <see cref="Items"/>.
+    /// </summary>
+    public void RefreshFromCache()
+    {
+        var query = Query.Trim();
+        var selectedId = SelectedIndex >= 0 && SelectedIndex < Items.Count ? Items[SelectedIndex].Clip.Id : (Guid?)null;
+        var previousIndex = SelectedIndex;
+        var held = _cache.Items.Select(c => c.Clip.Id).ToHashSet();
+        var serverHits = query.Length == 0 ? [] : Items.Where(i => !held.Contains(i.Clip.Id)).Select(i => i.Clip).ToList();
+        var cached = _cache.Search(query);
+
+        Reset(cached, highlightNewest: query.Length == 0);
+        foreach (var clip in serverHits) Items.Add(ToItem(clip, null, newest: false));
+
+        var index = selectedId is { } id ? Items.Select(i => i.Clip.Id).ToList().IndexOf(id) : -1;
+        SelectedIndex = index >= 0 ? index : Math.Clamp(previousIndex, 0, Math.Max(0, Items.Count - 1));
+    }
+
     /// <summary>Stops a pending server search (the window closed).</summary>
     public void Cancel()
     {

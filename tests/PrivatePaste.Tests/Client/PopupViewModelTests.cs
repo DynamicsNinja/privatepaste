@@ -135,4 +135,51 @@ public class PopupViewModelTests
         Assert.Equal(120, vm.Items[2].Preview.Length);
         Assert.Equal("Laptop, 2 h ago", vm.Items[2].Meta);
     }
+
+    [Fact]
+    public void Refresh_shows_new_history_and_keeps_the_selected_clip()
+    {
+        var cache = CacheWith(Text("old", 30, 1), Text("mid", 10, 2));
+        var vm = Create(cache);
+        vm.MoveSelection(1);   // "old"
+        cache.Upsert(Text("arrived while open", 0, 3));
+
+        vm.RefreshFromCache();
+
+        Assert.Equal(["arrived while open", "mid", "old"], vm.Items.Select(i => i.Clip.Text));
+        Assert.True(vm.Items[0].IsNewest);
+        Assert.Equal("old", vm.Items[vm.SelectedIndex].Clip.Text);
+    }
+
+    [Fact]
+    public void Refresh_with_a_query_reruns_the_filter_and_keeps_server_hits()
+    {
+        var cache = CacheWith(Text("alpha one", 3, 1), Text("beta", 2, 2));
+        var vm = Create(cache);
+        var serverOnly = Text("alpha on server", 500, 0);
+        _serverResults = [serverOnly];
+        vm.Query = "alpha";
+        _time.Advance(TimeSpan.FromMilliseconds(250));
+        cache.Upsert(Text("alpha two", 1, 3));
+        cache.Upsert(Text("gamma", 0, 4));
+
+        vm.RefreshFromCache();
+
+        Assert.Equal("alpha", vm.Query);
+        Assert.Equal(["alpha two", "alpha one", "alpha on server"], vm.Items.Select(i => i.Clip.Text));
+    }
+
+    [Fact]
+    public void Refresh_picks_up_a_new_thumbnail()
+    {
+        var image = Image(10, 10, 1, 1);
+        var cache = CacheWith(image);
+        var vm = Create(cache);
+        Assert.Null(vm.Items[0].Thumbnail);
+        cache.SetThumbnail(image.Id, image.Hash, [1, 2, 3]);
+
+        vm.RefreshFromCache();
+
+        Assert.Equal(new byte[] { 1, 2, 3 }, vm.Items[0].Thumbnail);
+    }
 }
