@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+.git/
+.worktrees/
+.superpowers/
+.vs/
+.publish-check/
+tests/
+docs/
+*.md
+Dockerfile
+docker-compose.yml

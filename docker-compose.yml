@@ -1,0 +1,14 @@
+services:
+  privatepaste:
+    build: .
+    restart: unless-stopped
+    environment:
+      PP_DB_KEY: ${PP_DB_KEY:?}
+      PP_PASSWORD: ${PP_PASSWORD:?}
+    volumes:
+      - privatepaste-data:/data
+    expose:
+      - "8080"
+
+volumes:
+  privatepaste-data:
