@@ -2,6 +2,8 @@ name: android
 
 on:
   push:
+    branches: ['**']
+    tags: ['android-v*']
     paths:
       - 'android/**'
       - '.github/workflows/android.yml'
@@ -38,3 +40,49 @@ jobs:
           path: |
             android/app/build/reports/
             android/app/build/test-results/
+
+  release:
+    # Tag android-vX.Y.Z: sign with the owner's key and attach the APK to a GitHub Release.
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Build the signed APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PP_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          PP_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          PP_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          version="${GITHUB_REF_NAME#android-v}"
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "ANDROID_KEYSTORE_BASE64 is not set" >&2; exit 1; fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          export PP_ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
+          ./gradlew assembleRelease --console=plain             "-PppVersion=$version" "-PppVersionCode=${{ github.run_number }}"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/dist/PrivatePaste-android-$version.apk"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#android-v}"
+          apk="$GITHUB_WORKSPACE/dist/PrivatePaste-android-$version.apk"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$apk" --clobber
+          else
+            flags=""
+            case "$version" in *-*) flags="--prerelease" ;; esac
+            gh release create "$GITHUB_REF_NAME" "$apk" --title "PrivatePaste Android $version" --generate-notes $flags
+          fi

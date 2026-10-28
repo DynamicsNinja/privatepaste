@@ -12,8 +12,27 @@ android {
         applicationId = "xyz.ficdev.privatepaste"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI stamps the tag: -PppVersion=0.1.0 -PppVersionCode=<run number>.
+        versionCode = (findProperty("ppVersionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (findProperty("ppVersion") as String?)?.takeIf { it.isNotBlank() } ?: "0.1.0"
+    }
+
+    // The release key comes from the environment, so it never lives in the repo. Without all four variables the
+    // release APK is built unsigned (and says so); install it only after signing it yourself.
+    val releaseSigningEnv = listOf(
+        "PP_ANDROID_KEYSTORE", "PP_ANDROID_KEYSTORE_PASSWORD", "PP_ANDROID_KEY_ALIAS", "PP_ANDROID_KEY_PASSWORD",
+    ).associateWith { System.getenv(it)?.takeIf { v -> v.isNotEmpty() } }
+    val releaseSigningComplete = releaseSigningEnv.values.all { it != null }
+
+    signingConfigs {
+        if (releaseSigningComplete) {
+            create("release") {
+                storeFile = file(releaseSigningEnv.getValue("PP_ANDROID_KEYSTORE")!!)
+                storePassword = releaseSigningEnv.getValue("PP_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = releaseSigningEnv.getValue("PP_ANDROID_KEY_ALIAS")
+                keyPassword = releaseSigningEnv.getValue("PP_ANDROID_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -21,6 +40,14 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseSigningComplete) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                logger.warn(
+                    "WARNING: PP_ANDROID_KEYSTORE, PP_ANDROID_KEYSTORE_PASSWORD, PP_ANDROID_KEY_ALIAS and " +
+                        "PP_ANDROID_KEY_PASSWORD are not all set; the release APK will be UNSIGNED.",
+                )
+            }
         }
     }
 
