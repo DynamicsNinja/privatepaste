@@ -1,0 +1,126 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:PrivatePaste.Desktop.ViewModels"
+        xmlns:views="using:PrivatePaste.Desktop.Views"
+        x:Class="PrivatePaste.Desktop.Views.PopupWindow"
+        x:DataType="vm:PopupViewModel"
+        Title="PrivatePaste history"
+        WindowDecorations="None" Topmost="True" ShowInTaskbar="False" CanResize="False"
+        Width="420" Height="480"
+        Background="Transparent" TransparencyLevelHint="Transparent">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <!-- The soft 3px glow of the newest clip (branding): accent at 16% alpha. -->
+        <ResourceDictionary x:Key="Dark">
+          <BoxShadows x:Key="PpGlow">0 0 0 3 #29B7A5FF</BoxShadows>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <BoxShadows x:Key="PpGlow">0 0 0 3 #295B45D6</BoxShadows>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+
+  <Window.Styles>
+    <Style Selector="ListBoxItem">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0,0,0,8" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="{StaticResource PpPanelRadius}" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.row">
+      <Setter Property="Background" Value="{DynamicResource PpSurface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource PpLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource PpPanelRadius}" />
+      <Setter Property="Padding" Value="12,10" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover Border.row">
+      <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected Border.row">
+      <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource PpMuted}" />
+    </Style>
+    <Style Selector="ListBoxItem Border.row.newest">
+      <Setter Property="BorderBrush" Value="{DynamicResource PpAccent}" />
+      <Setter Property="BoxShadow" Value="{DynamicResource PpGlow}" />
+    </Style>
+    <Style Selector="Border.kind">
+      <Setter Property="Width" Value="36" />
+      <Setter Property="Height" Value="36" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+      <Setter Property="ClipToBounds" Value="True" />
+    </Style>
+    <Style Selector="ListBoxItem:selected Border.kind, ListBoxItem:pointerover Border.kind">
+      <Setter Property="Background" Value="{DynamicResource PpLine}" />
+    </Style>
+    <Style Selector="Panel.icon Path, Panel.icon Rectangle, Panel.icon Ellipse">
+      <Setter Property="Stroke" Value="{DynamicResource PpAccent}" />
+      <Setter Property="StrokeThickness" Value="2" />
+      <Setter Property="StrokeLineCap" Value="Round" />
+      <Setter Property="StrokeJoin" Value="Round" />
+    </Style>
+  </Window.Styles>
+
+  <Border Background="{DynamicResource PpNight}" BorderBrush="{DynamicResource PpLine}" BorderThickness="1"
+          CornerRadius="{StaticResource PpPanelRadius}" Padding="12">
+    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+      <TextBox x:Name="SearchBox" Text="{Binding Query}" PlaceholderText="Search history" />
+
+      <ListBox x:Name="ItemsList" Grid.Row="1" ItemsSource="{Binding Items}" SelectedIndex="{Binding SelectedIndex}"
+               Background="Transparent" BorderThickness="0" Padding="0" Focusable="False"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:PopupItem">
+            <Border Classes="row" Classes.newest="{Binding IsNewest}">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                <Border Classes="kind" VerticalAlignment="Top">
+                  <Panel>
+                    <Viewbox Width="18" Height="18">
+                      <Panel Classes="icon" Width="24" Height="24">
+                        <Canvas IsVisible="{Binding IsImage}">
+                          <Rectangle Canvas.Left="3" Canvas.Top="4" Width="18" Height="16" RadiusX="3" RadiusY="3" />
+                          <Ellipse Canvas.Left="7" Canvas.Top="8" Width="4" Height="4" />
+                          <Path Data="M21 16l-5-5-9 9" />
+                        </Canvas>
+                        <Canvas IsVisible="{Binding IsLink}">
+                          <Path Data="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1" />
+                          <Path Data="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" />
+                        </Canvas>
+                        <Canvas IsVisible="{Binding IsText}">
+                          <Path Data="M5 6h14M5 12h14M5 18h9" />
+                        </Canvas>
+                      </Panel>
+                    </Viewbox>
+                    <Image Source="{Binding Thumbnail, Converter={x:Static views:PopupWindow.ThumbnailConverter}}"
+                           Stretch="UniformToFill" />
+                  </Panel>
+                </Border>
+                <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
+                  <TextBlock Text="{Binding Preview}" TextTrimming="CharacterEllipsis" MaxLines="1" />
+                  <TextBlock Text="{Binding Meta}" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                             TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <TextBlock x:Name="EmptyText" Grid.Row="1" Text="Nothing to paste yet." IsVisible="False"
+                 HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource PpMuted}" />
+
+      <TextBlock Grid.Row="2" Text="Enter to paste   Esc to close" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                 HorizontalAlignment="Center" />
+    </Grid>
+  </Border>
+</Window>

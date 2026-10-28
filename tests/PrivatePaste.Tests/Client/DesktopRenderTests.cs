@@ -68,6 +68,29 @@ public class DesktopRenderTests
         Render(new ToastWindow { Message = "Clip too large to sync (text over 1 MB)." }, "dark", "toast");
     }, CancellationToken.None);
 
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Popup_window_renders(string theme) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        PrivatePaste.Protocol.ClipDto Clip(int seq, PrivatePaste.Protocol.ClipKind kind, string? text, int minutes, string device, int? w = null, int? h = null) =>
+            new(Guid.NewGuid(), seq, kind, text, "h" + seq, w, h, 100, null, device, now.AddMinutes(-minutes));
+        cache.Upsert(Clip(5, PrivatePaste.Protocol.ClipKind.Text, "git commit -m \"fix(client): sync engine resume\"\nsecond line", 0, "PC-work"));
+        cache.Upsert(Clip(4, PrivatePaste.Protocol.ClipKind.Link, "https://paste.example.com/some/long/path?with=query&and=more", 4, "MacBook"));
+        cache.Upsert(Clip(3, PrivatePaste.Protocol.ClipKind.Image, null, 35, "PC-work", 1280, 720));
+        cache.Upsert(Clip(2, PrivatePaste.Protocol.ClipKind.Text, new string('x', 200), 190, "Phone"));
+        cache.Upsert(Clip(1, PrivatePaste.Protocol.ClipKind.Text, "Meeting notes", 3000, "PC-work"));
+        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+            _ => Task.CompletedTask, TimeProvider.System);
+        vm.MoveSelection(1);
+        var window = new PopupWindow { DataContext = vm };
+        Render(window, theme, "popup");
+        Assert.True(vm.Items[0].IsNewest);
+    }, CancellationToken.None);
+
     private static void Render(Window window, string theme, string name)
     {
         window.RequestedThemeVariant = theme == "dark" ? ThemeVariant.Dark : ThemeVariant.Light;
