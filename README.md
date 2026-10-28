@@ -139,6 +139,7 @@ A tray app that keeps your clipboard in sync with the server (Windows; see [macO
 - **Pause**: the tray menu has Pause sync. While paused nothing is sent or received, and clips copied during the pause are never uploaded, not even after Resume.
 - **Where data lives**: `%APPDATA%\PrivatePaste` holds the settings, the encrypted clip cache (latest 500 items), the DPAPI-protected sign-in token and `logs\`.
 - **Uninstall**: quit the app from the tray, untick "Start with Windows" in Settings, then delete `PrivatePaste.exe` and the `%APPDATA%\PrivatePaste` folder.
+- **Leftover autostart entry**: if you deleted the exe without unticking "Start with Windows", remove the value `PrivatePaste` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (regedit, or `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v PrivatePaste /f`).
 - **Build it yourself**: `powershell -File scripts/publish-windows.ps1` writes `artifacts/win-x64/PrivatePaste.exe` and `artifacts/PrivatePaste-win-x64.zip`. Pushing a `desktop-v*` tag runs `.github/workflows/desktop.yml`, which tests, builds all platforms and attaches them to a GitHub Release.
 
 ## macOS and Linux
