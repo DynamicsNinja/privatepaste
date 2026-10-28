@@ -177,4 +177,17 @@ public partial class ClipboardCoordinatorTests
         Assert.True(OutboundQueue.Load(path, _key).TryPeek(out var item));
         Assert.Equal(2, item.Attempts);
     }
+
+    [Fact]
+    public async Task An_uploaded_image_gets_a_thumbnail_in_the_cache_off_the_gate()
+    {
+        await StartAsync();
+        _clip.Current = new ClipboardContent.Image(TestImages.MakePng(64, 48, 6).ToArray());
+        await _c.OnClipboardChangedAsync(default);
+        var id = Assert.Single(_cache.Items).Clip.Id;
+
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (_cache.Items.Single().ThumbnailPng is null && DateTime.UtcNow < until) await Task.Delay(10);
+        Assert.NotNull(Assert.Single(_cache.Items, i => i.Clip.Id == id).ThumbnailPng);
+    }
 }

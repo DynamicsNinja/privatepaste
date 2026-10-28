@@ -87,6 +87,22 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         return removed;
     }
 
+    /// <summary>
+    /// Stores a thumbnail for a held clip that still has the given content hash. False (nothing changes) when the clip is
+    /// gone or its content changed, so a late fetch never brings back a deleted clip.
+    /// </summary>
+    public bool SetThumbnail(Guid id, string hash, byte[] thumbnailPng)
+    {
+        lock (_gate)
+        {
+            var index = _items.FindIndex(i => i.Clip.Id == id);
+            if (index < 0 || _items[index].Clip.Hash != hash) return false;
+            _items[index] = _items[index] with { ThumbnailPng = thumbnailPng };
+        }
+        Changed?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
+
     public void MarkApplied(ClipDto clip)
     {
         lock (_gate)

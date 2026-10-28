@@ -67,6 +67,7 @@ public sealed class SyncEngine(
     private (Guid Id, long Seq)? _lastApplied;
     /// <summary>Set when a pause is observed; the next successful catch-up is history only. Loop thread only.</summary>
     private bool _resumingFromPause;
+    private bool _thumbnailsHooked;
 
     public SyncState State => _state;
     public event EventHandler<SyncState>? StateChanged;
@@ -83,6 +84,11 @@ public sealed class SyncEngine(
         lock (_gate)
         {
             if (_loop is not null || Volatile.Read(ref _signedOut) != 0) return;
+            if (!_thumbnailsHooked)
+            {
+                _thumbnailsHooked = true;
+                coordinator.Thumbnails.Stored += (_, _) => { lock (_saveGate) _dirty = true; };   // saved on the next tick or stop
+            }
             _stop = new CancellationTokenSource();
             var token = _stop.Token;
             _loop = Task.Run(() => RunAsync(token));
@@ -253,6 +259,7 @@ public sealed class SyncEngine(
             {
                 changed |= cache.Upsert(clip);
                 caught.Add(clip);
+                coordinator.Thumbnails.Request(clip);
             }
             // Truncated pages only report tombstones up to their last clip; the final page continues from latestSeq.
             var tombstoneSeq = page.HasMore && page.Clips.Count > 0 ? page.Clips[^1].Seq : page.LatestSeq;
@@ -322,6 +329,7 @@ public sealed class SyncEngine(
                 return;
             case WsTypes.ClipCreated when msg.Clip is { } clip:
                 var added = cache.Upsert(clip);
+                coordinator.Thumbnails.Request(clip);
                 if (clip.SourceDeviceId != ownDeviceId && msg.Live == true && !isPaused()
                     && _lastApplied != (clip.Id, clip.Seq)
                     && !(cache.LastAppliedAt > clip.LastCopiedAt))   // out-of-order broadcast of an older clip

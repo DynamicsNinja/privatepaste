@@ -274,4 +274,19 @@ public class HistoryCacheTests : IDisposable
         c.Save();
         Assert.Equal(3, HistoryCache.Load(FilePath, key).HighestSeq);
     }
+
+    [Fact]
+    public void Set_thumbnail_only_touches_a_held_clip_with_the_same_content()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var clip = Clip(1, null, 1, kind: ClipKind.Image);
+        c.Upsert(clip);
+        Assert.False(c.SetThumbnail(clip.Id, "other hash", [1]));
+        Assert.False(c.SetThumbnail(Guid.NewGuid(), clip.Hash, [1]));
+        Assert.True(c.SetThumbnail(clip.Id, clip.Hash, [1, 2]));
+        Assert.Equal(new byte[] { 1, 2 }, Assert.Single(c.Items).ThumbnailPng);
+        c.Remove(clip.Id, 2);
+        Assert.False(c.SetThumbnail(clip.Id, clip.Hash, [3]));
+        Assert.Empty(c.Items);
+    }
 }

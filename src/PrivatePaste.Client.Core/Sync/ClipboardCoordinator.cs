@@ -42,6 +42,9 @@ public sealed class ClipboardCoordinator(
     public DateTimeOffset? LastLocalCaptureAt =>
         Interlocked.Read(ref _lastLocalCaptureTicks) is var t and not 0 ? new DateTimeOffset(t, TimeSpan.Zero) : null;
 
+    /// <summary>Background thumbnail downloads for image clips (also used by the sync engine).</summary>
+    public ThumbnailFetcher Thumbnails { get; } = new(api, cache);
+
     /// <summary>True while copies made offline still wait in the queue (they are newer than anything a catch-up brings).</summary>
     public bool HasQueuedClips => queue.Count > 0;
 
@@ -109,6 +112,7 @@ public sealed class ClipboardCoordinator(
                 _lastLocalHash = hash;
                 RecordLocalCapture(result.LastCopiedAt);
                 cache.Upsert(result, fromSync: false);
+                Thumbnails.Request(result);
                 TrySaveCache();
             }
             catch (Exception e) when (IsTransient(e))
@@ -192,6 +196,7 @@ public sealed class ClipboardCoordinator(
                 }
                 queue.Dequeue();   // uploaded: never re-send it, even if the local cache cannot be saved
                 cache.Upsert(result, fromSync: false);
+                Thumbnails.Request(result);
                 TrySaveCache();
             }
         }

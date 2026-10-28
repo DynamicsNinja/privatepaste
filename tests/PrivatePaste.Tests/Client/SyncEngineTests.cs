@@ -115,7 +115,7 @@ public class SyncEngineTests : IAsyncLifetime
         }
     }
 
-    private string[] Written() => _clip.Writes.ToArray().Select(w => ((ClipboardContent.Text)w).Value).ToArray();
+    private string[] Written() => _clip.Writes.ToArray().OfType<ClipboardContent.Text>().Select(w => w.Value).ToArray();
 
     private bool Cached(string text) => _cache.Items.Any(i => i.Clip.Text == text);
 
@@ -323,6 +323,43 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Contains("retry me", (await _apiB.ListAsync(null, null)).Items.Select(c => c.Text));
         Assert.Equal(1, Volatile.Read(ref _connects));
         Assert.Equal(SyncState.Connected, engine.State);
+    }
+
+    private bool HasThumbnail(Guid id) => _cache.Items.Any(i => i.Clip.Id == id && i.ThumbnailPng is { Length: > 0 });
+
+    [Fact]
+    public async Task A_live_image_from_another_device_gets_a_thumbnail_in_the_cache()
+    {
+        await StartConnectedAsync();
+        var image = await _apiB.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(300, 200, 3).ToArray(), null, false);
+
+        await WaitUntilAsync(() => HasThumbnail(image.Id));
+        Assert.Single(_clip.Writes);
+    }
+
+    [Fact]
+    public async Task Caught_up_images_get_thumbnails_too()
+    {
+        var image = await _apiB.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(40, 30, 4).ToArray(), null, false);
+        await StartConnectedAsync();
+        await WaitUntilAsync(() => HasThumbnail(image.Id));
+    }
+
+    [Fact]
+    public async Task A_failed_thumbnail_fetch_is_swallowed()
+    {
+        _handlerA.Respond = r => r.RequestUri!.AbsolutePath.EndsWith("/thumbnail")
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError) : null;
+        var engine = await StartConnectedAsync();
+        var image = await _apiB.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(8, 8, 5).ToArray(), null, false);
+        await WaitUntilAsync(() => _clip.Writes.Count == 1 && _cache.Items.Any(i => i.Clip.Id == image.Id));
+
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await _apiB.UploadTextAsync("after the failed thumbnail", null, false);
+        await WaitUntilAsync(() => Written().Contains("after the failed thumbnail"));
+        Assert.False(HasThumbnail(image.Id));
+        Assert.Equal(SyncState.Connected, engine.State);
+        Assert.Empty(_errors);
     }
 
     [Fact]
