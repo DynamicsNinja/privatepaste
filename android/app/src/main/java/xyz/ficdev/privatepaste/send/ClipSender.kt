@@ -3,6 +3,8 @@ package xyz.ficdev.privatepaste.send
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.util.Log
+import android.net.Uri
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -47,6 +49,34 @@ val SendResult.message: String
 /** Gives activities the app's [ClipSender]; null means signed out. Implemented by the Application. */
 interface SenderProvider {
     val clipSender: ClipSender?
+
+    /** App-lifetime scope: sends started by an activity run here so they outlive it. */
+    val sendScope: CoroutineScope
+}
+
+/** Outcome of reading a shared image from its stream (done inside the activity, while the URI grant lasts). */
+sealed interface ImageRead {
+    class Bytes(val bytes: ByteArray) : ImageRead
+    data object TooLarge : ImageRead
+    data object Unreadable : ImageRead
+}
+
+private const val OWN_FILE_AUTHORITY = "xyz.ficdev.privatepaste.files"
+
+/**
+ * Only `content://` URIs of other apps may be read for a send. This app's own FileProvider (it serves the clip
+ * images) and `file://` paths are refused, so a crafted share cannot make the app upload its own files.
+ */
+fun Uri.isSendable(): Boolean {
+    if (!"content".equals(scheme, ignoreCase = true)) return false
+    val authority = authority ?: return false
+    return !authority.substringAfterLast('@').equals(OWN_FILE_AUTHORITY, ignoreCase = true)
+}
+
+internal fun ImageRead.toFailure(): SendResult? = when (this) {
+    is ImageRead.Bytes -> null
+    ImageRead.TooLarge -> SendResult.TooLarge(ClipSender.IMAGE_TOO_LARGE)
+    ImageRead.Unreadable -> SendResult.Rejected(ClipSender.UNREADABLE_IMAGE)
 }
 
 /**
@@ -64,28 +94,38 @@ class ClipSender(
 ) {
     private val flushLock = Mutex()
 
-    suspend fun sendText(text: String): SendResult {
-        if (text.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES) return SendResult.TooLarge(TEXT_TOO_LARGE)
+    suspend fun sendText(text: String): SendResult = withContext(Dispatchers.IO) {
+        if (text.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES) return@withContext SendResult.TooLarge(TEXT_TOO_LARGE)
         val copiedAt = clock.instant()
-        if (ContentHash.text(text) == cache.lastAppliedHash) return SendResult.AlreadySynced
-        return live(copiedAt, { queue.enqueueText(text, copiedAt) }) { api.uploadText(text, copiedAt, backfill = false) }
+        if (ContentHash.text(text) == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
+        live(copiedAt, { queue.enqueueText(text, copiedAt) }) { api.uploadText(text, copiedAt, backfill = false) }
     }
 
-    /** Reads at most 20 MB + 1 byte from the stream [open] returns (and closes it). */
-    suspend fun sendImage(open: () -> InputStream, mime: String): SendResult {
-        val copiedAt = clock.instant()
-        val bytes = try {
-            open().use { readLimited(it, MAX_IMAGE_BYTES) }
+    /** Reads at most 20 MB + 1 byte from the stream [open] returns (and closes it), off the main thread. */
+    suspend fun readImage(open: () -> InputStream): ImageRead = withContext(Dispatchers.IO) {
+        try {
+            val bytes = open().use { readLimited(it, MAX_IMAGE_BYTES) }
+            if (bytes == null) ImageRead.TooLarge else ImageRead.Bytes(bytes)
         } catch (e: IOException) {
-            return SendResult.Rejected(UNREADABLE_IMAGE)
+            ImageRead.Unreadable
         } catch (e: SecurityException) {
-            return SendResult.Rejected(UNREADABLE_IMAGE)
-        } ?: return SendResult.TooLarge(IMAGE_TOO_LARGE)
+            ImageRead.Unreadable
+        }
+    }
 
+    suspend fun sendImage(open: () -> InputStream, mime: String): SendResult {
+        val read = readImage(open)
+        return (read as? ImageRead.Bytes)?.let { sendImageBytes(it.bytes, mime) } ?: read.toFailure()!!
+    }
+
+    suspend fun sendImageBytes(bytes: ByteArray, mime: String): SendResult {
+        val copiedAt = clock.instant()
         val hash = withContext(Dispatchers.Default) { uprightHash(bytes) }
-        if (hash != null && hash == cache.lastAppliedHash) return SendResult.AlreadySynced
-        return live(copiedAt, { queue.enqueueImage(bytes, mime, copiedAt) }) {
-            api.uploadImage(bytes, fileNameFor(mime), mime, copiedAt, backfill = false)
+        return withContext(Dispatchers.IO) {
+            if (hash != null && hash == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
+            live(copiedAt, { queue.enqueueImage(bytes, mime, copiedAt) }) {
+                api.uploadImage(bytes, fileNameFor(mime), mime, copiedAt, backfill = false)
+            }
         }
     }
 
@@ -117,7 +157,9 @@ class ClipSender(
      * at 10 it is dropped with one notification. A rejection drops the item with the server's message.
      * [ApiException.Unauthorized] and cancellation propagate (the item stays queued, no attempt is counted).
      */
-    suspend fun flushQueue(): Unit = flushLock.withLock {
+    suspend fun flushQueue(): Unit = flushLock.withLock { withContext(Dispatchers.IO) { flushLocked() } }
+
+    private suspend fun flushLocked() {
         var remaining = queue.size
         while (remaining-- > 0) {
             val item = queue.peek() ?: return
@@ -185,7 +227,7 @@ class ClipSender(
 
     private class TooBigToHash : IOException()
 
-    private companion object {
+    internal companion object {
         const val TAG = "ClipSender"
         const val MAX_TEXT_BYTES = 1024 * 1024
         const val MAX_IMAGE_BYTES = 20 * 1024 * 1024

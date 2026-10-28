@@ -22,6 +22,7 @@
         <activity
             android:name=".send.ShareActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|locale|layoutDirection|fontScale"
             android:excludeFromRecents="true"
             android:label="@string/share_label"
             android:noHistory="true"
@@ -42,6 +43,7 @@
         <activity
             android:name=".send.ClipboardSendActivity"
             android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|locale|layoutDirection|fontScale"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:taskAffinity=""

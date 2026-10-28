@@ -1,6 +1,9 @@
 package xyz.ficdev.privatepaste.send
 
 import android.app.Application
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -21,6 +24,7 @@ import java.time.ZoneOffset
 /** Application that hands activities under test a [ClipSender] (set [sender] before launching). */
 class TestSenderApp : Application(), SenderProvider {
     override val clipSender: ClipSender? get() = sender
+    override val sendScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     companion object {
         @Volatile var sender: ClipSender? = null

@@ -1,6 +1,14 @@
 package xyz.ficdev.privatepaste.send
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import okio.ByteString.Companion.toByteString
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -180,6 +188,92 @@ class ClipSenderTest {
         assertEquals(SendResult.TooLarge("Clip too large to sync (text over 1 MB)."), result)
         assertEquals(0, f.server.requestCount)
         assertTrue(f.queue.isEmpty)
+    }
+
+    @Test
+    fun multiByteTextOverOneMegabyteIsRefused() = runBlocking {
+        val text = "é".repeat(600_000) // 600k chars, 1.2 MB in UTF-8
+        assertEquals(SendResult.TooLarge("Clip too large to sync (text over 1 MB)."), f.sender.sendText(text))
+        assertEquals(0, f.server.requestCount)
+    }
+
+    @Test
+    fun queuedImageFlushesAsBackfillWithItsBytes() = runBlocking {
+        val bytes = ByteArray(500) { (it % 251).toByte() }
+        val t = Instant.parse("2026-10-28T09:00:00Z")
+        f.queue.enqueueImage(bytes, "image/png", t)
+        f.respondWith { f.json(f.clipJson("img", "")) }
+
+        f.sender.flushQueue()
+
+        val req = f.server.takeRequest()
+        assertEquals("/api/clips/image", req.path)
+        val raw = req.body.readByteString()
+        assertTrue(raw.indexOf(bytes.toByteString()) >= 0)
+        val text = raw.utf8()
+        assertTrue(text.contains("name=\"backfill\""))
+        assertTrue(text.contains(t.toString()))
+        assertTrue(f.queue.isEmpty)
+    }
+
+    @Test
+    fun concurrentFlushesUploadEachItemOnce() = runBlocking {
+        repeat(3) { f.queue.enqueueText("t$it", f.now) }
+        f.respondWith { f.json(f.clipJson("x", "x")).setBodyDelay(150, TimeUnit.MILLISECONDS) }
+
+        listOf(
+            async(Dispatchers.Default) { f.sender.flushQueue() },
+            async(Dispatchers.Default) { f.sender.flushQueue() },
+        ).awaitAll()
+
+        assertEquals(3, f.server.requestCount)
+        assertTrue(f.queue.isEmpty)
+    }
+
+    @Test
+    fun cancellationDuringFlushDoesNotCountAnAttempt() = runBlocking {
+        f.queue.enqueueText("slow", f.now)
+        f.respondWith { f.json(f.clipJson("x", "x")).setHeadersDelay(10, TimeUnit.SECONDS) }
+
+        val job = launch(Dispatchers.Default) { f.sender.flushQueue() }
+        assertTrue(f.server.takeRequest(5, TimeUnit.SECONDS) != null)
+        job.cancelAndJoin()
+
+        assertEquals(0, f.queue.peek()!!.attempts)
+        assertEquals(1, f.queue.size)
+        assertTrue(f.notices.isEmpty())
+    }
+
+    @Test
+    fun readImageReturnsBytesTooLargeOrUnreadable() = runBlocking {
+        val bytes = ByteArray(40) { it.toByte() }
+        val ok = f.sender.readImage { ByteArrayInputStream(bytes) }
+        assertTrue(bytes.contentEquals((ok as ImageRead.Bytes).bytes))
+        val big = object : InputStream() {
+            override fun read(): Int = 1
+            override fun read(b: ByteArray, off: Int, len: Int): Int = len
+        }
+        assertEquals(ImageRead.TooLarge, f.sender.readImage { big })
+        assertEquals(ImageRead.Unreadable, f.sender.readImage { throw IOException("gone") })
+    }
+
+    @Test
+    fun sendImageBytesUploadsOriginalBytes() = runBlocking {
+        f.respondWith { f.json(f.clipJson("i", "")) }
+        assertEquals(SendResult.Sent, f.sender.sendImageBytes(ByteArray(50) { 3 }, "image/png"))
+        assertEquals("/api/clips/image", f.server.takeRequest().path)
+    }
+
+    @Test
+    fun onlyForeignContentUrisAreSendable() {
+        fun u(s: String) = android.net.Uri.parse(s)
+        assertTrue(u("content://media/external/images/1").isSendable())
+        assertTrue(u("content://10@media/external/images/1").isSendable())
+        assertTrue(!u("content://xyz.ficdev.privatepaste.files/clips/a.png").isSendable())
+        assertTrue(!u("content://XYZ.ficdev.privatepaste.files/clips/a.png").isSendable())
+        assertTrue(!u("content://5@xyz.ficdev.privatepaste.files/a").isSendable())
+        assertTrue(!u("file:///data/data/xyz.ficdev.privatepaste/files/session.bin").isSendable())
+        assertTrue(!u("http://example.com/a.png").isSendable())
     }
 
     @Test
