@@ -52,6 +52,7 @@ open class PrivatePasteApp : Application(), UiDepsProvider, SenderProvider {
                 startedActivities++
                 // After process death without the service, or a refused background start: opening the app resumes sync.
                 if (startedActivities == 1 && graph.isSignedIn) SyncService.start(this@PrivatePasteApp)
+                if (startedActivities == 1) Notifications.cancelSyncPaused(this@PrivatePasteApp)
             }
 
             override fun onActivityStopped(activity: Activity) {

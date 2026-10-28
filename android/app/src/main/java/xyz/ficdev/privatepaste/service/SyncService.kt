@@ -1,5 +1,6 @@
 package xyz.ficdev.privatepaste.service
 
+import android.app.Notification
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -23,7 +24,7 @@ import xyz.ficdev.privatepaste.sync.SyncState
  * connection state, nudges the engine on network changes, probes or nudges it when the screen comes on, and stops itself once the session is gone (sign-out or
  * revoke). Sticky: after process death the system restarts it, and it picks the session up from storage.
  */
-class SyncService : Service() {
+open class SyncService : Service() {
 
     private var scope: CoroutineScope? = null
     private var watcher: NetworkWatcher? = null
@@ -41,6 +42,8 @@ class SyncService : Service() {
         // startForeground first, every time: each startForegroundService call must be answered, also when stopping.
         val shown = graph?.connectionStateNow()?.takeIf { it != SyncState.SIGNED_OUT } ?: SyncState.CONNECTING
         if (!goForeground(shown)) {
+            // Sync stops until the app is opened (which starts the service in the foreground): say so.
+            if (graph?.isSignedIn == true) Notifications.postSyncPaused(this)
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -74,13 +77,17 @@ class SyncService : Service() {
         }.also { it.start() }
     }
 
-    private fun goForeground(state: SyncState): Boolean = try {
-        val n = Notifications.connection(this, state)
+    /** Test seam: Robolectric never refuses a foreground start. */
+    internal open fun enterForeground(n: Notification) {
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(Notifications.ID_CONNECTION, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(Notifications.ID_CONNECTION, n)
         }
+    }
+
+    private fun goForeground(state: SyncState): Boolean = try {
+        enterForeground(Notifications.connection(this, state))
         true
     } catch (e: IllegalStateException) {
         // ForegroundServiceStartNotAllowedException (Android 12+, started from the background without an exemption).

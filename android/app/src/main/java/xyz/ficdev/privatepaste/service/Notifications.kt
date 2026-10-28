@@ -33,8 +33,10 @@ object Notifications {
     const val ID_CLIP = 2
     const val ID_SIGNED_OUT = 3
     const val ID_ALERT = 4
+    const val ID_SYNC_PAUSED = 5
 
     const val SIGNED_OUT = "Signed out. Sign in again to keep syncing."
+    const val SYNC_PAUSED = "Sync paused. Open PrivatePaste to resume."
 
     private const val TAG = "Notifications"
     private const val PREVIEW_CHARS = 100
@@ -131,6 +133,16 @@ object Notifications {
     }
 
     fun cancelSignedOut(context: Context) = NotificationManagerCompat.from(context).cancel(ID_SIGNED_OUT)
+
+    /**
+     * "Sync paused. Open PrivatePaste to resume." The system refused the foreground start; opening the app starts the
+     * service again and cancels this. One fixed id, alerting once: a repeated refusal never posts a second one.
+     */
+    fun postSyncPaused(context: Context) {
+        post(context, ID_SYNC_PAUSED, alertBuilder(context, SYNC_PAUSED).setOnlyAlertOnce(true).build())
+    }
+
+    fun cancelSyncPaused(context: Context) = NotificationManagerCompat.from(context).cancel(ID_SYNC_PAUSED)
 
     /** A transient message (size limit, a queued clip given up on) while no activity shows a toast: gone after 10 s. */
     fun postAlert(context: Context, message: String) {
