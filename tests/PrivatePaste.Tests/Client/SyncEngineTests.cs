@@ -337,7 +337,8 @@ public class SyncEngineTests : IAsyncLifetime
         await StartConnectedAsync();
         var image = await _apiB.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(300, 200, 3).ToArray(), null, false);
 
-        await WaitUntilAsync(() => HasThumbnail(image.Id));
+        // The thumbnail fetch runs in the background beside the apply (image download + clipboard write), so either can finish first.
+        await WaitUntilAsync(() => HasThumbnail(image.Id) && _clip.Writes.Count > 0);
         Assert.Single(_clip.Writes);
     }
 
