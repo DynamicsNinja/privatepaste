@@ -106,9 +106,11 @@ class ClipSender(
         try {
             val bytes = open().use { readLimited(it, MAX_IMAGE_BYTES) }
             if (bytes == null) ImageRead.TooLarge else ImageRead.Bytes(bytes)
-        } catch (e: IOException) {
-            ImageRead.Unreadable
-        } catch (e: SecurityException) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // IOException, SecurityException, or whatever a foreign ContentProvider throws: never strand the activity.
+            Log.w(TAG, "Image read failed (${e.javaClass.simpleName})")
             ImageRead.Unreadable
         }
     }
