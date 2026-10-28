@@ -29,18 +29,24 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Publish
+      - name: Publish and build the installer
         shell: pwsh
         env:
           TAG: ${{ github.ref_name }}
         run: |
           $version = $env:TAG -replace '^desktop-v', ''
-          ./scripts/publish-windows.ps1 -Version $version
+          # Runs publish-windows.ps1 (exe + zip), then WiX (a .NET local tool) for the MSI.
+          ./scripts/build-installer.ps1 -Version $version
           Move-Item artifacts/PrivatePaste-win-x64.zip "artifacts/PrivatePaste-$version-win-x64.zip"
+          foreach ($f in "artifacts/PrivatePaste-$version-win-x64.zip", "artifacts/PrivatePaste-$version-win-x64.msi") {
+            if (-not (Test-Path $f)) { throw "$f is missing" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: artifacts/PrivatePaste-*-win-x64.zip
+          path: |
+            artifacts/PrivatePaste-*-win-x64.zip
+            artifacts/PrivatePaste-*-win-x64.msi
           if-no-files-found: error
 
   macos:
