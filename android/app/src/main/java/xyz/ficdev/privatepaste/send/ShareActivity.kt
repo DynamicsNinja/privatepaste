@@ -31,7 +31,8 @@ class ShareActivity : ComponentActivity() {
             finish()
             return
         }
-        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()   // styled text arrives as a Spanned
+        // Styled text arrives as a Spanned; a Chrome selection share comes wrapped in quotes plus a highlight link.
+        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.let(SharedText::selectionOnly)
         val mime = intent.type.orEmpty()
         val stream = streamExtra()
         lifecycleScope.launch {
