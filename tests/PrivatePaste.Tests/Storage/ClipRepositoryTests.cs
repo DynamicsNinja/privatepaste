@@ -20,9 +20,9 @@ public sealed class ClipRepositoryTests : IDisposable
     }
 
     private Task<UpsertResult> Upsert(string text, string device = "dev", DateTimeOffset? at = null,
-        ClipKind kind = ClipKind.Text, string? hash = null) =>
+        ClipKind kind = ClipKind.Text, string? hash = null, string? platform = "windows") =>
         _repo.UpsertAsync(new NewClip(kind, kind == ClipKind.Image ? null : text, hash ?? "h:" + text, null, null,
-            text.Length, null, device, at ?? T0));
+            text.Length, null, device, platform, at ?? T0));
 
     [Fact]
     public async Task Same_hash_bumps_not_duplicates()
@@ -38,6 +38,20 @@ public sealed class ClipRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task Platform_is_stored_and_a_dedup_bump_takes_the_bumping_devices()
+    {
+        var a = await Upsert("x", device: "PC-work", platform: "windows");
+        Assert.Equal("windows", a.Clip.SourceDevicePlatform);
+
+        var b = await Upsert("x", device: "Phone", at: T0.AddMinutes(1), platform: "android");
+        Assert.Equal("android", b.Clip.SourceDevicePlatform);
+        Assert.Equal("android", (await _repo.GetAsync(a.Clip.Id))!.SourceDevicePlatform);
+
+        var c = await Upsert("y", platform: null);
+        Assert.Null(c.Clip.SourceDevicePlatform);
+    }
+
+    [Fact]
     public async Task Bump_never_moves_time_backwards()
     {
         await Upsert("x", at: T0.AddHours(1));
@@ -49,12 +63,13 @@ public sealed class ClipRepositoryTests : IDisposable
     public async Task Bump_by_id_updates_and_unknown_id_returns_null()
     {
         var a = await Upsert("x", at: T0);
-        var bumped = await _repo.BumpAsync(a.Clip.Id, null, "Tablet", T0.AddMinutes(5));
+        var bumped = await _repo.BumpAsync(a.Clip.Id, null, "Tablet", "linux", T0.AddMinutes(5));
         Assert.NotNull(bumped);
         Assert.Equal("Tablet", bumped!.SourceDeviceName);
+        Assert.Equal("linux", bumped.SourceDevicePlatform);
         Assert.Equal(T0.AddMinutes(5), bumped.LastCopiedAt);
         Assert.True(bumped.Seq > a.Clip.Seq);
-        Assert.Null(await _repo.BumpAsync(Guid.NewGuid(), null, "x", T0));
+        Assert.Null(await _repo.BumpAsync(Guid.NewGuid(), null, "x", null, T0));
     }
 
     [Fact]

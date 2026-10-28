@@ -40,14 +40,16 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>Logs in as a new device and returns a client that sends its bearer token.</summary>
-    public async Task<HttpClient> LoginAsync(string deviceName = "PC-test") => (await LoginDeviceAsync(deviceName)).Client;
+    public async Task<HttpClient> LoginAsync(string deviceName = "PC-test", string platform = "windows") =>
+        (await LoginDeviceAsync(deviceName, platform)).Client;
 
     /// <summary>Logs in as a new device and returns its client, id and raw bearer token.</summary>
-    public async Task<(HttpClient Client, Guid DeviceId, string Token)> LoginDeviceAsync(string deviceName = "PC-test")
+    public async Task<(HttpClient Client, Guid DeviceId, string Token)> LoginDeviceAsync(string deviceName = "PC-test",
+        string platform = "windows")
     {
         var client = CreateClient();
         var response = await client.PostAsJsonAsync("/api/auth/login",
-            new LoginRequest(Password, deviceName, "windows"), ProtocolJson.Options);
+            new LoginRequest(Password, deviceName, platform), ProtocolJson.Options);
         response.EnsureSuccessStatusCode();
         var login = (await response.Content.ReadFromJsonAsync<LoginResponse>(ProtocolJson.Options))!;
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.Token);

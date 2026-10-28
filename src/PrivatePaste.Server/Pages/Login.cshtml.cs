@@ -28,9 +28,13 @@ public class LoginModel(PasswordVerifier verifier) : PageModel
             return Page();
         }
 
-        // No "sub" claim: the web session is not a device, so ToDeviceIdentity() yields (null, "Web").
+        // No "sub" claim: the web session is not a device, so ToDeviceIdentity() yields (null, "Web", "web").
         var identity = new ClaimsIdentity(
-            [new Claim(ClaimTypes.NameIdentifier, "web-owner"), new Claim(DeviceClaims.Name, "Web")],
+            [
+                new Claim(ClaimTypes.NameIdentifier, "web-owner"),
+                new Claim(DeviceClaims.Name, "Web"),
+                new Claim(DeviceClaims.Platform, DeviceClaims.WebPlatform),
+            ],
             AuthSchemes.Cookies);
         await HttpContext.SignInAsync(AuthSchemes.Cookies, new ClaimsPrincipal(identity),
             new AuthenticationProperties { IsPersistent = true });

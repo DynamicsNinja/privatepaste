@@ -69,6 +69,44 @@ public sealed class PrivatePasteDb(ServerOptions options)
         using var schema = conn.CreateCommand();
         schema.CommandText = "PRAGMA temp_store=MEMORY; " + ReadSchema();
         schema.ExecuteNonQuery();
+
+        Migrate(conn);
+    }
+
+    /// <summary>
+    /// Brings a database created by an older version up to the current schema. Each step is idempotent: it checks
+    /// whether its change is already there, and runs in one transaction with its backfill, so a crash never leaves a
+    /// column added but not backfilled.
+    /// </summary>
+    private static void Migrate(SqliteConnection conn)
+    {
+        if (!HasColumn(conn, "clips", "source_device_platform"))
+        {
+            using var tx = conn.BeginTransaction();
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            // Backfill once, from the device that last copied each clip (revoked devices keep their row and
+            // platform). The web UI is not a device: it copies as (null, "Web"). Anything else stays NULL (unknown).
+            cmd.CommandText = """
+                ALTER TABLE clips ADD COLUMN source_device_platform TEXT;
+                UPDATE clips SET source_device_platform =
+                    (SELECT lower(trim(d.platform)) FROM devices d WHERE d.id = clips.source_device_id)
+                    WHERE source_device_id IS NOT NULL;
+                UPDATE clips SET source_device_platform = 'web'
+                    WHERE source_device_id IS NULL AND source_device_name = 'Web';
+                """;
+            cmd.ExecuteNonQuery();
+            tx.Commit();
+        }
+    }
+
+    private static bool HasColumn(SqliteConnection conn, string table, string column)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT count(*) FROM pragma_table_info(@table) WHERE name = @column";
+        cmd.Parameters.AddWithValue("@table", table);
+        cmd.Parameters.AddWithValue("@column", column);
+        return (long)cmd.ExecuteScalar()! > 0;
     }
 
     private static string ReadSchema()

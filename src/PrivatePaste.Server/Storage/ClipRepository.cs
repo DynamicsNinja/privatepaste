@@ -7,14 +7,15 @@ using PrivatePaste.Protocol;
 namespace PrivatePaste.Server.Storage;
 
 public sealed record NewClip(ClipKind Kind, string? Text, string Hash, int? Width, int? Height, long SizeBytes,
-    Guid? SourceDeviceId, string SourceDeviceName, DateTimeOffset CopiedAt);
+    Guid? SourceDeviceId, string SourceDeviceName, string? SourceDevicePlatform, DateTimeOffset CopiedAt);
 
 public sealed record UpsertResult(ClipDto Clip, bool Created);
 
 public sealed class ClipRepository(PrivatePasteDb db)
 {
     private const string Columns =
-        "c.id, c.seq, c.kind, c.text, c.hash, c.width, c.height, c.size_bytes, c.source_device_id, c.source_device_name, c.last_copied_at";
+        "c.id, c.seq, c.kind, c.text, c.hash, c.width, c.height, c.size_bytes, c.source_device_id, c.source_device_name, c.last_copied_at, " +
+        "c.source_device_platform";
 
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
@@ -31,7 +32,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
             if (existing is not null)
             {
                 var bumped = await BumpCoreAsync(conn, tx, Guid.Parse(existing), clip.SourceDeviceId,
-                    clip.SourceDeviceName, clip.CopiedAt);
+                    clip.SourceDeviceName, clip.SourceDevicePlatform, clip.CopiedAt);
                 result = new UpsertResult(bumped!, false);
             }
             else
@@ -41,12 +42,14 @@ public sealed class ClipRepository(PrivatePasteDb db)
                 var at = Format(clip.CopiedAt);
                 await ExecAsync(conn, tx, """
                     INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes,
-                                      source_device_id, source_device_name, created_at, last_copied_at)
-                    VALUES(@id, @seq, @kind, @text, @hash, @w, @h, @size, @dev, @devName, @at, @at)
+                                      source_device_id, source_device_name, source_device_platform,
+                                      created_at, last_copied_at)
+                    VALUES(@id, @seq, @kind, @text, @hash, @w, @h, @size, @dev, @devName, @devPlatform, @at, @at)
                     """,
                     ("@id", id.ToString()), ("@seq", seq), ("@kind", KindToDb(clip.Kind)), ("@text", clip.Text),
                     ("@hash", clip.Hash), ("@w", clip.Width), ("@h", clip.Height), ("@size", clip.SizeBytes),
-                    ("@dev", clip.SourceDeviceId?.ToString()), ("@devName", clip.SourceDeviceName), ("@at", at));
+                    ("@dev", clip.SourceDeviceId?.ToString()), ("@devName", clip.SourceDeviceName),
+                    ("@devPlatform", clip.SourceDevicePlatform), ("@at", at));
                 result = new UpsertResult(await GetCoreAsync(conn, tx, id) ?? throw new InvalidOperationException(), true);
             }
 
@@ -59,14 +62,15 @@ public sealed class ClipRepository(PrivatePasteDb db)
         }
     }
 
-    public async Task<ClipDto?> BumpAsync(Guid id, Guid? deviceId, string deviceName, DateTimeOffset at)
+    public async Task<ClipDto?> BumpAsync(Guid id, Guid? deviceId, string deviceName, string? devicePlatform,
+        DateTimeOffset at)
     {
         await _writeLock.WaitAsync();
         try
         {
             await using var conn = db.Open();
             await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
-            var dto = await BumpCoreAsync(conn, tx, id, deviceId, deviceName, at);
+            var dto = await BumpCoreAsync(conn, tx, id, deviceId, deviceName, devicePlatform, at);
             await tx.CommitAsync();
             return dto;
         }
@@ -191,7 +195,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
     }
 
     private static async Task<ClipDto?> BumpCoreAsync(SqliteConnection conn, SqliteTransaction tx, Guid id,
-        Guid? deviceId, string deviceName, DateTimeOffset at)
+        Guid? deviceId, string deviceName, string? devicePlatform, DateTimeOffset at)
     {
         var current = await ScalarAsync<string>(conn, tx, "SELECT last_copied_at FROM clips WHERE id = @id",
             ("@id", id.ToString()));
@@ -204,11 +208,12 @@ public sealed class ClipRepository(PrivatePasteDb db)
 
         var seq = await NextSeqAsync(conn, tx);
         await ExecAsync(conn, tx, """
-            UPDATE clips SET seq = @seq, last_copied_at = @at, source_device_id = @dev, source_device_name = @devName
+            UPDATE clips SET seq = @seq, last_copied_at = @at, source_device_id = @dev, source_device_name = @devName,
+                             source_device_platform = @devPlatform
             WHERE id = @id
             """,
             ("@seq", seq), ("@at", Format(newest)), ("@dev", deviceId?.ToString()), ("@devName", deviceName),
-            ("@id", id.ToString()));
+            ("@devPlatform", devicePlatform), ("@id", id.ToString()));
         return await GetCoreAsync(conn, tx, id);
     }
 
@@ -238,7 +243,10 @@ public sealed class ClipRepository(PrivatePasteDb db)
                 r.GetInt64(7),
                 r.IsDBNull(8) ? null : Guid.Parse(r.GetString(8)),
                 r.GetString(9),
-                Parse(r.GetString(10))));
+                Parse(r.GetString(10)))
+            {
+                SourceDevicePlatform = r.IsDBNull(11) ? null : r.GetString(11),
+            });
         }
 
         return list;

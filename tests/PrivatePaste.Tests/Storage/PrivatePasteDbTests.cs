@@ -73,6 +73,72 @@ public sealed class PrivatePasteDbTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_adds_and_backfills_the_platform_column_on_an_existing_database()
+    {
+        // The clips/devices tables as the first release created them, before source_device_platform existed.
+        Directory.CreateDirectory(_dir);
+        using (var old = new SqliteConnection(new SqliteConnectionStringBuilder
+               { DataSource = DbPath, Password = KeyA, Mode = SqliteOpenMode.ReadWriteCreate }.ToString()))
+        {
+            old.Open();
+            using var cmd = old.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL,
+                  token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT, revoked_at TEXT);
+                CREATE TABLE clips(id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, kind TEXT NOT NULL, text TEXT,
+                  hash TEXT NOT NULL UNIQUE, width INTEGER, height INTEGER, size_bytes INTEGER NOT NULL,
+                  source_device_id TEXT, source_device_name TEXT NOT NULL, created_at TEXT NOT NULL,
+                  last_copied_at TEXT NOT NULL);
+                INSERT INTO devices VALUES('d-win', 'PC', 'windows', 't1', '2026-01-01T00:00:00Z', NULL, NULL);
+                INSERT INTO devices VALUES('d-and', 'Phone', 'Android', 't2', '2026-01-01T00:00:00Z', NULL,
+                  '2026-01-02T00:00:00Z');
+                INSERT INTO clips VALUES('c1', 1, 'text', 'a', 'h1', NULL, NULL, 1, 'd-win', 'PC', 'x', 'x');
+                INSERT INTO clips VALUES('c2', 2, 'text', 'b', 'h2', NULL, NULL, 1, 'd-and', 'Phone', 'x', 'x');
+                INSERT INTO clips VALUES('c3', 3, 'text', 'c', 'h3', NULL, NULL, 1, NULL, 'Web', 'x', 'x');
+                INSERT INTO clips VALUES('c4', 4, 'text', 'd', 'h4', NULL, NULL, 1, 'd-gone', 'Old', 'x', 'x');
+                INSERT INTO clips VALUES('c5', 5, 'text', 'e', 'h5', NULL, NULL, 1, NULL, 'Other', 'x', 'x');
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var db = NewDb(KeyA);
+        db.Initialize();
+
+        Dictionary<string, string?> Platforms()
+        {
+            using var conn = db.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT id, source_device_platform FROM clips";
+            using var r = cmd.ExecuteReader();
+            var map = new Dictionary<string, string?>();
+            while (r.Read())
+                map[r.GetString(0)] = r.IsDBNull(1) ? null : r.GetString(1);
+            return map;
+        }
+
+        var expected = new Dictionary<string, string?>
+        {
+            ["c1"] = "windows",
+            ["c2"] = "android", // revoked device, platform lowercased
+            ["c3"] = "web",
+            ["c4"] = null, // device row missing: unknown
+            ["c5"] = null,
+        };
+        Assert.Equal(expected, Platforms());
+
+        // Backfill runs once: a later change is not overwritten by another Initialize.
+        using (var conn = db.Open())
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE clips SET source_device_platform = 'linux' WHERE id = 'c1'";
+            cmd.ExecuteNonQuery();
+        }
+        db.Initialize();
+        Assert.Equal("linux", Platforms()["c1"]);
+    }
+
+    [Fact]
     public void Initialize_is_idempotent()
     {
         var db = NewDb(KeyA);

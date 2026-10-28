@@ -87,13 +87,16 @@ public class WebSocketTests
     public async Task Text_upload_is_pushed_live_to_other_device()
     {
         using var factory = new PrivatePasteFactory();
-        var (a, _, _) = await factory.LoginDeviceAsync("A");
+        var (a, _, _) = await factory.LoginDeviceAsync("A", "android");
         var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
         using var b = await ConnectAsync(factory, tokenB);
 
         var clip = await PostText(a, "hi");
 
-        var msg = await ReceiveMessageAsync(b);
+        var (_, raw) = await ReceiveAsync(b);
+        Assert.Contains("\"sourceDevicePlatform\":\"android\"", raw);
+        var msg = JsonSerializer.Deserialize<WsMessage>(raw, ProtocolJson.Options)!;
+        Assert.Equal("android", msg.Clip!.SourceDevicePlatform);
         Assert.Equal(WsTypes.ClipCreated, msg.Type);
         Assert.True(msg.Live);
         Assert.Equal(clip.Id, msg.Clip!.Id);

@@ -42,10 +42,50 @@ public class ClipApiTests
         Assert.Equal(ClipKind.Link, clip.Kind);
         Assert.Equal("PC-test", clip.SourceDeviceName);
         Assert.NotNull(clip.SourceDeviceId);
+        Assert.Equal("windows", clip.SourceDevicePlatform);
         var page = await List(c);
         Assert.Equal(clip.Id, page.Items[0].Id);
         var got = await c.GetFromJsonAsync<ClipDto>($"/api/clips/{clip.Id}", ProtocolJson.Options);
         Assert.Equal("https://x.io", got!.Text);
+    }
+
+    [Fact]
+    public async Task Upload_stores_and_returns_the_devices_platform()
+    {
+        using var f = new PrivatePasteFactory();
+        var phone = await f.LoginAsync("Phone", "Android");
+        var clip = await PostText(phone, "from the phone");
+        Assert.Equal("android", clip.SourceDevicePlatform);
+
+        var image = await PostImageOk(phone, TestImages.MakePng(4, 4).ToArray());
+        Assert.Equal("android", image.SourceDevicePlatform);
+
+        var listed = (await List(phone)).Items.Single(i => i.Id == clip.Id);
+        Assert.Equal("android", listed.SourceDevicePlatform);
+        var raw = await phone.GetStringAsync($"/api/clips/{clip.Id}");
+        Assert.Contains("\"sourceDeviceName\":\"Phone\",\"sourceDevicePlatform\":\"android\"", raw);
+
+        var sync = await phone.GetFromJsonAsync<SyncResponse>("/api/sync?afterSeq=0", ProtocolJson.Options);
+        Assert.Equal("android", sync!.Clips.Single(i => i.Id == clip.Id).SourceDevicePlatform);
+    }
+
+    [Fact]
+    public async Task Dedup_bump_and_restore_take_the_callers_platform()
+    {
+        using var f = new PrivatePasteFactory();
+        var pc = await f.LoginAsync("PC", "windows");
+        var mac = await f.LoginAsync("Mac", "macos");
+        var linux = await f.LoginAsync("Box", "linux");
+
+        var first = await PostText(pc, "same");
+        var bumped = await PostText(mac, "same");
+        Assert.Equal(first.Id, bumped.Id);
+        Assert.Equal("macos", bumped.SourceDevicePlatform);
+
+        var restored = await (await linux.PostAsync($"/api/clips/{first.Id}/restore", null))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options);
+        Assert.Equal("linux", restored!.SourceDevicePlatform);
+        Assert.Equal("Box", restored.SourceDeviceName);
     }
 
     [Fact]

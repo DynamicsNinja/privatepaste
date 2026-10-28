@@ -1,10 +1,20 @@
+using System.Text.Json.Serialization;
+
 namespace PrivatePaste.Protocol;
 
 public enum ClipKind { Text, Link, Image }
 
 public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, string Hash,
     int? Width, int? Height, long SizeBytes, Guid? SourceDeviceId, string SourceDeviceName,
-    DateTimeOffset LastCopiedAt);
+    [property: JsonPropertyOrder(1)] DateTimeOffset LastCopiedAt)
+{
+    /// <summary>
+    /// Lowercase platform of the device that last copied the clip ("windows", "macos", "linux", "android", "web", ...),
+    /// or null when unknown (e.g. a clip from a revoked device that predates platform tracking).
+    /// Serialized right after <see cref="SourceDeviceName"/>.
+    /// </summary>
+    public string? SourceDevicePlatform { get; init; }
+}
 
 public sealed record LoginRequest(string Password, string DeviceName, string Platform);
 

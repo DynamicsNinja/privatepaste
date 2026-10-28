@@ -188,6 +188,8 @@ public class WebUiTests
         Assert.Equal(HttpStatusCode.OK, with.StatusCode);
         var restored = await with.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options);
         Assert.Equal("Web", restored!.SourceDeviceName);
+        Assert.Null(restored.SourceDeviceId);
+        Assert.Equal("web", restored.SourceDevicePlatform);
     }
 
     [Fact]

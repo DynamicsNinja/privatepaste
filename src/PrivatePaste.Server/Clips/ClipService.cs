@@ -6,8 +6,11 @@ using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Server.Clips;
 
-/// <summary>The device that produced a clip. The web UI uses <c>(null, "Web")</c>.</summary>
-public sealed record DeviceIdentity(Guid? Id, string Name);
+/// <summary>
+/// The device that produced a clip. The web UI uses <c>(null, "Web", "web")</c>. <see cref="Platform"/> is lowercase,
+/// or null when unknown.
+/// </summary>
+public sealed record DeviceIdentity(Guid? Id, string Name, string? Platform);
 
 public sealed class ClipRejectedException(int statusCode, string message) : Exception(message)
 {
@@ -46,7 +49,8 @@ public sealed class ClipService(
                 $"Text exceeds the {options.MaxTextBytes} byte limit.");
 
         var result = await clips.UpsertAsync(new NewClip(ContentClassifier.ClassifyText(text), text,
-            ContentHash.ForText(text), null, null, size, device.Id, device.Name, CopiedAt(upload.CopiedAt, upload.Backfill)));
+            ContentHash.ForText(text), null, null, size, device.Id, device.Name, device.Platform,
+            CopiedAt(upload.CopiedAt, upload.Backfill)));
         await broadcaster.ClipChangedAsync(result.Clip, live: !upload.Backfill);
         return result.Clip;
     }
@@ -79,7 +83,8 @@ public sealed class ClipService(
             await blobs.WriteAsync(ClipBlobs.Thumbnail(processed.Hash), processed.ThumbnailPng);
 
             result = await clips.UpsertAsync(new NewClip(ClipKind.Image, null, processed.Hash, processed.Width,
-                processed.Height, processed.Png.Length, device.Id, device.Name, CopiedAt(copiedAt, backfill)));
+                processed.Height, processed.Png.Length, device.Id, device.Name, device.Platform,
+                CopiedAt(copiedAt, backfill)));
         }
         finally
         {
@@ -92,7 +97,7 @@ public sealed class ClipService(
 
     public async Task<ClipDto?> RestoreAsync(Guid id, DeviceIdentity device)
     {
-        var clip = await clips.BumpAsync(id, device.Id, device.Name, time.GetUtcNow());
+        var clip = await clips.BumpAsync(id, device.Id, device.Name, device.Platform, time.GetUtcNow());
         if (clip is null)
             return null;
         await broadcaster.ClipChangedAsync(clip, live: true);

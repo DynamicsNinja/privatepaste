@@ -72,7 +72,7 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` c
 | `GET` | `/api/sync?afterSeq=&limit=` | bearer | Changes after a sequence number, in `seq` order: `{clips, deletedIds, latestSeq, hasMore}`. `limit` defaults to 200 (max 500). |
 | `GET` | `/ws` | bearer | WebSocket for live updates (see below). |
 
-A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId, sourceDeviceName, lastCopiedAt}`. `text` is null for images; `width`/`height` are null for text. Every change (new clip, dedup bump, restore, delete) gets a new, higher `seq`.
+A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId, sourceDeviceName, sourceDevicePlatform, lastCopiedAt}`. `text` is null for images; `width`/`height` are null for text. `sourceDevice*` describe the device that last copied the clip (a new upload, a dedup bump or a restore). `sourceDevicePlatform` is that device's login `platform`, lowercased (`windows`, `macos`, `linux`, `android`, or whatever else a client sent), `web` for the web UI (which has no `sourceDeviceId`), or null when unknown. Clients show anything they do not recognize as an unknown device. Every change (new clip, dedup bump, restore, delete) gets a new, higher `seq`.
 
 Uploading content that already exists (same `hash`) does not create a duplicate: the existing clip is bumped to the top and returned.
 
