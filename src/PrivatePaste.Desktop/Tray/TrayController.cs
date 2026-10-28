@@ -16,6 +16,7 @@ public sealed class TrayController : IDisposable
     public const string SignedOutText = "Signed out";
     public const string PausedText = "Paused";
     public const string OfflineText = "Offline, retrying";
+    public const string ConnectingText = "Connecting…";
 
     private readonly DesktopHost _host;
     private readonly TrayIcon _icon;
@@ -74,11 +75,12 @@ public sealed class TrayController : IDisposable
     public event EventHandler? SignOutRequested;
     public event EventHandler? QuitRequested;
 
-    /// <summary>The status line text for a host state (the four strings of the spec).</summary>
+    /// <summary>The status line text for a host state (the four strings of the spec, plus "Connecting…" while connecting).</summary>
     public static string StatusText(bool signedIn, bool paused, SyncState state, Uri? server) =>
         !signedIn || state == SyncState.SignedOut ? SignedOutText
         : paused ? PausedText
         : state == SyncState.Connected ? $"Connected to {server?.Authority}"
+        : state == SyncState.Connecting ? ConnectingText
         : OfflineText;
 
     /// <summary>Updates the menu and icon from the host. UI thread only.</summary>

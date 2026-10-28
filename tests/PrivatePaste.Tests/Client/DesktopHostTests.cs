@@ -284,7 +284,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Equal("Connected to paste.ficdev.xyz", TrayController.StatusText(true, false, SyncState.Connected, server));
         Assert.Equal("Connected to localhost:5299", TrayController.StatusText(true, false, SyncState.Connected, new Uri("http://localhost:5299/")));
         Assert.Equal("Offline, retrying", TrayController.StatusText(true, false, SyncState.Offline, server));
-        Assert.Equal("Offline, retrying", TrayController.StatusText(true, false, SyncState.Connecting, server));
+        Assert.Equal("Connecting…", TrayController.StatusText(true, false, SyncState.Connecting, server));
         Assert.Equal("Paused", TrayController.StatusText(true, true, SyncState.Paused, server));
         Assert.Equal("Paused", TrayController.StatusText(true, true, SyncState.Connected, server));
         Assert.Equal("Signed out", TrayController.StatusText(false, false, SyncState.SignedOut, server));
