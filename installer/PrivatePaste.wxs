@@ -27,10 +27,6 @@
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <!-- Always lay down our own exe, whatever version sits at the path (a hand-copied exe, or the
-         same file version when the final release replaces its release candidate). Only our files are affected. -->
-    <Property Id="REINSTALLMODE" Value="amus" />
-
     <!-- Add/Remove Programs -->
     <Icon Id="AppIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
@@ -58,8 +54,19 @@
       </Component>
     </Feature>
 
-    <!-- Close a running PrivatePaste before files are replaced or removed (install, upgrade, uninstall).
-         It is a tray app without a visible window, so it is terminated rather than asked to close. -->
+    <!-- End a running PrivatePaste before InstallValidate, so its files-in-use check does not stop on it.
+         It runs on every install, upgrade, repair and uninstall: a plain first install can also meet a running
+         hand-copied exe at the same path. The app has no graceful-quit signal (no quit switch, named event or pipe),
+         so it is ended with taskkill. Exit code 128 (not running) is ignored. -->
+    <SetProperty Id="WixQuietExecCmdLine" Sequence="execute" Before="EndPrivatePaste"
+                 Value="&quot;[System64Folder]taskkill.exe&quot; /f /im PrivatePaste.exe" />
+    <CustomAction Id="EndPrivatePaste" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="immediate" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="EndPrivatePaste" Before="InstallValidate" />
+    </InstallExecuteSequence>
+
+    <!-- Backstop: if the app was started again in between, terminate it before files are replaced or removed. -->
     <util:CloseApplication Id="ClosePrivatePaste" Target="PrivatePaste.exe" CloseMessage="no"
                            TerminateProcess="1" RebootPrompt="no" />
 

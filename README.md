@@ -137,6 +137,7 @@ A tray app that keeps your clipboard in sync with the server (Windows; see [macO
 - **SmartScreen**: the installer and the exe are not code-signed, so Windows shows "Windows protected your PC". Click "More info", then "Run anyway".
 - **Work PCs**: a managed PC can block unsigned apps with Microsoft Defender attack surface reduction (ASR) rules. Ask your IT department for an exception for the exact path `%LOCALAPPDATA%\Programs\PrivatePaste\PrivatePaste.exe`.
 - **Upgrade**: install the newer `.msi`. It closes a running PrivatePaste, replaces the old version and keeps your settings, sign-in and history. Installing an older version over a newer one is refused; uninstall first if you really want to go back.
+- **Silent upgrade**: after an upgrade run with `msiexec /qn` or `/passive` the app is not started again; it comes back at your next sign-in (if "Start with Windows" is on) or when you start it from the Start menu.
 - **First sign-in**: start the app, enter the server URL (`https://` only; plain `http://` is accepted for localhost), the server password and a device name. After that it stays signed in and starts minimized in the tray.
 - **Hotkey**: Ctrl+Shift+V opens the history popup. Pick an item to re-sync it, put it on the clipboard and paste it. The hotkey can be changed in Settings.
 - **Pause**: the tray menu has Pause sync. While paused nothing is sent or received, and clips copied during the pause are never uploaded, not even after Resume.
