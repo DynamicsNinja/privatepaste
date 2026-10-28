@@ -77,6 +77,45 @@ public class HistoryCacheTests : IDisposable
     }
 
     [Fact]
+    public void Persists_the_source_device_platform()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Clip(1, "from the phone", 1) with { SourceDevicePlatform = "android" });
+        c.Upsert(Clip(2, "no platform", 2));
+        c.Save();
+
+        var l = HistoryCache.Load(FilePath, key);
+        Assert.Equal(["android", null], l.Items.OrderBy(i => i.Clip.Seq).Select(i => i.Clip.SourceDevicePlatform));
+    }
+
+    [Fact]
+    public void Loads_a_cache_written_before_platforms_were_tracked()
+    {
+        // A snapshot exactly as older versions wrote it: clips without sourceDevicePlatform.
+        var id = Guid.NewGuid();
+        var json = $$$"""
+            {"highestSeq":3,"lastAppliedAt":null,"items":[{"clip":{"id":"{{{id}}}","seq":3,"kind":"text","text":"old",
+            "hash":"h3","width":null,"height":null,"sizeBytes":3,"sourceDeviceId":null,"sourceDeviceName":"PC",
+            "lastCopiedAt":"2026-01-01T12:00:00+00:00"},"thumbnailPng":null}],"tombstones":{}}
+            """;
+        var key = NewKey();
+        var plaintext = Encoding.UTF8.GetBytes(json);
+        var file = new byte[12 + 16 + plaintext.Length];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(file.AsSpan(0, 12));
+        using (var aes = new System.Security.Cryptography.AesGcm(key, 16))
+            aes.Encrypt(file.AsSpan(0, 12), plaintext, file.AsSpan(28), file.AsSpan(12, 16));
+        File.WriteAllBytes(FilePath, file);
+
+        var l = HistoryCache.Load(FilePath, key);
+        var item = Assert.Single(l.Items);
+        Assert.Equal(id, item.Clip.Id);
+        Assert.Equal("PC", item.Clip.SourceDeviceName);
+        Assert.Null(item.Clip.SourceDevicePlatform);
+        Assert.Equal(3, l.HighestSeq);
+    }
+
+    [Fact]
     public void Persists_encrypted()
     {
         var key = NewKey();

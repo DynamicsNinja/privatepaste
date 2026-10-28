@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using PrivatePaste.Client.Core.Cache;
+using PrivatePaste.Desktop.Theme;
 using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Desktop.ViewModels;
@@ -11,6 +12,9 @@ public sealed record PopupItem(ClipDto Clip, string Preview, string Meta, byte[]
     public bool IsImage => Clip.Kind == ClipKind.Image;
     public bool IsLink => Clip.Kind == ClipKind.Link;
     public bool IsText => Clip.Kind == ClipKind.Text;
+
+    /// <summary>The icon shown before the source device name.</summary>
+    public PlatformIcon Platform => PlatformIcons.For(Clip.SourceDevicePlatform);
 }
 
 /// <summary>

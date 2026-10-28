@@ -23,6 +23,10 @@ public partial class PopupWindow : Window
 
     public static readonly IValueConverter ThumbnailConverter = new BytesToBitmapConverter();
 
+    /// <summary>Looks up an application resource (e.g. a platform icon geometry) by its key.</summary>
+    public static readonly IValueConverter ResourceConverter = new FuncValueConverter<string?, object?>(key =>
+        key is not null && Application.Current?.TryFindResource(key, out var value) == true ? value : null);
+
     private bool _hasBeenActive;
 
     public PopupWindow()

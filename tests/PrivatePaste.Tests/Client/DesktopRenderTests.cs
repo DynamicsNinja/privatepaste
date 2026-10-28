@@ -78,20 +78,74 @@ public class DesktopRenderTests
         var now = DateTimeOffset.UtcNow;
         var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
             Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
-        PrivatePaste.Protocol.ClipDto Clip(int seq, PrivatePaste.Protocol.ClipKind kind, string? text, int minutes, string device, int? w = null, int? h = null) =>
-            new(Guid.NewGuid(), seq, kind, text, "h" + seq, w, h, 100, null, device, now.AddMinutes(-minutes));
-        cache.Upsert(Clip(5, PrivatePaste.Protocol.ClipKind.Text, "git commit -m \"fix(client): sync engine resume\"\nsecond line", 0, "PC-work"));
-        cache.Upsert(Clip(4, PrivatePaste.Protocol.ClipKind.Link, "https://paste.example.com/some/long/path?with=query&and=more", 4, "MacBook"));
-        cache.Upsert(Clip(3, PrivatePaste.Protocol.ClipKind.Image, null, 35, "PC-work", 1280, 720));
-        cache.Upsert(Clip(2, PrivatePaste.Protocol.ClipKind.Text, new string('x', 200), 190, "Phone"));
-        cache.Upsert(Clip(1, PrivatePaste.Protocol.ClipKind.Text, "Meeting notes", 3000, "PC-work"));
+        PrivatePaste.Protocol.ClipDto Clip(int seq, PrivatePaste.Protocol.ClipKind kind, string? text, int minutes, string device,
+            string? platform, int? w = null, int? h = null) =>
+            new(Guid.NewGuid(), seq, kind, text, "h" + seq, w, h, 100, null, device, now.AddMinutes(-minutes))
+            {
+                SourceDevicePlatform = platform,
+            };
+        // One row per platform icon, plus an unrecognized and a missing platform (both "Unknown device").
+        cache.Upsert(Clip(7, PrivatePaste.Protocol.ClipKind.Text, "git commit -m \"fix(client): sync engine resume\"\nsecond line", 0, "PC-work", "windows"));
+        cache.Upsert(Clip(6, PrivatePaste.Protocol.ClipKind.Link, "https://paste.example.com/some/long/path?with=query&and=more", 4, "MacBook", "macos"));
+        cache.Upsert(Clip(5, PrivatePaste.Protocol.ClipKind.Image, null, 35, "ThinkPad", "linux", 1280, 720));
+        cache.Upsert(Clip(4, PrivatePaste.Protocol.ClipKind.Text, new string('x', 200), 190, "Phone", "android"));
+        cache.Upsert(Clip(3, PrivatePaste.Protocol.ClipKind.Text, "Copied from the browser", 600, "Web", "web"));
+        cache.Upsert(Clip(2, PrivatePaste.Protocol.ClipKind.Text, "Meeting notes", 3000, "Old laptop", null));
+        cache.Upsert(Clip(1, PrivatePaste.Protocol.ClipKind.Text, "Fridge shopping list", 4000, "Fridge", "tizen"));
         var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
             _ => Task.CompletedTask, TimeProvider.System);
         vm.MoveSelection(1);
         var window = new PopupWindow { DataContext = vm };
-        Render(window, theme, "popup");
+        Render(window, theme, "popup", w =>
+        {
+            var icons = w.GetVisualDescendants().OfType<Viewbox>().Where(v => v.Name == "PlatformIcon").ToList();
+            Assert.True(icons.Count >= 6, $"only {icons.Count} platform icons realized");
+            Assert.Equal(["Windows", "macOS", "Linux", "Android", "Web", "Unknown device"],
+                icons.Take(6).Select(v => Avalonia.Automation.AutomationProperties.GetName(v)));
+            foreach (var icon in icons)
+            {
+                var path = icon.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Single();
+                Assert.IsType<StreamGeometry>(path.Data);
+                Assert.Equal((Color)Application.Current!.FindResource(w.ActualThemeVariant, "PpMutedColor")!,
+                    ((ISolidColorBrush)path.Stroke!).Color);
+            }
+        });
         Assert.True(vm.Items[0].IsNewest);
     }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("windows", "windows", "Windows")]
+    [InlineData("macos", "macos", "macOS")]
+    [InlineData("linux", "linux", "Linux")]
+    [InlineData("android", "android", "Android")]
+    [InlineData("web", "web", "Web")]
+    [InlineData("MacOS", "macos", "macOS")]
+    [InlineData("haiku", "unknown", "Unknown device")]
+    [InlineData(null, "unknown", "Unknown device")]
+    public void Platform_icon_mapping(string? platform, string key, string label)
+    {
+        var icon = PrivatePaste.Desktop.Theme.PlatformIcons.For(platform);
+        Assert.Equal(key, icon.Key);
+        Assert.Equal(label, icon.Label);
+    }
+
+    /// <summary>The StreamGeometry resources in NightVault.axaml must carry the branding SVGs' path data.</summary>
+    [Fact]
+    public void Platform_geometries_match_the_branding_svgs()
+    {
+        var root = PrivatePaste.Tests.Web.PlatformIconsTests.RepoRoot();
+        var theme = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "PrivatePaste.Desktop", "Theme", "NightVault.axaml"));
+        System.Xml.Linq.XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        System.Xml.Linq.XNamespace svgNs = "http://www.w3.org/2000/svg";
+        foreach (var icon in PrivatePaste.Desktop.Theme.PlatformIcons.All)
+        {
+            var geometry = theme.Descendants().Single(e => e.Name.LocalName == "StreamGeometry"
+                                                           && (string?)e.Attribute(x + "Key") == icon.ResourceKey);
+            var svg = System.Xml.Linq.XDocument.Load(Path.Combine(root, "branding", "platform-icons", icon.Key + ".svg"));
+            Assert.Equal((string?)svg.Root!.Element(svgNs + "path")!.Attribute("d"), geometry.Value.Trim());
+            Assert.Equal(icon.Label, (string?)svg.Root.Attribute("aria-label"));
+        }
+    }
 
     private static SignInWindow NewSignIn() => new()
     {
@@ -198,7 +252,7 @@ public class DesktopRenderTests
         finally { w.Close(); }
     }, CancellationToken.None);
 
-    private static void Render(Window window, string theme, string name)
+    private static void Render(Window window, string theme, string name, Action<Window>? inspect = null)
     {
         window.RequestedThemeVariant = theme == "dark" ? ThemeVariant.Dark : ThemeVariant.Light;
         window.Show();
@@ -212,6 +266,7 @@ public class DesktopRenderTests
                 Directory.CreateDirectory(dir);
                 frame.Save(Path.Combine(dir, $"{name}-{theme}.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
             }
+            inspect?.Invoke(window);
         }
         finally { window.Close(); }
     }

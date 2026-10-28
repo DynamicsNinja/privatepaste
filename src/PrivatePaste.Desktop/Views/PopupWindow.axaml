@@ -63,6 +63,12 @@
     <Style Selector="ListBoxItem:selected Border.kind, ListBoxItem:pointerover Border.kind">
       <Setter Property="Background" Value="{DynamicResource PpLine}" />
     </Style>
+    <Style Selector="Path.platform">
+      <Setter Property="Stroke" Value="{DynamicResource PpMuted}" />
+      <Setter Property="StrokeThickness" Value="2" />
+      <Setter Property="StrokeLineCap" Value="Round" />
+      <Setter Property="StrokeJoin" Value="Round" />
+    </Style>
     <Style Selector="Panel.icon Path, Panel.icon Rectangle, Panel.icon Ellipse">
       <Setter Property="Stroke" Value="{DynamicResource PpAccent}" />
       <Setter Property="StrokeThickness" Value="2" />
@@ -107,8 +113,18 @@
                 </Border>
                 <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
                   <TextBlock Text="{Binding Preview}" TextTrimming="CharacterEllipsis" MaxLines="1" />
-                  <TextBlock Text="{Binding Meta}" FontSize="12" Foreground="{DynamicResource PpMuted}"
-                             TextTrimming="CharacterEllipsis" />
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="5">
+                    <!-- Source device platform, about the cap height of the 12px meta text. -->
+                    <Viewbox x:Name="PlatformIcon" Width="13" Height="13" VerticalAlignment="Center"
+                             AutomationProperties.Name="{Binding Platform.Label}" ToolTip.Tip="{Binding Platform.Label}">
+                      <Canvas Width="24" Height="24">
+                        <Path Classes="platform"
+                              Data="{Binding Platform.ResourceKey, Converter={x:Static views:PopupWindow.ResourceConverter}}" />
+                      </Canvas>
+                    </Viewbox>
+                    <TextBlock Grid.Column="1" Text="{Binding Meta}" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                  </Grid>
                 </StackPanel>
               </Grid>
             </Border>
