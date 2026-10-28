@@ -106,4 +106,12 @@ class AppGraphTest {
         assertEquals("the revoke alert, once", 1, app.graph.signedOutAlerts)
         assertNotNull(shadowOf(nm).getNotification(Notifications.ID_SIGNED_OUT))
     }
+
+    @Test
+    fun revokedSessionLeavesTheDeviceNameForTheSignInForm() {
+        app.signInTo(server)   // as "Pixel Test"
+        app.uiDeps.onUnauthorized()
+        awaitUntil("signed out") { app.uiDeps.session.value == null }
+        assertEquals("Pixel Test", app.uiDeps.lastDeviceName)
+    }
 }

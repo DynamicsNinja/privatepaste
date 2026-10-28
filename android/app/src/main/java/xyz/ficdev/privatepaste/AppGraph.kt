@@ -289,6 +289,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             this@AppGraph.signIn(url, password, deviceName)
         override suspend fun signOut() = this@AppGraph.signOut()
         override val lastServerUrl: String? get() = sessions.lastServerUrl
+        override val lastDeviceName: String? get() = sessions.lastDeviceName
         override val syncState: StateFlow<SyncState> = this@AppGraph.syncState
         override val cache: HistoryCache? get() = this@AppGraph.cache.takeIf { _current.value != null }
         override val thumbs: ThumbnailStore? get() = this@AppGraph.thumbs.takeIf { _current.value != null }

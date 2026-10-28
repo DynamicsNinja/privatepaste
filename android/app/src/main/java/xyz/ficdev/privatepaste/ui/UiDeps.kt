@@ -26,6 +26,9 @@ interface UiDeps {
     /** Server of the previous session, to prefill the sign-in form after a sign-out or revocation. */
     val lastServerUrl: String?
 
+    /** Device name of the previous session, to prefill the sign-in form; null falls back to the model name. */
+    val lastDeviceName: String? get() = null
+
     val syncState: StateFlow<SyncState>
 
     /** Null while signed out. */

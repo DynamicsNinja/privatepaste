@@ -54,6 +54,8 @@ class FakeUiDeps(app: Application) : UiDeps {
         sessionFlow.value = null
     }
     override val lastServerUrl: String? = "https://paste.example.com"
+    var previousDeviceName: String? = null
+    override val lastDeviceName: String? get() = previousDeviceName
     override val syncState: StateFlow<SyncState> = MutableStateFlow(SyncState.CONNECTED)
     override val cache: HistoryCache? = null
     override val thumbs: ThumbnailStore? = null
@@ -94,6 +96,19 @@ class AppNavTest {
         compose.onNodeWithText("Device name").assertIsDisplayed()
         compose.onNodeWithText("https://paste.example.com").assertIsDisplayed()
         compose.onNodeWithText("Sign in").performScrollTo().assertIsDisplayed().assertIsNotEnabled()   // no password yet
+    }
+
+    @Test
+    fun signInPrefillsThePreviousDeviceName() {
+        deps.previousDeviceName = "Ivan's phone"
+        launch()
+        compose.onNodeWithText("Ivan's phone").assertIsDisplayed()
+    }
+
+    @Test
+    fun signInFallsBackToTheModelName() {
+        launch()
+        compose.onNodeWithText(android.os.Build.MODEL).assertIsDisplayed()
     }
 
     @Test
