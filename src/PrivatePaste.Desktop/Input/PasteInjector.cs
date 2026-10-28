@@ -12,8 +12,11 @@ public interface IPasteInjector
     /// <summary>Remembers the foreground window of another application (call at hotkey time, before the popup shows; not while the popup is up).</summary>
     void CapturePrevious();
 
-    /// <summary>Gives the remembered window the focus again. No-op when there is none or it is gone.</summary>
-    void RefocusPrevious();
+    /// <summary>
+    /// Gives the remembered window the focus again and returns true. False (nothing done) when none was captured, it is gone, or
+    /// the user has switched to another application since: the caller must then not send the keystroke.
+    /// </summary>
+    bool RefocusPrevious();
 
     /// <summary>Simulates Ctrl+V (Cmd+V on macOS). False when the OS refused (macOS without Accessibility permission).</summary>
     bool SendPaste();
@@ -37,11 +40,17 @@ public sealed class PasteInjector : IPasteInjector
         _previous = hwnd == 0 || NativeWindows.IsOwnWindow(hwnd) || NativeWindows.IsShell(hwnd) ? 0 : hwnd;
     }
 
-    public void RefocusPrevious()
+    public bool RefocusPrevious()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) return true;   // the OS returns focus to the previous app by itself
         var hwnd = _previous;
-        if (hwnd != 0 && NativeWindows.IsWindow(hwnd)) NativeWindows.ForceForeground(hwnd);
+        if (hwnd == 0 || !NativeWindows.IsWindow(hwnd)) return false;
+        var foreground = NativeWindows.GetForegroundWindow();
+        // In front already, or still in transition (nothing / one of our windows): fine. Another app: the user moved on.
+        if (foreground != hwnd && foreground != 0 && !NativeWindows.IsOwnWindow(foreground) && !NativeWindows.IsShell(foreground))
+            return false;
+        NativeWindows.ForceForeground(hwnd);
+        return true;
     }
 
     public bool SendPaste()

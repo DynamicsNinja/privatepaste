@@ -17,6 +17,7 @@ public sealed class HotkeyService : IDisposable
 {
     private readonly SimpleGlobalHook _hook = new();
     private volatile HotkeyGesture? _gesture;
+    private volatile bool _keyHeld;
     private long _mouse = Pack(0, 0);
     private int _started;
     private bool _disposed;
@@ -24,6 +25,7 @@ public sealed class HotkeyService : IDisposable
     public HotkeyService()
     {
         _hook.KeyPressed += OnKeyPressed;
+        _hook.KeyReleased += OnKeyReleased;
         _hook.MouseMoved += (_, e) => _mouse = Pack(e.Data.X, e.Data.Y);
         _hook.MouseDragged += (_, e) => _mouse = Pack(e.Data.X, e.Data.Y);
         _hook.MousePressed += (_, e) => _mouse = Pack(e.Data.X, e.Data.Y);
@@ -50,10 +52,11 @@ public sealed class HotkeyService : IDisposable
     {
         if (_disposed) return;
         _gesture = gesture;
+        _keyHeld = false;
         if (Interlocked.Exchange(ref _started, 1) == 1) return;
         try
         {
-            _hook.RunAsync().ContinueWith(
+            _hook.RunAsync(OperatingSystem.IsWindows() ? GlobalHookType.Keyboard : GlobalHookType.All).ContinueWith(
                 t => { if (!_disposed && t.Exception is { } e) Failed?.Invoke(this, e.GetBaseException()); },
                 TaskContinuationOptions.OnlyOnFaulted);
         }
@@ -65,15 +68,42 @@ public sealed class HotkeyService : IDisposable
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
     {
+        switch (Evaluate(e.Data.KeyCode, e.RawEvent.Mask, e.IsEventSimulated))
+        {
+            case HotkeyDecision.Fire:
+                e.SuppressEvent = true;   // honoured on Windows and macOS; ignored elsewhere
+                Pressed?.Invoke(this, EventArgs.Empty);
+                break;
+            case HotkeyDecision.Swallow:
+                e.SuppressEvent = true;
+                break;
+        }
+    }
+
+    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e) => Released(e.Data.KeyCode);
+
+    /// <summary>
+    /// The handler logic without the hook: simulated events (our own Ctrl+V) are ignored, the gesture fires once per physical
+    /// press (auto-repeat of the held key is swallowed so it neither re-fires nor leaks to the focused app), and modifiers
+    /// must match exactly.
+    /// </summary>
+    internal HotkeyDecision Evaluate(KeyCode key, EventMask mask, bool simulated)
+    {
         var gesture = _gesture;
-        if (gesture is null || e.Data.KeyCode != gesture.Key) return;
-        var mask = e.RawEvent.Mask;
+        if (simulated || gesture is null || key != gesture.Key) return HotkeyDecision.Ignore;
         // Exact modifier match: Ctrl+Shift+V must not fire for Ctrl+Shift+Alt+V.
         if (Held(mask, EventMask.Ctrl) != gesture.Ctrl || Held(mask, EventMask.Shift) != gesture.Shift
             || Held(mask, EventMask.Alt) != gesture.Alt || Held(mask, EventMask.Meta) != gesture.Meta)
-            return;
-        e.SuppressEvent = true;   // honoured on Windows and macOS; ignored elsewhere
-        Pressed?.Invoke(this, EventArgs.Empty);
+            return HotkeyDecision.Ignore;
+        if (_keyHeld) return HotkeyDecision.Swallow;
+        _keyHeld = true;
+        return HotkeyDecision.Fire;
+    }
+
+    /// <summary>Key-up of the gesture key re-arms it (any key-up of that key, whatever the modifiers).</summary>
+    internal void Released(KeyCode key)
+    {
+        if (_gesture is { } g && key == g.Key) _keyHeld = false;
     }
 
     private static bool Held(EventMask mask, EventMask flag) => (mask & flag) != 0;
@@ -89,3 +119,5 @@ public sealed class HotkeyService : IDisposable
         catch (Exception) { }
     }
 }
+
+public enum HotkeyDecision { Ignore, Swallow, Fire }

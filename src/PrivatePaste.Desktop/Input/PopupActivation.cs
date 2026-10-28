@@ -25,6 +25,8 @@ public sealed class PopupActivation(
     bool isMacOs)
 {
     public const string AccessibilityToast = "Copied. Allow PrivatePaste in Accessibility settings to paste automatically.";
+    public const string CopiedToast = "Copied";
+    public static readonly TimeSpan RestoreTimeout = TimeSpan.FromMilliseconds(2500);
     public static readonly TimeSpan PasteDelay = TimeSpan.FromMilliseconds(60);
 
     private bool _accessibilityToastShown;
@@ -51,8 +53,12 @@ public sealed class PopupActivation(
             else
             {
                 var wanted = clip;
-                try { wanted = await restore(clip.Id, ct); }
+                // A slow server must not leave the user waiting (or typing elsewhere): after 2.5 s use the cached copy, like offline.
+                using var timeout = new CancellationTokenSource(RestoreTimeout, time);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+                try { wanted = await restore(clip.Id, linked.Token); }
                 catch (HttpRequestException) { }   // unreachable: paste the cached copy; the restore is skipped
+                catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested) { }
                 await applyRemote(wanted, ct);
                 // ApplyRemote silently does nothing if sync was paused meanwhile; the clipboard would be stale.
                 if (isPaused())
@@ -62,7 +68,12 @@ public sealed class PopupActivation(
                 }
             }
 
-            injector.RefocusPrevious();
+            // Copy-only unless we are sure where the paste would land: the window we came from must be known and still in front.
+            if (!injector.RefocusPrevious())
+            {
+                toast(CopiedToast);
+                return;
+            }
             await Task.Delay(PasteDelay, time, ct);
             if (!injector.SendPaste() && isMacOs && !_accessibilityToastShown)
             {

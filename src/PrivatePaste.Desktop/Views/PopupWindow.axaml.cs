@@ -35,7 +35,7 @@ public partial class PopupWindow : Window
         Opened += (_, _) => SearchBox.Focus();
         Activated += (_, _) => _hasBeenActive = true;
         // Losing focus closes, but only once we have had it (a hotkey-time activation can race with the OS).
-        Deactivated += (_, _) => { if (_hasBeenActive) Close(); };
+        Deactivated += (_, _) => { if (_hasBeenActive && IsVisible) Close(); };
         DataContextChanged += (_, _) => Hook(DataContext as PopupViewModel);
         Closed += (_, _) => (DataContext as PopupViewModel)?.Cancel();
     }
@@ -100,6 +100,10 @@ public partial class PopupWindow : Window
         }
         Show();
         Activate();
+        // A hotkey-triggered window is often refused the foreground (Windows focus-stealing lock): force it so typing works.
+        if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } handle)
+            Input.NativeWindows.ForceForeground(handle.Handle);
+        SearchBox.Focus();
     }
 
     /// <summary>The top-left for a window of <paramref name="size"/> opened at <paramref name="cursor"/>, kept inside <paramref name="work"/>.</summary>

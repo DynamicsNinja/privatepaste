@@ -17,11 +17,12 @@ public class PopupActivationTests
     private Func<Guid, CancellationToken, Task<ClipDto>> _restore = (_, _) => throw new InvalidOperationException("restore not configured");
     private Func<ClipDto, CancellationToken, Task> _apply = (_, _) => Task.CompletedTask;
     private bool _pasteResult = true;
+    private bool _canRefocus = true;
 
-    private sealed class FakeInjector(List<string> log, Func<bool> result) : IPasteInjector
+    private sealed class FakeInjector(List<string> log, Func<bool> result, Func<bool> refocus) : IPasteInjector
     {
         public void CapturePrevious() { }
-        public void RefocusPrevious() => log.Add("refocus");
+        public bool RefocusPrevious() { if (!refocus()) return false; log.Add("refocus"); return true; }
         public bool SendPaste() { log.Add("paste"); return result(); }
     }
 
@@ -33,7 +34,7 @@ public class PopupActivationTests
         (id, ct) => { _log.Add("restore"); return _restore(id, ct); },
         (c, ct) => { _log.Add("apply"); return _apply(c, ct); },
         (text, _) => { _log.Add("local:" + text); return Task.CompletedTask; },
-        new FakeInjector(_log, () => _pasteResult), _toasts.Add, _time, macos);
+        new FakeInjector(_log, () => _pasteResult, () => _canRefocus), _toasts.Add, _time, macos);
 
     /// <summary>Runs the flow, advancing the fake clock past the 60 ms paste delay once it is waiting there.</summary>
     private async Task RunAsync(PopupActivation a, ClipDto clip)
@@ -162,6 +163,39 @@ public class PopupActivationTests
         await RunAsync(a, clip);
         Assert.Equal([PopupActivation.AccessibilityToast], _toasts);
     }
+
+    [Fact]
+    public async Task Slow_restore_times_out_after_2_5s_and_uses_cached_clip()
+    {
+        var a = Create();
+        var clip = Clip();
+        ClipDto? applied = null;
+        _restore = async (_, ct) => { await Task.Delay(Timeout.Infinite, ct); return clip; };
+        _apply = (c, _) => { applied = c; return Task.CompletedTask; };
+        var task = a.ActivateAsync(clip);
+        await Task.Delay(50);
+        _time.Advance(TimeSpan.FromMilliseconds(2499));
+        await Task.Delay(30);
+        Assert.Null(applied);
+        _time.Advance(TimeSpan.FromMilliseconds(1));
+        for (var i = 0; i < 100 && !task.IsCompleted; i++) { await Task.Delay(5); _time.Advance(TimeSpan.FromMilliseconds(60)); }
+        await task;
+        Assert.Same(clip, applied);
+        Assert.Equal("paste", _log[^1]);
+    }
+
+    [Fact]
+    public async Task Foreground_changed_means_copy_only_with_toast()
+    {
+        var a = Create();
+        var clip = Clip();
+        _restore = (_, _) => Task.FromResult(clip);
+        _canRefocus = false;
+        await RunAsync(a, clip);
+        Assert.Equal(["restore", "apply"], _log);
+        Assert.Equal([PopupActivation.CopiedToast], _toasts);
+    }
+
 
     [Fact]
     public void Placement_is_clamped_to_the_working_area()
