@@ -106,6 +106,7 @@ public class DesktopRenderTests
     [Fact]
     public Task Title_bar_shows_title_and_buttons_with_tooltips() => Session.Value.Dispatch(() =>
     {
+        if (!OperatingSystem.IsWindows()) return;   // our title bar is drawn only on Windows (Linux/macOS keep native decorations)
         var w = NewSignIn();
         w.Show();
         try
@@ -126,6 +127,7 @@ public class DesktopRenderTests
     [Fact]
     public Task Title_bar_minimize_sets_minimized() => Session.Value.Dispatch(() =>
     {
+        if (!OperatingSystem.IsWindows()) return;   // our title bar is drawn only on Windows (Linux/macOS keep native decorations)
         var w = NewSignIn();
         w.Show();
         try
@@ -139,6 +141,7 @@ public class DesktopRenderTests
     [Fact]
     public Task Title_bar_maximize_toggles_state_icon_and_tooltip() => Session.Value.Dispatch(() =>
     {
+        if (!OperatingSystem.IsWindows()) return;   // our title bar is drawn only on Windows (Linux/macOS keep native decorations)
         var w = NewSignIn();
         w.Show();
         try
@@ -166,6 +169,7 @@ public class DesktopRenderTests
     [Fact]
     public Task Title_bar_close_closes_window() => Session.Value.Dispatch(() =>
     {
+        if (!OperatingSystem.IsWindows()) return;   // our title bar is drawn only on Windows (Linux/macOS keep native decorations)
         var w = NewSignIn();
         var closed = false;
         w.Closed += (_, _) => closed = true;
@@ -177,6 +181,7 @@ public class DesktopRenderTests
     [Fact]
     public Task Settings_window_has_title_bar_and_is_resizable() => Session.Value.Dispatch(() =>
     {
+        if (!OperatingSystem.IsWindows()) return;   // our title bar is drawn only on Windows (Linux/macOS keep native decorations)
         var w = new SettingsWindow
         {
             DataContext = new SettingsViewModel("http://localhost:5299", "PC-work", "Ctrl+Shift+V", true, "Start with Windows",
