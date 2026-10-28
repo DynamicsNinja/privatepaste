@@ -16,6 +16,8 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     private const int TagSize = 16;
 
     private readonly object _gate = new();
+    /// <summary>Serializes <see cref="Save"/> (all writers share one .tmp file); never taken while holding <see cref="_gate"/>.</summary>
+    private readonly object _saveLock = new();
     private readonly List<CachedClip> _items = [];
     private const int MaxTombstones = 1000;
     private readonly Dictionary<Guid, long> _tombstones = [];
@@ -35,9 +37,12 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     /// <summary>Snapshot, newest first (LastCopiedAt desc, then Seq desc).</summary>
     public IReadOnlyList<CachedClip> Items { get { lock (_gate) return _items.ToArray(); } }
 
-    public void Upsert(ClipDto clip, byte[]? thumbnailPng = null)
+    /// <summary>Adds or replaces a clip. False when nothing changed (not newer than what is held, or already deleted).</summary>
+    public bool Upsert(ClipDto clip, byte[]? thumbnailPng = null)
     {
-        if (UpsertLocked(clip, thumbnailPng)) Changed?.Invoke(this, EventArgs.Empty);
+        if (!UpsertLocked(clip, thumbnailPng)) return false;
+        Changed?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     private bool UpsertLocked(ClipDto clip, byte[]? thumbnailPng)
@@ -60,7 +65,8 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         }
     }
 
-    public void Remove(Guid id, long seq)
+    /// <summary>Removes a clip and records its tombstone. True when a held item was removed.</summary>
+    public bool Remove(Guid id, long seq)
     {
         bool removed;
         lock (_gate)
@@ -71,6 +77,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             TrimTombstones(_tombstones);
         }
         if (removed) Changed?.Invoke(this, EventArgs.Empty);
+        return removed;
     }
 
     public void MarkApplied(ClipDto clip)
@@ -88,28 +95,23 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         }
     }
 
+    /// <summary>Writes a snapshot to disk. Safe to call from several threads at once (saves are serialized).</summary>
     public void Save()
     {
-        byte[] plaintext;
-        lock (_gate)
-            plaintext = JsonSerializer.SerializeToUtf8Bytes(
-                new Snapshot(_highestSeq, _lastAppliedAt, _items.ToList(), new Dictionary<Guid, long>(_tombstones)), ProtocolJson.Options);
-
-        var file = new byte[NonceSize + TagSize + plaintext.Length];
-        var nonce = file.AsSpan(0, NonceSize);
-        RandomNumberGenerator.Fill(nonce);
-        using (var aes = new AesGcm(key, TagSize))
-            aes.Encrypt(nonce, plaintext, file.AsSpan(NonceSize + TagSize), file.AsSpan(NonceSize, TagSize));
-
-        var dir = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tmp = path + ".tmp";
-        using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+        lock (_saveLock)
         {
-            stream.Write(file);
-            stream.Flush(flushToDisk: true);
+            byte[] plaintext;
+            lock (_gate)
+                plaintext = JsonSerializer.SerializeToUtf8Bytes(
+                    new Snapshot(_highestSeq, _lastAppliedAt, _items.ToList(), new Dictionary<Guid, long>(_tombstones)), ProtocolJson.Options);
+
+            var file = new byte[NonceSize + TagSize + plaintext.Length];
+            var nonce = file.AsSpan(0, NonceSize);
+            RandomNumberGenerator.Fill(nonce);
+            using (var aes = new AesGcm(key, TagSize))
+                aes.Encrypt(nonce, plaintext, file.AsSpan(NonceSize + TagSize), file.AsSpan(NonceSize, TagSize));
+            AtomicFile.Write(path, file);
         }
-        File.Move(tmp, path, overwrite: true);
     }
 
     /// <summary>Missing, corrupt or wrong-key files yield an empty cache; never throws.</summary>
@@ -150,15 +152,18 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
 
     public void Clear()
     {
-        lock (_gate)
+        lock (_saveLock)   // a save in progress finishes first, so the deleted file is not written back
         {
-            _items.Clear();
-            _highestSeq = 0;
-            _lastAppliedAt = null;
-            _tombstones.Clear();
+            lock (_gate)
+            {
+                _items.Clear();
+                _highestSeq = 0;
+                _lastAppliedAt = null;
+                _tombstones.Clear();
+            }
+            try { File.Delete(path); } catch (IOException) { }
+            try { File.Delete(path + ".tmp"); } catch (IOException) { }
         }
-        try { File.Delete(path); } catch (IOException) { }
-        try { File.Delete(path + ".tmp"); } catch (IOException) { }
         Changed?.Invoke(this, EventArgs.Empty);
     }
 

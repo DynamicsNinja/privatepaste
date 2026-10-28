@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using PrivatePaste.Client.Core.Cache;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Protocol;
 
@@ -86,16 +87,7 @@ public sealed class OutboundQueue(string path, byte[] key)
         RandomNumberGenerator.Fill(nonce);
         using (var aes = new AesGcm(key, TagSize))
             aes.Encrypt(nonce, plaintext, file.AsSpan(NonceSize + TagSize), file.AsSpan(NonceSize, TagSize));
-
-        var dir = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tmp = path + ".tmp";
-        using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            stream.Write(file);
-            stream.Flush(flushToDisk: true);
-        }
-        File.Move(tmp, path, overwrite: true);
+        AtomicFile.Write(path, file);
     }
 
     private sealed record Entry(bool IsImage, string? Text, byte[]? Png, DateTimeOffset CopiedAt);

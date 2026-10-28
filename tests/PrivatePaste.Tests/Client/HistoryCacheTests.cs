@@ -233,4 +233,33 @@ public class HistoryCacheTests : IDisposable
         c.Clear();
         Assert.Equal(3, changes);
     }
+    [Fact]
+    public async Task Concurrent_saves_never_collide()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Clip(1, "a", 1));
+        using var start = new Barrier(2);
+        void SaveMany()
+        {
+            start.SignalAndWait();
+            for (var i = 0; i < 300; i++) c.Save();
+        }
+        await Task.WhenAll(Task.Factory.StartNew(SaveMany, TaskCreationOptions.LongRunning),
+            Task.Factory.StartNew(SaveMany, TaskCreationOptions.LongRunning));
+        Assert.Single(HistoryCache.Load(FilePath, key).Items);
+    }
+
+    [Fact]
+    public void Upsert_and_remove_report_whether_anything_changed()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var id = Guid.NewGuid();
+        Assert.True(c.Upsert(Clip(2, "a", 1, id)));
+        Assert.False(c.Upsert(Clip(2, "a", 1, id)));   // same seq: nothing new
+        Assert.False(c.Upsert(Clip(1, "a", 1, id)));   // older
+        Assert.True(c.Remove(id, 3));
+        Assert.False(c.Remove(id, 4));                 // nothing held
+        Assert.False(c.Upsert(Clip(3, "a", 1, id)));   // already deleted
+    }
 }

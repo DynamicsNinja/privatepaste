@@ -244,13 +244,12 @@ public sealed class SyncEngine(
             var page = await api.SyncAsync(before, ct: ct);
             foreach (var clip in page.Clips)
             {
-                cache.Upsert(clip);
+                changed |= cache.Upsert(clip);
                 caught.Add(clip);
             }
             // Truncated pages only report tombstones up to their last clip; the final page continues from latestSeq.
             var tombstoneSeq = page.HasMore && page.Clips.Count > 0 ? page.Clips[^1].Seq : page.LatestSeq;
-            foreach (var id in page.DeletedIds) cache.Remove(id, tombstoneSeq);
-            changed |= page.Clips.Count > 0 || page.DeletedIds.Count > 0;
+            foreach (var id in page.DeletedIds) changed |= cache.Remove(id, tombstoneSeq);
             if (!page.HasMore || cache.HighestSeq <= before) break;
         }
         if (changed) OnHistoryChanged();
@@ -309,7 +308,7 @@ public sealed class SyncEngine(
                 link.PongReceived();
                 return;
             case WsTypes.ClipCreated when msg.Clip is { } clip:
-                cache.Upsert(clip);
+                var added = cache.Upsert(clip);
                 if (clip.SourceDeviceId != ownDeviceId && msg.Live == true && !isPaused()
                     && _lastApplied != (clip.Id, clip.Seq)
                     && !(cache.LastAppliedAt > clip.LastCopiedAt))   // out-of-order broadcast of an older clip
@@ -319,11 +318,10 @@ public sealed class SyncEngine(
                     try { await ApplyAsync(clip, ct); }
                     finally { link.SetBusy(false); }
                 }
-                OnHistoryChanged();
+                if (added) OnHistoryChanged();
                 return;
             case WsTypes.ClipDeleted when msg.Id is { } id:
-                cache.Remove(id, msg.Seq ?? 0);
-                OnHistoryChanged();
+                if (cache.Remove(id, msg.Seq ?? 0)) OnHistoryChanged();
                 return;
         }
     }
