@@ -172,7 +172,9 @@ public sealed class ConnectionHub(DeviceRepository devices, ILogger<ConnectionHu
         {
             await foreach (var item in connection.Outbox.Reader.ReadAllAsync())
             {
-                using var cts = new CancellationTokenSource(SendTimeout);
+                // Dropping the connection also cancels a send that is stuck on a client that stopped reading.
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(connection.Lifetime.Token);
+                cts.CancelAfter(SendTimeout);
                 if (item.Close is { } close)
                 {
                     await connection.Socket.CloseOutputAsync(close.Status, close.Description, cts.Token);

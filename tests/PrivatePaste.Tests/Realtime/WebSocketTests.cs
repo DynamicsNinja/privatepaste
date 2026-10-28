@@ -233,35 +233,49 @@ public class WebSocketTests
     }
 
     [Fact]
-    public async Task Stalled_client_does_not_block_uploads_or_other_clients()
+    public async Task Stalled_client_does_not_block_broadcast_or_other_clients()
     {
         using var factory = new PrivatePasteFactory();
-        var (a, _, _) = await factory.LoginDeviceAsync("A");
-        var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
-        var (_, _, tokenC) = await factory.LoginDeviceAsync("C");
-        using var stalled = await ConnectAsync(factory, tokenB); // never reads again
-        using var healthy = await ConnectAsync(factory, tokenC);
+        var (_, idStalled, _) = await factory.LoginDeviceAsync("stalled");
+        var (_, idHealthy, _) = await factory.LoginDeviceAsync("healthy");
+        var hub = factory.Services.GetRequiredService<ConnectionHub>();
+        // In-memory pipes pause the writer at ~64 KB, so a never-read client makes a real send block.
+        var (stalledServer, stalledClient) = CreateSocketPair();
+        var (healthyServer, healthyClient) = CreateSocketPair();
+        using var _1 = stalledServer;
+        using var _2 = stalledClient;
+        using var _3 = healthyServer;
+        using var _4 = healthyClient;
+        using var shutdown = new CancellationTokenSource();
+        var stalledRun = hub.RunAsync(idStalled, stalledServer, shutdown.Token);
+        var healthyRun = hub.RunAsync(idHealthy, healthyServer, shutdown.Token);
+        // Round trip so the hub has certainly registered the healthy socket (the stalled one registers synchronously too).
+        await SendTextAsync(healthyClient, """{"type":"ping"}""");
+        Assert.Equal(WsTypes.Pong, (await ReceiveMessageAsync(healthyClient)).Type);
 
-        const int uploads = 12;
+        const int clips = 5;
         var received = Task.Run(async () =>
         {
             var texts = new List<string>();
-            while (texts.Count < uploads)
-                texts.Add((await ReceiveMessageAsync(healthy)).Clip!.Text![..9]);
+            while (texts.Count < clips)
+                texts.Add((await ReceiveMessageAsync(healthyClient)).Clip!.Text![..9]);
             return texts;
         });
 
-        // Large enough in total to overflow any transport buffer of the stalled client.
-        var worst = TimeSpan.Zero;
-        for (var i = 0; i < uploads; i++)
+        for (var i = 0; i < clips; i++)
         {
-            var sw = Stopwatch.StartNew();
-            await PostText(a, $"clip{i:D4} " + new string('x', 200_000));
-            if (sw.Elapsed > worst) worst = sw.Elapsed;
+            var clip = new ClipDto(Guid.NewGuid(), i + 1, ClipKind.Text, $"clip{i:D4} " + new string('x', 200_000),
+                "hash" + i, null, null, 200_009, null, "PC", DateTimeOffset.UtcNow);
+            var broadcast = hub.ClipChangedAsync(clip, true);
+            Assert.True(broadcast.IsCompleted, $"broadcast {i} did not return immediately");
+            await broadcast;
         }
 
-        Assert.True(worst < TimeSpan.FromSeconds(1), $"slowest upload took {worst}");
-        Assert.Equal(Enumerable.Range(0, uploads).Select(i => $"clip{i:D4} "), await received);
+        Assert.Equal(Enumerable.Range(0, clips).Select(i => $"clip{i:D4} "), await received);
+
+        // Cancelling the request token (as a host shutdown would) lets both RunAsync calls finish.
+        await shutdown.CancelAsync();
+        await Task.WhenAll(stalledRun, healthyRun).WaitAsync(ReceiveTimeout);
     }
 
     [Fact]
@@ -273,6 +287,8 @@ public class WebSocketTests
         await factory.Services.GetRequiredService<DeviceRepository>().RevokeAsync(idB);
         var hub = factory.Services.GetRequiredService<ConnectionHub>();
         var (serverSocket, clientSocket) = CreateSocketPair();
+        using var _1 = serverSocket;
+        using var _2 = clientSocket;
 
         var run = hub.RunAsync(idB, serverSocket, CancellationToken.None);
 
