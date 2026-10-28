@@ -3,7 +3,9 @@
 @{
     ViewData["Title"] = "Sign in";
 }
-<form method="post" class="card narrow">
+<form method="post" class="signin">
+    <img class="logo" src="/logo.svg" alt="">
+    <p class="wordmark">private<span>paste</span></p>
     <h1>Sign in</h1>
     @if (Model.Failed)
     {

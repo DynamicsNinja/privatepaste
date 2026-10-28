@@ -43,7 +43,10 @@ document.addEventListener("click", (event) => {
         done = Promise.reject(new Error("Clipboard image write is not supported in this browser."));
     }
 
-    done.then(() => { button.textContent = "Copied"; })
+    done.then(() => {
+        button.textContent = "Copied";
+        button.classList.add("done");
+    })
         .catch((error) => {
             console.error(error);
             button.textContent = "Failed";
@@ -51,6 +54,7 @@ document.addEventListener("click", (event) => {
         .finally(() => {
             setTimeout(() => {
                 button.textContent = label;
+                button.classList.remove("done");
                 button.disabled = false;
             }, 1500);
         });

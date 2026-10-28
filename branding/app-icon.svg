@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PrivatePaste">
+  <!-- Full-bleed square: operating systems apply their own corner mask to app icons. -->
+  <rect width="64" height="64" fill="#221D40"/>
+  <circle cx="32" cy="26" r="9" fill="#B7A5FF"/>
+  <path d="M27.5 31.5h9l3 17.5h-15z" fill="#B7A5FF"/>
+</svg>

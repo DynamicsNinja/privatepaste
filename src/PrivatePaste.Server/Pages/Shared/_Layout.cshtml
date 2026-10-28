@@ -2,31 +2,39 @@
 @inject IAntiforgery Antiforgery
 @{
     var signedIn = User.Identity?.IsAuthenticated == true;
+    var path = Context.Request.Path.Value ?? "/";
 }
 <!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light dark">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#15122B" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#F6F4FD" media="(prefers-color-scheme: light)">
     <meta name="csrf-token" content="@Antiforgery.GetAndStoreTokens(Context).RequestToken">
     <title>@(ViewData["Title"] ?? "PrivatePaste") - PrivatePaste</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml">
+    <link rel="preload" href="/fonts/sora-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/site.css">
 </head>
 <body>
-<header class="bar">
-    <a class="brand" href="/">PrivatePaste</a>
-    @if (signedIn)
-    {
+@if (signedIn)
+{
+    <header class="bar">
+        <a class="brand" href="/" aria-label="PrivatePaste history">
+            <img src="/logo.svg" alt="">
+            <span class="wordmark">private<span>paste</span></span>
+        </a>
         <nav>
-            <a href="/">History</a>
-            <a href="/devices">Devices</a>
+            <a href="/" aria-current="@(path == "/" ? "page" : null)">History</a>
+            <a href="/devices" aria-current="@(path.StartsWith("/devices", StringComparison.OrdinalIgnoreCase) ? "page" : null)">Devices</a>
             <form method="post" asp-page="/Devices" asp-page-handler="SignOut" class="inline">
                 <button type="submit" class="link">Sign out</button>
             </form>
         </nav>
-    }
-</header>
+    </header>
+}
 <main>
     @RenderBody()
 </main>

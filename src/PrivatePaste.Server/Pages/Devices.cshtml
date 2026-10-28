@@ -19,14 +19,14 @@ else
         @foreach (var d in Model.Devices)
         {
             <tr>
-                <td>@d.Name</td>
-                <td>@d.Platform</td>
-                <td>@d.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</td>
-                <td>@(d.LastSeenAt is { } seen ? seen.UtcDateTime.ToString("yyyy-MM-dd HH:mm") + " UTC" : "never")</td>
-                <td>
+                <td class="name">@d.Name</td>
+                <td data-label="Platform">@d.Platform</td>
+                <td data-label="Created">@d.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                <td data-label="Last seen">@(d.LastSeenAt is { } seen ? seen.UtcDateTime.ToString("yyyy-MM-dd HH:mm") + " UTC" : "never")</td>
+                <td class="revoke">
                     <form method="post" asp-page-handler="Revoke">
                         <input type="hidden" name="id" value="@d.Id">
-                        <button type="submit" class="danger">Revoke</button>
+                        <button type="submit" class="ghost">Revoke</button>
                     </form>
                 </td>
             </tr>

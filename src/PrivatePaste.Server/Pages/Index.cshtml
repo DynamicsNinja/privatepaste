@@ -2,23 +2,39 @@
 @model IndexModel
 @{
     ViewData["Title"] = "History";
+    // Only the true top of history gets the "just arrived" highlight, not the first row of a search or a later page.
+    var highlightFirst = string.IsNullOrEmpty(Model.Q) && !Request.Query.ContainsKey("cursor");
+    var first = true;
 }
-<form method="get" class="search">
+<form method="get" class="search" role="search">
     <input type="search" name="q" value="@Model.Q" placeholder="Search history" aria-label="Search history">
     <button type="submit">Search</button>
 </form>
 
 @if (Model.Items.Count == 0)
 {
-    <p class="muted">Nothing here yet.</p>
+    <p class="muted empty">@(string.IsNullOrEmpty(Model.Q) ? "Nothing here yet. Copy something on a signed-in device and it shows up here." : "No clips match that search.")</p>
 }
 
 <ul class="clips">
 @foreach (var clip in Model.Items)
 {
     var kind = clip.Kind.ToString().ToLowerInvariant();
-    <li class="clip" data-id="@clip.Id" data-kind="@kind">
-        <span class="kind kind-@kind" title="@clip.Kind">@(clip.Kind switch { ClipKind.Image => "IMG", ClipKind.Link => "URL", _ => "TXT" })</span>
+    <li class="clip@(first && highlightFirst ? " newest" : "")" data-id="@clip.Id" data-kind="@kind">
+        <span class="kind" title="@clip.Kind">
+            @switch (clip.Kind)
+            {
+                case ClipKind.Image:
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>
+                    break;
+                case ClipKind.Link:
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>
+                    break;
+                default:
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
+                    break;
+            }
+        </span>
         <div class="body">
             @if (clip.Kind == ClipKind.Image)
             {
@@ -32,16 +48,17 @@
             {
                 <pre class="text">@IndexModel.Preview(clip.Text)</pre>
             }
-            <div class="meta">@clip.SourceDeviceName &middot; <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
+            <div class="meta">@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
         </div>
         <div class="actions">
             <button type="button" class="copy">Copy</button>
             <form method="post" asp-page-handler="Delete" asp-route-q="@Model.Q">
                 <input type="hidden" name="id" value="@clip.Id">
-                <button type="submit" class="danger">Delete</button>
+                <button type="submit" class="ghost">Delete</button>
             </form>
         </div>
     </li>
+    first = false;
 }
 </ul>
 
