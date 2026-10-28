@@ -120,6 +120,7 @@ class SyncEngine(
             val previous = stopping
             val j = scope.launch(start = CoroutineStart.LAZY) {
                 previous?.await()
+                if (signedOut.get()) return@launch   // the stop we waited for ended in a revoke
                 run()
             }
             job = j
