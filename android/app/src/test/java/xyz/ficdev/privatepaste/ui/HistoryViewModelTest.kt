@@ -48,6 +48,7 @@ class HistoryViewModelTest {
     private val remote = FakeRemote()
 
     private var failImageWrite = false
+    private var unauthorizedCalls = 0
 
     private val copier = object : ClipCopier {
         override fun writeText(text: String) { events += "copyText:$text" }
@@ -73,6 +74,7 @@ class HistoryViewModelTest {
         copier = copier,
         cachedImage = { localImages[it] },
         io = dispatcher,
+        onUnauthorized = { unauthorizedCalls++ },
     )
 
     /** Keeps [HistoryViewModel.state] collected, like the screen does. */
@@ -287,6 +289,32 @@ class HistoryViewModelTest {
     }
 
     @Test
+    fun unauthorizedDeleteRoutesToTheRevokePath() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 1))
+        remote.revoked = true
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        advanceUntilIdle()
+
+        vm.delete(cache.value[0])
+        advanceUntilIdle()
+        assertEquals(1, unauthorizedCalls)
+        assertEquals("not a connection error", emptyList<UiText>(), messages)
+    }
+
+    @Test
+    fun unauthorizedRestoreRoutesToTheRevokePath() = runTest(dispatcher) {
+        remote.revoked = true
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.copy(clip("a", 1, "x"))
+        advanceUntilIdle()
+        assertEquals(listOf("copyText:x", "restore:a"), events)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_copied)), messages)   // the local copy happened
+        assertEquals(1, unauthorizedCalls)
+    }
+
+    @Test
     fun staleSearchResponseIsDropped() = runTest(dispatcher) {
         cache.value = listOf(clip("a", 9, "abc cached"))
         val gate = CompletableDeferred<Unit>()
@@ -341,6 +369,8 @@ class HistoryViewModelTest {
         val images = HashMap<String, ByteArray>()
         var failRestore = false
         var failDelete = false
+        /** Every call throws 401: this device was revoked. */
+        var revoked = false
 
         override suspend fun clips(q: String?, cursor: String?, limit: Int): ClipPage {
             val key = "${q.orEmpty()}|${cursor.orEmpty()}"
@@ -351,12 +381,14 @@ class HistoryViewModelTest {
 
         override suspend fun restore(id: String): ClipDto? {
             events += "restore:$id"
+            if (revoked) throw ApiException.Unauthorized()
             if (failRestore) throw ApiException.Transient("down")
             return null
         }
 
         override suspend fun delete(id: String): Boolean {
             events += "delete:$id"
+            if (revoked) throw ApiException.Unauthorized()
             if (failDelete) throw ApiException.Transient("down")
             return true
         }

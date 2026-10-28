@@ -31,6 +31,7 @@ class ThumbnailLoaderTest {
     private val dispatcher = StandardTestDispatcher()
     private val fetched = mutableListOf<String>()
     private val decoded = mutableListOf<Int>()
+    private var unauthorizedCalls = 0
 
     private val remote = object : ClipRemote {
         override suspend fun clips(q: String?, cursor: String?, limit: Int) = ClipPage(emptyList())
@@ -40,6 +41,7 @@ class ThumbnailLoaderTest {
         override suspend fun thumbnail(id: String): ByteArray {
             fetched += id
             if (id == "missing") throw ApiException.Rejected(404, "none")
+            if (id == "revoked") throw ApiException.Unauthorized()
             return byteArrayOf(9, 9)
         }
     }
@@ -55,6 +57,7 @@ class ThumbnailLoaderTest {
         decode = { bytes -> decoded += bytes.size; Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).asImageBitmap() },
         io = dispatcher,
         capacity = capacity,
+        onUnauthorized = { unauthorizedCalls++ },
     )
 
     @Test
@@ -80,6 +83,13 @@ class ThumbnailLoaderTest {
         val store = ThumbnailStore(tmp.newFolder("thumbs"), InMemoryKeyProvider())
         assertNull(loader(store).load(image("missing", "hashM")))
         assertNull(store.get("hashM"))
+    }
+
+    @Test
+    fun unauthorizedThumbnailRoutesToTheRevokePath() = runTest(dispatcher) {
+        val store = ThumbnailStore(tmp.newFolder("thumbs"), InMemoryKeyProvider())
+        assertNull(loader(store).load(image("revoked", "hashR")))
+        assertEquals(1, unauthorizedCalls)
     }
 
     @Test

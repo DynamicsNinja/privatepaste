@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.storage.ThumbnailStore
 import kotlin.coroutines.CoroutineContext
@@ -21,6 +22,8 @@ class ThumbnailLoader(
     private val decode: (ByteArray) -> ImageBitmap? = ::decodePng,
     private val io: CoroutineContext = Dispatchers.IO,
     capacity: Int = 100,
+    /** A fetch got 401: this device was revoked. Routes to the app's sign-out path. */
+    private val onUnauthorized: () -> Unit = {},
 ) {
     private val memory = LruCache<String, ImageBitmap>(capacity)
 
@@ -41,6 +44,9 @@ class ThumbnailLoader(
             api.thumbnail(clip.id)
         } catch (e: CancellationException) {
             throw e
+        } catch (_: ApiException.Unauthorized) {
+            onUnauthorized()
+            return null
         } catch (_: Exception) {
             return null
         }

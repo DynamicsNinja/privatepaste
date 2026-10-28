@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.ficdev.privatepaste.R
+import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
 import xyz.ficdev.privatepaste.core.model.ClipDto
@@ -83,6 +84,8 @@ class HistoryViewModel(
     /** The full PNG of an image clip when this phone has it locally, else null. */
     private val cachedImage: (clipId: String) -> ByteArray? = { null },
     private val io: CoroutineContext = Dispatchers.IO,
+    /** A call got 401: this device was revoked. Routes to the app's sign-out path. */
+    private val onUnauthorized: () -> Unit = {},
 ) : ViewModel() {
 
     /** Server results for one normalized query; [loaded] once the first page arrived. */
@@ -162,9 +165,10 @@ class HistoryViewModel(
         } catch (e: CancellationException) {
             remotePages.update { if (it.query == q) it.copy(loading = false) else it }
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             // Offline or a server error: the cached hits stay; a later scroll or query retries.
             remotePages.update { if (it.query == q) it.copy(loading = false) else it }
+            if (e is ApiException.Unauthorized) onUnauthorized()
         }
     }
 
@@ -201,6 +205,8 @@ class HistoryViewModel(
                         api.restore(clip.id)
                     } catch (e: CancellationException) {
                         throw e
+                    } catch (_: ApiException.Unauthorized) {
+                        onUnauthorized()
                     } catch (_: Exception) {
                         // Best effort: the local copy already happened.
                     }
@@ -222,6 +228,8 @@ class HistoryViewModel(
                 deleted.update { it + clip.id }
             } catch (e: CancellationException) {
                 throw e
+            } catch (_: ApiException.Unauthorized) {
+                onUnauthorized()   // revoked: the app signs out; not a connection problem
             } catch (_: Exception) {
                 _messages.trySend(UiText.Res(R.string.history_delete_failed))
             }
@@ -234,6 +242,9 @@ class HistoryViewModel(
         withContext(io) { api.image(id) }
     } catch (e: CancellationException) {
         throw e
+    } catch (_: ApiException.Unauthorized) {
+        onUnauthorized()
+        null
     } catch (_: Exception) {
         null
     }

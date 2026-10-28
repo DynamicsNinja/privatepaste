@@ -95,4 +95,15 @@ class AppGraphTest {
         assertTrue("the next session's queue is empty", app.graph.queue.isEmpty)
         assertTrue(app.graph.cache.items.value.isEmpty())
     }
+
+    @Test
+    fun unauthorizedFromTheUiTakesTheRevokePath() {
+        app.signInTo(server)
+
+        app.uiDeps.onUnauthorized()   // e.g. a delete from the history got 401
+
+        awaitUntil("signed out") { app.uiDeps.session.value == null && app.graph.current.value == null }
+        assertEquals("the revoke alert, once", 1, app.graph.signedOutAlerts)
+        assertNotNull(shadowOf(nm).getNotification(Notifications.ID_SIGNED_OUT))
+    }
 }

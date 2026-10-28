@@ -260,7 +260,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiException.Unauthorized) {
-            if (g != null) appScope.launch { onRevoked(g) }   // the device was revoked: same path as the engine's
+            unauthorized(g)
             false
         } catch (e: ApiException) {
             Log.w(TAG, "Cannot fetch the image to copy (${e.javaClass.simpleName})")
@@ -269,6 +269,11 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             Log.w(TAG, "Cannot copy the clip (${e.javaClass.simpleName})")
             false
         }
+    }
+
+    /** A call outside the engine got 401: the device was revoked. Same path as the engine's revoke. */
+    private fun unauthorized(g: SessionGraph?) {
+        if (g != null) appScope.launch { onRevoked(g) }
     }
 
     /** The full PNG of an image clip when it is still in the clipboard files (offline copy from the history). */
@@ -295,6 +300,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override val requestBatteryExemption: () -> Intent = { BatteryOptimization.requestIntent(app) }
         override val appVersion: String = versionName()
         override val cachedImage: (String) -> ByteArray? = ::cachedImage
+        override fun onUnauthorized() = unauthorized(_current.value)
     }
 
     private fun versionName(): String = try {

@@ -53,6 +53,9 @@ interface UiDeps {
 
     /** The full PNG of an image clip when this phone still has it locally (offline copy), else null. May read disk. */
     val cachedImage: (clipId: String) -> ByteArray? get() = { null }
+
+    /** A UI call got 401 (this device was revoked): the same sign-out path as the engine's revoke. */
+    fun onUnauthorized() = Unit
 }
 
 /** Implemented by the Application class. `MainActivity` reads `(application as UiDepsProvider).uiDeps`. */

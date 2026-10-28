@@ -90,11 +90,14 @@ private fun HistoryRoute(deps: UiDeps, session: StoredSession, relativeTime: Rel
                     remote = { deps.api()?.asClipRemote() },
                     copier = deps.clipboard.asClipCopier(),
                     cachedImage = deps.cachedImage,
+                    onUnauthorized = deps::onUnauthorized,
                 )
             }
         },
     )
-    val thumbnails = remember(session.key()) { ThumbnailLoader(deps.thumbs, remote = { deps.api()?.asClipRemote() }) }
+    val thumbnails = remember(session.key()) {
+        ThumbnailLoader(deps.thumbs, remote = { deps.api()?.asClipRemote() }, onUnauthorized = deps::onUnauthorized)
+    }
     HistoryScreen(vm, thumbnails, relativeTime, onOpenSettings)
 }
 
