@@ -1,0 +1,10 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PrivatePaste.Desktop.App"
+             Name="PrivatePaste"
+             RequestedThemeVariant="Dark">
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://PrivatePaste/Theme/NightVault.axaml" />
+  </Application.Styles>
+</Application>

@@ -1,0 +1,42 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:PrivatePaste.Desktop.ViewModels"
+        xmlns:views="using:PrivatePaste.Desktop.Views"
+        x:Class="PrivatePaste.Desktop.Views.SignInWindow"
+        x:DataType="vm:SignInViewModel"
+        Title="Sign in to PrivatePaste"
+        Icon="avares://PrivatePaste/Assets/app.ico"
+        Width="420" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterScreen">
+  <StackPanel Margin="28,28,28,28" Spacing="20">
+    <views:Wordmark HorizontalAlignment="Left" />
+
+    <StackPanel Spacing="4">
+      <TextBlock Classes="heading" Text="Sign in" />
+      <TextBlock Foreground="{DynamicResource PpMuted}" TextWrapping="Wrap"
+                 Text="Connect this computer to your PrivatePaste server." />
+    </StackPanel>
+
+    <Border Classes="panel">
+      <StackPanel Spacing="14">
+        <StackPanel>
+          <TextBlock Classes="label" Text="Server URL" />
+          <TextBox x:Name="ServerBox" Text="{Binding ServerUrl}" />
+        </StackPanel>
+        <StackPanel>
+          <TextBlock Classes="label" Text="Password" />
+          <TextBox x:Name="PasswordBox" Text="{Binding Password}" PasswordChar="•" />
+        </StackPanel>
+        <StackPanel>
+          <TextBlock Classes="label" Text="Device name" />
+          <TextBox Text="{Binding DeviceName}" MaxLength="50" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+    <Button Classes="primary" Content="Sign in" IsDefault="True" HorizontalAlignment="Stretch"
+            HorizontalContentAlignment="Center" Command="{Binding SignInCommand}" />
+  </StackPanel>
+</Window>

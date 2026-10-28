@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/PrivatePaste.Client.Core/PrivatePaste.Client.Core.csproj" />
+    <Project Path="src/PrivatePaste.Desktop/PrivatePaste.Desktop.csproj" />
     <Project Path="src/PrivatePaste.Protocol/PrivatePaste.Protocol.csproj" />
     <Project Path="src/PrivatePaste.Server/PrivatePaste.Server.csproj" />
   </Folder>

@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" Version="12.1.4" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.0.0" />
@@ -21,6 +22,7 @@
     <ProjectReference Include="..\..\src\PrivatePaste.Server\PrivatePaste.Server.csproj" />
     <ProjectReference Include="..\..\src\PrivatePaste.Protocol\PrivatePaste.Protocol.csproj" />
     <ProjectReference Include="..\..\src\PrivatePaste.Client.Core\PrivatePaste.Client.Core.csproj" />
+    <ProjectReference Include="..\..\src\PrivatePaste.Desktop\PrivatePaste.Desktop.csproj" />
   </ItemGroup>
 
 </Project>

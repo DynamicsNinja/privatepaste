@@ -1,0 +1,16 @@
+<!-- Logo plus wordmark: "private" Sora 600 in the text color, then "paste" Sora 300 in the accent color. -->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PrivatePaste.Desktop.Views.Wordmark">
+  <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+    <Image Source="avares://PrivatePaste/Assets/app-icon-512.png" Width="30" Height="30"
+           RenderOptions.BitmapInterpolationMode="HighQuality">
+      <Image.Clip>
+        <RectangleGeometry Rect="0,0,30,30" RadiusX="8" RadiusY="8" />
+      </Image.Clip>
+    </Image>
+    <TextBlock VerticalAlignment="Center" FontSize="20">
+      <Run Text="private" FontWeight="SemiBold" Foreground="{DynamicResource PpText}" /><Run Text="paste" FontWeight="Light" Foreground="{DynamicResource PpAccent}" />
+    </TextBlock>
+  </StackPanel>
+</UserControl>

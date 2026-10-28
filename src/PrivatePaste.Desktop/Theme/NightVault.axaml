@@ -1,0 +1,167 @@
+<!-- Night vault brand theme (branding/README.md). Dark is the default; the Light dictionary is the light variant. -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Styles.Resources>
+    <ResourceDictionary>
+      <!-- Tokens from branding/README.md ("OnAccent" and "AccentHover" are derived for the primary button). -->
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+          <Color x:Key="PpNightColor">#15122B</Color>
+          <Color x:Key="PpSurfaceColor">#1D1838</Color>
+          <Color x:Key="PpRaisedColor">#262046</Color>
+          <Color x:Key="PpLineColor">#2E2756</Color>
+          <Color x:Key="PpTextColor">#E9E6F7</Color>
+          <Color x:Key="PpMutedColor">#9A94BD</Color>
+          <Color x:Key="PpAccentColor">#B7A5FF</Color>
+          <Color x:Key="PpDangerColor">#FF8FA3</Color>
+          <Color x:Key="PpLiveColor">#7CE0C3</Color>
+          <Color x:Key="PpOnAccentColor">#15122B</Color>
+          <Color x:Key="PpAccentHoverColor">#C6B8FF</Color>
+          <SolidColorBrush x:Key="PpNight" Color="#15122B" />
+          <SolidColorBrush x:Key="PpSurface" Color="#1D1838" />
+          <SolidColorBrush x:Key="PpRaised" Color="#262046" />
+          <SolidColorBrush x:Key="PpLine" Color="#2E2756" />
+          <SolidColorBrush x:Key="PpText" Color="#E9E6F7" />
+          <SolidColorBrush x:Key="PpMuted" Color="#9A94BD" />
+          <SolidColorBrush x:Key="PpAccent" Color="#B7A5FF" />
+          <SolidColorBrush x:Key="PpDanger" Color="#FF8FA3" />
+          <SolidColorBrush x:Key="PpLive" Color="#7CE0C3" />
+          <SolidColorBrush x:Key="PpOnAccent" Color="#15122B" />
+          <SolidColorBrush x:Key="PpAccentHover" Color="#C6B8FF" />
+          <!-- Fluent accent: focus rings, checkbox fill and selection use the brand accent. -->
+          <Color x:Key="SystemAccentColor">#B7A5FF</Color>
+          <Color x:Key="SystemAccentColorDark1">#A592F5</Color>
+          <Color x:Key="SystemAccentColorLight1">#C6B8FF</Color>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <Color x:Key="PpNightColor">#F6F4FD</Color>
+          <Color x:Key="PpSurfaceColor">#FFFFFF</Color>
+          <Color x:Key="PpRaisedColor">#EFEBFC</Color>
+          <Color x:Key="PpLineColor">#E1DBF7</Color>
+          <Color x:Key="PpTextColor">#1E1A38</Color>
+          <Color x:Key="PpMutedColor">#625C88</Color>
+          <Color x:Key="PpAccentColor">#5B45D6</Color>
+          <Color x:Key="PpDangerColor">#C2364A</Color>
+          <Color x:Key="PpLiveColor">#7CE0C3</Color>
+          <Color x:Key="PpOnAccentColor">#FFFFFF</Color>
+          <Color x:Key="PpAccentHoverColor">#4A36C0</Color>
+          <SolidColorBrush x:Key="PpNight" Color="#F6F4FD" />
+          <SolidColorBrush x:Key="PpSurface" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="PpRaised" Color="#EFEBFC" />
+          <SolidColorBrush x:Key="PpLine" Color="#E1DBF7" />
+          <SolidColorBrush x:Key="PpText" Color="#1E1A38" />
+          <SolidColorBrush x:Key="PpMuted" Color="#625C88" />
+          <SolidColorBrush x:Key="PpAccent" Color="#5B45D6" />
+          <SolidColorBrush x:Key="PpDanger" Color="#C2364A" />
+          <SolidColorBrush x:Key="PpLive" Color="#7CE0C3" />
+          <SolidColorBrush x:Key="PpOnAccent" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="PpAccentHover" Color="#4A36C0" />
+          <!-- Fluent accent: focus rings, checkbox fill and selection use the brand accent. -->
+          <Color x:Key="SystemAccentColor">#5B45D6</Color>
+          <Color x:Key="SystemAccentColorDark1">#4A36C0</Color>
+          <Color x:Key="SystemAccentColorLight1">#7461E0</Color>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+
+      <FontFamily x:Key="PpFont">avares://PrivatePaste/Assets/Fonts#Sora</FontFamily>
+      <CornerRadius x:Key="PpPanelRadius">14</CornerRadius>
+      <CornerRadius x:Key="PpControlRadius">10</CornerRadius>
+      <CornerRadius x:Key="ControlCornerRadius">10</CornerRadius>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <Style Selector="Window">
+    <Setter Property="Background" Value="{DynamicResource PpNight}" />
+    <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+    <Setter Property="FontFamily" Value="{StaticResource PpFont}" />
+    <Setter Property="FontSize" Value="14" />
+  </Style>
+
+  <Style Selector="TextBlock.label">
+    <Setter Property="Foreground" Value="{DynamicResource PpMuted}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Margin" Value="2,0,0,6" />
+  </Style>
+  <Style Selector="TextBlock.heading">
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="FontSize" Value="18" />
+  </Style>
+  <Style Selector="TextBlock.error">
+    <Setter Property="Foreground" Value="{DynamicResource PpDanger}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <Style Selector="Border.panel">
+    <Setter Property="Background" Value="{DynamicResource PpSurface}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpLine}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource PpPanelRadius}" />
+    <Setter Property="Padding" Value="20" />
+  </Style>
+
+  <!-- Inputs: raised fill, line border, accent border on focus. -->
+  <Style Selector="TextBox">
+    <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+    <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpLine}" />
+    <Setter Property="CornerRadius" Value="{StaticResource PpControlRadius}" />
+    <Setter Property="Padding" Value="12,9" />
+    <Setter Property="FontFamily" Value="{StaticResource PpFont}" />
+  </Style>
+  <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpMuted}" />
+  </Style>
+  <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpAccent}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="TextBox:readonly /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource PpSurface}" />
+  </Style>
+  <Style Selector="TextBox:pointerover, TextBox:focus">
+    <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+  </Style>
+
+  <!-- Buttons: secondary by default; .primary is the accent button; .danger turns red on hover/focus only. -->
+  <Style Selector="Button">
+    <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+    <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpLine}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource PpControlRadius}" />
+    <Setter Property="Padding" Value="16,9" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="FontFamily" Value="{StaticResource PpFont}" />
+  </Style>
+  <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PpLine}" />
+    <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpLine}" />
+  </Style>
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{DynamicResource PpAccent}" />
+    <Setter Property="Foreground" Value="{DynamicResource PpOnAccent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpAccent}" />
+  </Style>
+  <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PpAccentHover}" />
+    <Setter Property="Foreground" Value="{DynamicResource PpOnAccent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpAccent}" />
+  </Style>
+  <Style Selector="Button.primary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+    <Setter Property="Foreground" Value="{DynamicResource PpMuted}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpLine}" />
+  </Style>
+  <Style Selector="Button.danger:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.danger:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Foreground" Value="{DynamicResource PpDanger}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PpDanger}" />
+  </Style>
+
+  <Style Selector="CheckBox">
+    <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+    <Setter Property="FontFamily" Value="{StaticResource PpFont}" />
+  </Style>
+</Styles>
