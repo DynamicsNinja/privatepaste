@@ -9,6 +9,7 @@ using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Clips;
 using PrivatePaste.Server.Config;
 using PrivatePaste.Server.Images;
+using PrivatePaste.Server.Realtime;
 using PrivatePaste.Server.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,7 +31,8 @@ builder.Services.AddSingleton<BlobStore>();
 builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();
 builder.Services.AddSingleton<DeviceRepository>();
-builder.Services.AddSingleton<IClipBroadcaster, NullClipBroadcaster>();
+builder.Services.AddSingleton<ConnectionHub>();
+builder.Services.AddSingleton<IClipBroadcaster>(sp => sp.GetRequiredService<ConnectionHub>());
 builder.Services.AddSingleton<ClipService>();
 builder.Services.AddHealthChecks();
 
@@ -100,6 +102,7 @@ catch (DatabaseKeyMismatchException ex)
 app.Services.GetRequiredService<PasswordVerifier>();
 
 app.UseForwardedHeaders();
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
@@ -108,6 +111,7 @@ app.MapHealthChecks("/health");
 app.MapAuthEndpoints();
 app.MapDeviceEndpoints();
 app.MapClipEndpoints();
+app.MapWebSocketEndpoint();
 
 app.Run();
 

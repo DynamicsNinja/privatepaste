@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using PrivatePaste.Server.Auth;
+using PrivatePaste.Server.Realtime;
 
 namespace PrivatePaste.Server.Api;
 
@@ -12,7 +13,12 @@ public static class DeviceEndpoints
         group.MapGet("", async (ClaimsPrincipal user, DeviceRepository devices) =>
             Results.Ok(await devices.ListAsync(user.DeviceId())));
 
-        group.MapDelete("{id:guid}", async (Guid id, DeviceRepository devices) =>
-            await devices.RevokeAsync(id) ? Results.NoContent() : Results.NotFound());
+        group.MapDelete("{id:guid}", async (Guid id, DeviceRepository devices, ConnectionHub hub) =>
+        {
+            if (!await devices.RevokeAsync(id))
+                return Results.NotFound();
+            await hub.CloseDeviceAsync(id);
+            return Results.NoContent();
+        });
     }
 }
