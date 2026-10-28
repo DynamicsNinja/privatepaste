@@ -132,15 +132,19 @@ Run the tests with `dotnet test`.
 
 A tray app that keeps your clipboard in sync with the server (Windows; see [macOS and Linux](#macos-and-linux) for the other platforms).
 
-- **Download** `PrivatePaste-<version>-win-x64.zip` from the latest GitHub Release and unzip it anywhere. It is a single self-contained `PrivatePaste.exe`; no installer or .NET runtime is needed.
-- **SmartScreen**: the build is not code-signed, so Windows shows "Windows protected your PC". Click "More info", then "Run anyway".
+- **Install**: download `PrivatePaste-<version>-win-x64.msi` from the latest GitHub Release and run it. It installs for your user only (no admin prompt) to `%LOCALAPPDATA%\Programs\PrivatePaste\PrivatePaste.exe`, adds a Start menu shortcut and can start the app when it finishes. No .NET runtime is needed.
+- **Portable**: `PrivatePaste-<version>-win-x64.zip` holds the same single self-contained `PrivatePaste.exe`. Unzip it anywhere and run it; nothing is installed.
+- **SmartScreen**: the installer and the exe are not code-signed, so Windows shows "Windows protected your PC". Click "More info", then "Run anyway".
+- **Work PCs**: a managed PC can block unsigned apps with Microsoft Defender attack surface reduction (ASR) rules. Ask your IT department for an exception for the exact path `%LOCALAPPDATA%\Programs\PrivatePaste\PrivatePaste.exe`.
+- **Upgrade**: install the newer `.msi`. It closes a running PrivatePaste, replaces the old version and keeps your settings, sign-in and history. Installing an older version over a newer one is refused; uninstall first if you really want to go back.
 - **First sign-in**: start the app, enter the server URL (`https://` only; plain `http://` is accepted for localhost), the server password and a device name. After that it stays signed in and starts minimized in the tray.
 - **Hotkey**: Ctrl+Shift+V opens the history popup. Pick an item to re-sync it, put it on the clipboard and paste it. The hotkey can be changed in Settings.
 - **Pause**: the tray menu has Pause sync. While paused nothing is sent or received, and clips copied during the pause are never uploaded, not even after Resume.
 - **Where data lives**: `%APPDATA%\PrivatePaste` holds the settings, the encrypted clip cache (latest 500 items), the DPAPI-protected sign-in token and `logs\`.
-- **Uninstall**: if you are signed in, untick "Start with Windows" in Settings; if you are signed out (Settings needs a sign-in), remove the autostart value as described in the next point instead. Then quit the app from the tray and delete `PrivatePaste.exe` and the `%APPDATA%\PrivatePaste` folder.
-- **Leftover autostart entry**: if you deleted the exe without unticking "Start with Windows", remove the value `PrivatePaste` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (regedit, or `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v PrivatePaste /f`).
-- **Build it yourself**: `powershell -File scripts/publish-windows.ps1` writes `artifacts/win-x64/PrivatePaste.exe` and `artifacts/PrivatePaste-win-x64.zip`. Pushing a `desktop-v*` tag runs `.github/workflows/desktop.yml`, which tests, builds all platforms and attaches them to a GitHub Release.
+- **Uninstall**: open Settings > Apps > Installed apps, find PrivatePaste and choose Uninstall. It closes the app, removes it and its "Start with Windows" entry, and keeps `%APPDATA%\PrivatePaste`; delete that folder by hand to remove your history and sign-in too.
+- **Uninstall the portable exe**: if you are signed in, untick "Start with Windows" in Settings; if you are signed out (Settings needs a sign-in), remove the autostart value as described in the next point instead. Then quit the app from the tray and delete `PrivatePaste.exe` and the `%APPDATA%\PrivatePaste` folder.
+- **Leftover autostart entry**: if you deleted the portable exe without unticking "Start with Windows", remove the value `PrivatePaste` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (regedit, or `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v PrivatePaste /f`).
+- **Build it yourself**: `powershell -File scripts/publish-windows.ps1` writes `artifacts/win-x64/PrivatePaste.exe` and `artifacts/PrivatePaste-win-x64.zip`. `powershell -File scripts/build-installer.ps1 -Version 0.1.0` does the same and then writes `artifacts/PrivatePaste-0.1.0-win-x64.msi` (add `-NoPublish` to reuse the exe already built). The installer is made with the WiX Toolset, a .NET local tool pinned in `.config/dotnet-tools.json`; the script restores it, so only the .NET SDK is needed. The MSI version is the three numbers of the release version: a prerelease suffix is dropped, so `0.2.0-rc1` becomes MSI version `0.2.0`, and the final `0.2.0` installs over the release candidate. Pushing a `desktop-v*` tag runs `.github/workflows/desktop.yml`, which tests, builds all platforms and attaches them to a GitHub Release.
 
 ## macOS and Linux
 
