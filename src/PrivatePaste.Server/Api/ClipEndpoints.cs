@@ -1,5 +1,8 @@
 using System.Globalization;
 using System.Security.Claims;
+using System.Text;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Net.Http.Headers;
 using PrivatePaste.Protocol;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Clips;
@@ -27,28 +30,45 @@ public static class ClipEndpoints
         group.MapPost("clips/text", (TextClipUpload upload, ClaimsPrincipal user, ClipService service) =>
             service.AddTextAsync(upload, user.ToDeviceIdentity()));
 
+        // Streams the multipart body so image bytes are never buffered to disk. The small copiedAt/backfill
+        // fields must precede the file part.
         group.MapPost("clips/image", async (HttpRequest request, ClaimsPrincipal user, ClipService service) =>
         {
-            if (!request.HasFormContentType)
+            if (!MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType)
+                || !contentType.MediaType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase)
+                || HeaderUtilities.RemoveQuotes(contentType.Boundary).Value is not { Length: > 0 } boundary)
                 return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Expected multipart form data.");
 
-            var form = await request.ReadFormAsync();
-            var file = form.Files.GetFile("file");
-            if (file is null)
-                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Missing 'file' part.");
-
+            var reader = new MultipartReader(boundary, request.Body);
             DateTimeOffset? copiedAt = null;
-            if (form.TryGetValue("copiedAt", out var rawAt) && rawAt.Count > 0 && rawAt[0] is { Length: > 0 } atText)
+            var backfill = false;
+            MultipartSection? section;
+            while ((section = await reader.ReadNextSectionAsync()) is not null)
             {
-                if (!DateTimeOffset.TryParse(atText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
-                    return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Invalid copiedAt.");
-                copiedAt = parsed;
+                var disposition = section.GetContentDispositionHeader();
+                if (disposition is null || !(disposition.IsFormDisposition() || disposition.IsFileDisposition()))
+                    continue;
+                var name = HeaderUtilities.RemoveQuotes(disposition.Name).Value;
+
+                if (name == "file")
+                    return Results.Ok(await service.AddImageAsync(section.Body, copiedAt, backfill, user.ToDeviceIdentity()));
+
+                if (name is "copiedAt" or "backfill")
+                {
+                    using var text = new StreamReader(section.Body, Encoding.UTF8, leaveOpen: true);
+                    var value = (await ReadSmallAsync(text)).Trim();
+                    if (name == "backfill")
+                        backfill = bool.TryParse(value, out var b) && b;
+                    else if (value.Length > 0)
+                    {
+                        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+                            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Invalid copiedAt.");
+                        copiedAt = parsed;
+                    }
+                }
             }
 
-            var backfill = form.TryGetValue("backfill", out var rawBackfill) && bool.TryParse(rawBackfill.ToString(), out var b) && b;
-
-            await using var stream = file.OpenReadStream();
-            return Results.Ok(await service.AddImageAsync(stream, copiedAt, backfill, user.ToDeviceIdentity()));
+            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Missing 'file' part.");
         });
 
         group.MapGet("clips", async (ClipRepository repo, string? q, string? cursor, int? limit) =>
@@ -67,10 +87,10 @@ public static class ClipEndpoints
             await repo.GetAsync(id) is { } clip ? Results.Ok(clip) : Results.NotFound());
 
         group.MapGet("clips/{id:guid}/image", (Guid id, ClipRepository repo, BlobStore blobs) =>
-            ServeBlobAsync(id, ClipBlobs.Image(id), repo, blobs));
+            ServeBlobAsync(id, ClipBlobs.Image, repo, blobs));
 
         group.MapGet("clips/{id:guid}/thumbnail", (Guid id, ClipRepository repo, BlobStore blobs) =>
-            ServeBlobAsync(id, ClipBlobs.Thumbnail(id), repo, blobs));
+            ServeBlobAsync(id, ClipBlobs.Thumbnail, repo, blobs));
 
         group.MapPost("clips/{id:guid}/restore", async (Guid id, ClaimsPrincipal user, ClipService service) =>
             await service.RestoreAsync(id, user.ToDeviceIdentity()) is { } clip ? Results.Ok(clip) : Results.NotFound());
@@ -82,12 +102,19 @@ public static class ClipEndpoints
             Results.Ok(await repo.SyncAsync(afterSeq ?? 0, limit ?? 200)));
     }
 
-    private static async Task<IResult> ServeBlobAsync(Guid id, string blobName, ClipRepository repo, BlobStore blobs)
+    private static async Task<string> ReadSmallAsync(StreamReader reader)
+    {
+        var buffer = new char[256];
+        var n = await reader.ReadBlockAsync(buffer);
+        return new string(buffer, 0, n);
+    }
+
+    private static async Task<IResult> ServeBlobAsync(Guid id, Func<string, string> blobName, ClipRepository repo, BlobStore blobs)
     {
         var clip = await repo.GetAsync(id);
         if (clip is null || clip.Kind != ClipKind.Image)
             return Results.NotFound();
-        var bytes = await blobs.ReadAsync(blobName);
+        var bytes = await blobs.ReadAsync(blobName(clip.Hash));
         return bytes is null ? Results.NotFound() : Results.File(bytes, "image/png");
     }
 }

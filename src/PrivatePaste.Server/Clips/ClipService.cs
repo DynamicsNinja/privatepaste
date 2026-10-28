@@ -16,9 +16,10 @@ public sealed class ClipRejectedException(int statusCode, string message) : Exce
 
 public static class ClipBlobs
 {
-    public static string Image(Guid id) => $"{id}.png";
+    /// <summary>Blobs are keyed by content hash so a clip row is only visible once its blobs exist.</summary>
+    public static string Image(string hash) => $"{hash}.png";
 
-    public static string Thumbnail(Guid id) => $"{id}.thumb.png";
+    public static string Thumbnail(string hash) => $"{hash}.thumb.png";
 }
 
 public sealed class ClipService(
@@ -29,6 +30,9 @@ public sealed class ClipService(
     ServerOptions options,
     TimeProvider time)
 {
+    // Serializes blob-write + upsert and blob deletion (single-user server, so contention is negligible).
+    private readonly SemaphoreSlim _imageLock = new(1, 1);
+
     public async Task<ClipDto> AddTextAsync(TextClipUpload upload, DeviceIdentity device)
     {
         if (string.IsNullOrWhiteSpace(upload.Text))
@@ -60,12 +64,21 @@ public sealed class ClipService(
             throw new ClipRejectedException(StatusCodes.Status400BadRequest, ex.Message);
         }
 
-        var result = await clips.UpsertAsync(new NewClip(ClipKind.Image, null, processed.Hash, processed.Width,
-            processed.Height, processed.Png.Length, device.Id, device.Name, CopiedAt(copiedAt, backfill)));
-        if (result.Created)
+        UpsertResult result;
+        await _imageLock.WaitAsync();
+        try
         {
-            await blobs.WriteAsync(ClipBlobs.Image(result.Clip.Id), processed.Png);
-            await blobs.WriteAsync(ClipBlobs.Thumbnail(result.Clip.Id), processed.ThumbnailPng);
+            if (!blobs.Exists(ClipBlobs.Image(processed.Hash)))
+                await blobs.WriteAsync(ClipBlobs.Image(processed.Hash), processed.Png);
+            if (!blobs.Exists(ClipBlobs.Thumbnail(processed.Hash)))
+                await blobs.WriteAsync(ClipBlobs.Thumbnail(processed.Hash), processed.ThumbnailPng);
+
+            result = await clips.UpsertAsync(new NewClip(ClipKind.Image, null, processed.Hash, processed.Width,
+                processed.Height, processed.Png.Length, device.Id, device.Name, CopiedAt(copiedAt, backfill)));
+        }
+        finally
+        {
+            _imageLock.Release();
         }
 
         await broadcaster.ClipChangedAsync(result.Clip, live: !backfill);
@@ -83,12 +96,26 @@ public sealed class ClipService(
 
     public async Task<bool> DeleteAsync(Guid id)
     {
-        var seq = await clips.DeleteAsync(id);
-        if (seq is null)
-            return false;
-        blobs.Delete(ClipBlobs.Image(id));
-        blobs.Delete(ClipBlobs.Thumbnail(id));
-        await broadcaster.ClipDeletedAsync(id, seq.Value);
+        long seq;
+        await _imageLock.WaitAsync();
+        try
+        {
+            var clip = await clips.GetAsync(id);
+            if (clip is null || await clips.DeleteAsync(id) is not { } deletedSeq)
+                return false;
+            seq = deletedSeq;
+            if (clip.Kind == ClipKind.Image)
+            {
+                blobs.Delete(ClipBlobs.Image(clip.Hash));
+                blobs.Delete(ClipBlobs.Thumbnail(clip.Hash));
+            }
+        }
+        finally
+        {
+            _imageLock.Release();
+        }
+
+        await broadcaster.ClipDeletedAsync(id, seq);
         return true;
     }
 

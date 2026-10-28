@@ -16,9 +16,10 @@ public class ClipApiTests
 
     private static Task<HttpResponseMessage> PostImage(HttpClient c, byte[] bytes, DateTimeOffset? copiedAt = null, bool backfill = false)
     {
-        var form = new MultipartFormDataContent { { new ByteArrayContent(bytes), "file", "x.png" } };
+        var form = new MultipartFormDataContent();
         if (copiedAt is not null) form.Add(new StringContent(copiedAt.Value.ToString("O")), "copiedAt");
         if (backfill) form.Add(new StringContent("true"), "backfill");
+        form.Add(new ByteArrayContent(bytes), "file", "x.png");
         return c.PostAsync("/api/clips/image", form);
     }
 
@@ -208,5 +209,49 @@ public class ClipApiTests
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
         Assert.Equal(HttpStatusCode.BadRequest, (await c.GetAsync("/api/clips?cursor=!!!")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Reupload_restores_missing_blobs()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var bytes = TestImages.MakePng(30, 30).ToArray();
+        var clip = await PostImageOk(c, bytes);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
+
+        foreach (var file in Directory.GetFiles(Path.Combine(f.DataDir, "blobs")))
+            File.Delete(file);
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
+
+        var again = await PostImageOk(c, bytes);
+        Assert.Equal(clip.Id, again.Id);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/thumbnail")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Image_upload_does_not_buffer_to_temp_files()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var bytes = TestImages.MakePng(200, 200).ToArray();
+        Assert.True(bytes.Length > 100 * 1024);
+        // Buffered form files are deleted when the request ends, so watch for their creation instead.
+        var created = new System.Collections.Concurrent.ConcurrentBag<string>();
+        using var watcher = new FileSystemWatcher(Path.GetTempPath(), "ASPNETCORE_*") { EnableRaisingEvents = true };
+        watcher.Created += (_, e) => created.Add(e.FullPath);
+        await PostImageOk(c, bytes);
+        await Task.Delay(300);
+        Assert.Empty(created);
+    }
+
+    [Fact]
+    public async Task Image_without_file_part_400()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var form = new MultipartFormDataContent { { new StringContent("true"), "backfill" } };
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsync("/api/clips/image", form)).StatusCode);
     }
 }
