@@ -52,7 +52,7 @@ public static class PlatformIcons
         var icon = For(platform);
         var label = HtmlEncoder.Default.Encode(icon.Label);
         return new HtmlString(
-            $"<svg class=\"platform\" data-platform=\"{icon.Key}\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" " +
+            $"<svg class=\"platform\" data-platform=\"{icon.Key}\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" " +
             $"stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" role=\"img\" aria-label=\"{label}\">" +
             $"<title>{label}</title><path d=\"{icon.PathData}\"/></svg>");
     }

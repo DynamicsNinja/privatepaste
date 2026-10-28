@@ -24,6 +24,9 @@ public sealed record ClipToast(PlatformIcon Platform, string Title, string Previ
             .Split('\n')
             .Select(l => l.Trim())
             .FirstOrDefault(l => l.Length > 0) ?? "";
-        return line.Length <= PreviewLength ? line : line[..(PreviewLength - 1)] + "…";
+        if (line.Length <= PreviewLength) return line;
+        var cut = PreviewLength - 1;
+        if (char.IsHighSurrogate(line[cut - 1])) cut--;   // never split an emoji (surrogate pair)
+        return line[..cut] + "…";
     }
 }
