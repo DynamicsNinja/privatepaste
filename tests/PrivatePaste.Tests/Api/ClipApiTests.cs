@@ -231,6 +231,27 @@ public class ClipApiTests
     }
 
     [Fact]
+    public async Task Reupload_repairs_corrupt_blobs()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var bytes = TestImages.MakePng(30, 30).ToArray();
+        var clip = await PostImageOk(c, bytes);
+        var original = await c.GetByteArrayAsync($"/api/clips/{clip.Id}/image");
+        var originalThumb = await c.GetByteArrayAsync($"/api/clips/{clip.Id}/thumbnail");
+
+        // As if a crash had left half-written blob files behind.
+        foreach (var file in Directory.GetFiles(Path.Combine(f.DataDir, "blobs")))
+            File.WriteAllBytes(file, [1, 2, 3]);
+
+        var again = await PostImageOk(c, bytes);
+        Assert.Equal(clip.Id, again.Id);
+        Assert.Equal(original, await c.GetByteArrayAsync($"/api/clips/{clip.Id}/image"));
+        Assert.Equal(originalThumb, await c.GetByteArrayAsync($"/api/clips/{clip.Id}/thumbnail"));
+        Assert.All(Directory.GetFiles(Path.Combine(f.DataDir, "blobs")), p => Assert.EndsWith(".enc", p));
+    }
+
+    [Fact]
     public async Task Image_upload_does_not_buffer_to_temp_files()
     {
         using var f = new PrivatePasteFactory();

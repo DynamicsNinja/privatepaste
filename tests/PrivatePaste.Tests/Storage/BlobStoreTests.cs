@@ -76,4 +76,15 @@ public sealed class BlobStoreTests : IDisposable
         await store.WriteAsync("x", b);
         Assert.NotEqual(first, await File.ReadAllBytesAsync(DiskPath("x")));
     }
+
+    [Fact]
+    public async Task Write_replaces_corrupt_file_and_leaves_no_temp_file()
+    {
+        Directory.CreateDirectory(Path.Combine(dir, "blobs"));
+        await File.WriteAllBytesAsync(DiskPath("r.png"), [1, 2, 3]);
+        await File.WriteAllBytesAsync(DiskPath("r.png") + ".tmp", [4, 5, 6]); // left over from a crash
+        await store.WriteAsync("r.png", [7, 8, 9]);
+        Assert.Equal([7, 8, 9], await store.ReadAsync("r.png"));
+        Assert.Equal([DiskPath("r.png")], Directory.GetFiles(Path.Combine(dir, "blobs")));
+    }
 }

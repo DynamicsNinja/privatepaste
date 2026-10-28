@@ -68,10 +68,10 @@ public sealed class ClipService(
         await _imageLock.WaitAsync();
         try
         {
-            if (!blobs.Exists(ClipBlobs.Image(processed.Hash)))
-                await blobs.WriteAsync(ClipBlobs.Image(processed.Hash), processed.Png);
-            if (!blobs.Exists(ClipBlobs.Thumbnail(processed.Hash)))
-                await blobs.WriteAsync(ClipBlobs.Thumbnail(processed.Hash), processed.ThumbnailPng);
+            // Always (re)write: the upload carries the bytes anyway, and this repairs a blob that is missing or
+            // damaged (e.g. left truncated by a crash before writes were atomic) instead of trusting that it exists.
+            await blobs.WriteAsync(ClipBlobs.Image(processed.Hash), processed.Png);
+            await blobs.WriteAsync(ClipBlobs.Thumbnail(processed.Hash), processed.ThumbnailPng);
 
             result = await clips.UpsertAsync(new NewClip(ClipKind.Image, null, processed.Hash, processed.Width,
                 processed.Height, processed.Png.Length, device.Id, device.Name, CopiedAt(copiedAt, backfill)));

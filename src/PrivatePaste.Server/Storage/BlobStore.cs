@@ -4,7 +4,10 @@ using PrivatePaste.Server.Config;
 
 namespace PrivatePaste.Server.Storage;
 
-/// <summary>AES-256-GCM encrypted blob files: nonce(12) || tag(16) || ciphertext, stored as {name}.enc.</summary>
+/// <summary>
+/// AES-256-GCM encrypted blob files: nonce(12) || tag(16) || ciphertext, stored as {name}.enc. Writes are atomic
+/// (temp file + rename).
+/// </summary>
 public sealed class BlobStore
 {
     private const int NonceSize = 12;
@@ -28,7 +31,17 @@ public sealed class BlobStore
         RandomNumberGenerator.Fill(nonce);
         using var aes = new AesGcm(_key, TagSize);
         aes.Encrypt(nonce, plaintext, file.AsSpan(NonceSize + TagSize), file.AsSpan(NonceSize, TagSize));
-        await File.WriteAllBytesAsync(PathFor(name), file);
+
+        // Write to a temp file, force it to disk, then rename over the target, so a crash never leaves a
+        // truncated blob under the final name.
+        var path = PathFor(name);
+        var tmp = path + ".tmp";
+        await using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true))
+        {
+            await stream.WriteAsync(file);
+            stream.Flush(flushToDisk: true);
+        }
+        File.Move(tmp, path, overwrite: true);
     }
 
     public async Task<byte[]?> ReadAsync(string name)
@@ -36,7 +49,14 @@ public sealed class BlobStore
         var path = PathFor(name);
         if (!File.Exists(path)) return null;
         byte[] file;
-        try { file = await File.ReadAllBytesAsync(path); }
+        try
+        {
+            // FileShare.Delete lets a concurrent WriteAsync rename a new version over this file on Windows too.
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read | FileShare.Delete, 4096, useAsync: true);
+            file = new byte[stream.Length];
+            await stream.ReadExactlyAsync(file);
+        }
         catch (FileNotFoundException) { return null; }
         if (file.Length < NonceSize + TagSize) throw new CryptographicException("Blob file is truncated.");
         var plaintext = new byte[file.Length - NonceSize - TagSize];
@@ -44,8 +64,6 @@ public sealed class BlobStore
         aes.Decrypt(file.AsSpan(0, NonceSize), file.AsSpan(NonceSize + TagSize), file.AsSpan(NonceSize, TagSize), plaintext);
         return plaintext;
     }
-
-    public bool Exists(string name) => File.Exists(PathFor(name));
 
     public void Delete(string name)
     {
