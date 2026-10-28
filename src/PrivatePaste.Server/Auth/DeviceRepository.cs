@@ -88,6 +88,15 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         return await cmd.ExecuteNonQueryAsync() > 0;
     }
 
+    public async Task<bool> IsActiveAsync(Guid id)
+    {
+        await using var conn = db.Open();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM devices WHERE id = @id AND revoked_at IS NULL";
+        cmd.Parameters.AddWithValue("@id", id.ToString());
+        return await cmd.ExecuteScalarAsync() is not null;
+    }
+
     private static DeviceDto Read(SqliteDataReader r, Guid? currentId)
     {
         var id = Guid.Parse(r.GetString(0));

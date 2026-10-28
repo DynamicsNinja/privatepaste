@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using PrivatePaste.Protocol;
 using PrivatePaste.Server.Auth;
+using PrivatePaste.Server.Realtime;
 
 namespace PrivatePaste.Server.Api;
 
@@ -28,10 +29,13 @@ public static class AuthEndpoints
             return Results.Ok(new LoginResponse(device.Id, token));
         }).RequireRateLimiting("login").AllowAnonymous();
 
-        app.MapPost("/api/auth/logout", async (ClaimsPrincipal user, DeviceRepository devices) =>
+        app.MapPost("/api/auth/logout", async (ClaimsPrincipal user, DeviceRepository devices, ConnectionHub hub) =>
         {
             if (user.DeviceId() is { } id)
+            {
                 await devices.RevokeAsync(id);
+                await hub.CloseDeviceAsync(id);
+            }
             return Results.NoContent();
         }).RequireAuthorization(AuthSchemes.OwnerPolicy);
     }
