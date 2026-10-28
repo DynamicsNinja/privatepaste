@@ -20,6 +20,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PrivatePaste.Server\PrivatePaste.Server.csproj" />
     <ProjectReference Include="..\..\src\PrivatePaste.Protocol\PrivatePaste.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\PrivatePaste.Client.Core\PrivatePaste.Client.Core.csproj" />
   </ItemGroup>
 
 </Project>
