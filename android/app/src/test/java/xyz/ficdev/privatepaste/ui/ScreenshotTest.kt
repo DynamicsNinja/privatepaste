@@ -1,0 +1,105 @@
+package xyz.ficdev.privatepaste.ui
+
+import android.graphics.Bitmap
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onRoot
+import org.junit.Assume.assumeTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipKind
+import xyz.ficdev.privatepaste.storage.DeliveryMode
+import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.ui.history.HistoryContent
+import xyz.ficdev.privatepaste.ui.history.HistoryState
+import xyz.ficdev.privatepaste.ui.settings.SettingsContent
+import xyz.ficdev.privatepaste.ui.settings.SettingsState
+import xyz.ficdev.privatepaste.ui.signin.SignInContent
+import xyz.ficdev.privatepaste.ui.signin.SignInViewModel
+import xyz.ficdev.privatepaste.ui.theme.PrivatePasteTheme
+import java.io.File
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.util.Locale
+
+/**
+ * Saves PNGs of the three screens, dark and light, into the directory named by PP_SCREENSHOT_DIR
+ * (e.g. `android/app/build/screenshots`). Skipped when the variable is not set.
+ */
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(qualifiers = "w411dp-h891dp-xxhdpi")
+class ScreenshotTest {
+
+    @get:Rule val compose = createComposeRule()
+
+    private val dir = System.getenv("PP_SCREENSHOT_DIR")?.takeIf { it.isNotBlank() }?.let(::File)
+
+    private val now = Instant.parse("2026-10-28T10:00:00Z")
+    private val time = RelativeTime(Clock.fixed(now, ZoneId.of("UTC")), ZoneId.of("UTC"), Locale.ENGLISH)
+
+    private fun clip(id: String, kind: ClipKind, text: String?, minutesAgo: Long, device: String) = ClipDto(
+        id = id, seq = 100 - minutesAgo, kind = kind, text = text, hash = "h-$id", sizeBytes = 10,
+        sourceDeviceId = device, sourceDeviceName = device, lastCopiedAt = now.minusSeconds(minutesAgo * 60),
+    )
+
+    private val history = HistoryState(
+        items = listOf(
+            clip("1", ClipKind.TEXT, "ssh deploy@build-01 'systemctl restart privatepaste'", 0, "Workstation"),
+            clip("2", ClipKind.LINK, "https://github.com/ficdev/privatepaste/releases", 12, "MacBook"),
+            clip("3", ClipKind.IMAGE, null, 95, "Workstation"),
+            clip("4", ClipKind.TEXT, "Meeting notes:\nship the Android client", 60 * 26, "Pixel 9"),
+            clip("5", ClipKind.TEXT, "4111 1111 1111 1111", 60 * 24 * 5, "MacBook"),
+        ),
+        liveClipId = "1",
+        syncState = SyncState.CONNECTED,
+    )
+
+    // createComposeRule allows one setContent per test, so each screen/theme pair is its own test.
+    @Test fun signInDark() = shootOne("signin", dark = true) { SignInSample() }
+    @Test fun signInLight() = shootOne("signin", dark = false) { SignInSample() }
+    @Test fun historyDark() = shootOne("history", dark = true) { HistorySample() }
+    @Test fun historyLight() = shootOne("history", dark = false) { HistorySample() }
+    @Test fun settingsDark() = shootOne("settings", dark = true) { SettingsSample() }
+    @Test fun settingsLight() = shootOne("settings", dark = false) { SettingsSample() }
+
+    private fun shootOne(name: String, dark: Boolean, content: @Composable () -> Unit) {
+        assumeTrue("PP_SCREENSHOT_DIR not set", dir != null)
+        compose.setContent { PrivatePasteTheme(darkTheme = dark) { content() } }
+        compose.waitForIdle()
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        dir!!.mkdirs()
+        File(dir, "$name-${if (dark) "dark" else "light"}.png").outputStream().use {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+    }
+
+    @Composable
+    private fun SignInSample() = SignInContent(
+        state = SignInViewModel.State(url = "https://paste.example.com", deviceName = "Pixel 9"),
+        onUrlChange = {}, onPasswordChange = {}, onDeviceNameChange = {}, onSubmit = {},
+    )
+
+    @Composable
+    private fun HistorySample() = HistoryContent(
+        state = history, relativeTime = time,
+        onQueryChange = {}, onCopy = {}, onDelete = {}, onNearEnd = {}, onOpenSettings = {},
+    )
+
+    @Composable
+    private fun SettingsSample() = SettingsContent(
+        state = SettingsState(
+            serverUrl = "https://paste.example.com/", deviceName = "Pixel 9",
+            deliveryMode = DeliveryMode.AUTOMATIC, batteryExempt = false, appVersion = "0.1.0",
+        ),
+        onDeliveryMode = {}, onAllowBackground = {}, onSignOut = {}, onBack = {},
+    )
+}

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- branding/logo.svg: rounded tile with a hairline lilac edge and the keyhole. Fixed colors in both modes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:fillColor="@color/ic_launcher_background"
+        android:pathData="M20,2h24a18,18 0,0 1,18 18v24a18,18 0,0 1,-18 18h-24a18,18 0,0 1,-18 -18v-24a18,18 0,0 1,18 -18z" />
+    <path
+        android:pathData="M20,2.75h24a17.25,17.25 0,0 1,17.25 17.25v24a17.25,17.25 0,0 1,-17.25 17.25h-24a17.25,17.25 0,0 1,-17.25 -17.25v-24a17.25,17.25 0,0 1,17.25 -17.25z"
+        android:strokeWidth="1.5"
+        android:strokeAlpha="0.35"
+        android:strokeColor="@color/logo_keyhole" />
+    <path
+        android:fillColor="@color/logo_keyhole"
+        android:pathData="M23,26a9,9 0,1 0,18 0a9,9 0,1 0,-18 0z" />
+    <path
+        android:fillColor="@color/logo_keyhole"
+        android:pathData="M27.5,31.5h9l3,17.5h-15z" />
+</vector>
