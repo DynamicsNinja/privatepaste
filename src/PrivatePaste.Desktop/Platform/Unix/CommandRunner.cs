@@ -3,7 +3,7 @@ using System.Text;
 
 namespace PrivatePaste.Desktop.Platform.Unix;
 
-public readonly record struct CommandResult(int ExitCode, string Stdout);
+public readonly record struct CommandResult(int ExitCode, string Stdout, string Stderr = "");
 
 /// <summary>Runs an external tool. Throws <see cref="System.ComponentModel.Win32Exception"/> when it is not installed.</summary>
 public interface ICommandRunner
@@ -29,7 +29,7 @@ public sealed class ProcessCommandRunner : ICommandRunner
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi) ?? throw new InvalidOperationException($"Could not start {file}.");
         var stdout = p.StandardOutput.ReadToEndAsync();
-        _ = p.StandardError.ReadToEndAsync();   // drained, never logged: it may echo a secret
+        var stderr = p.StandardError.ReadToEndAsync();   // returned to the caller for classification, never logged: it may echo a secret
         if (stdin is not null) p.StandardInput.Write(stdin);
         p.StandardInput.Close();
         if (!p.WaitForExit(Timeout))
@@ -37,6 +37,6 @@ public sealed class ProcessCommandRunner : ICommandRunner
             try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             throw new TimeoutException($"{file} did not finish in {Timeout.TotalSeconds:0} s.");
         }
-        return new CommandResult(p.ExitCode, stdout.GetAwaiter().GetResult());
+        return new CommandResult(p.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
     }
 }

@@ -102,3 +102,43 @@ public class PollingClipboardTests
         Assert.True(await WaitFor(() => count == 1));
     }
 }
+
+public class ClipboardSelectionTests
+{
+    [Fact]
+    public void Prefers_text_when_both_text_and_png_are_present()
+    {
+        var chosen = ClipboardSelection.Choose("hello", () => [1, 2, 3]);
+        Assert.Equal(new ClipboardContent.Text("hello"), chosen);
+    }
+
+    [Fact]
+    public void Uses_png_when_text_is_missing_or_whitespace()
+    {
+        Assert.Equal(new ClipboardContent.Image([9]), ClipboardSelection.Choose(null, () => [9]), new ContentComparer());
+        Assert.IsType<ClipboardContent.Image>(ClipboardSelection.Choose("  \n", () => [9]));
+    }
+
+    [Fact]
+    public void Falls_back_to_whitespace_text_then_null()
+    {
+        Assert.Equal(new ClipboardContent.Text(" "), ClipboardSelection.Choose(" ", () => null));
+        Assert.Null(ClipboardSelection.Choose(null, () => null));
+        Assert.Null(ClipboardSelection.Choose("", () => null));
+    }
+
+    [Fact]
+    public void Does_not_read_the_png_when_text_is_usable()
+    {
+        var read = false;
+        ClipboardSelection.Choose("x", () => { read = true; return [1]; });
+        Assert.False(read);
+    }
+
+    private sealed class ContentComparer : IEqualityComparer<ClipboardContent?>
+    {
+        public bool Equals(ClipboardContent? a, ClipboardContent? b) =>
+            a is ClipboardContent.Image x && b is ClipboardContent.Image y && x.Png.SequenceEqual(y.Png);
+        public int GetHashCode(ClipboardContent? c) => 0;
+    }
+}

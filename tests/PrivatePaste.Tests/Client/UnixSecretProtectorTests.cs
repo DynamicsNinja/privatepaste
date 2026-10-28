@@ -69,15 +69,28 @@ public class UnixSecretProtectorTests : IDisposable
 
     // ---- macOS keychain ----
 
-    [Fact]
-    public void Keychain_creates_key_when_missing_and_passes_secret_via_stdin_not_argv()
+    // A keychain double: find reports 44 until an add arrives on stdin, then returns what was added.
+    private static FakeRunner KeychainFake(Func<string>? afterAddFind = null)
     {
-        var runner = new FakeRunner
+        string? stored = null;
+        return new FakeRunner
         {
-            Handler = (_, args, _) => args[0] == "find-generic-password" ? new CommandResult(44, "") : new CommandResult(0, ""),
+            Handler = (_, args, stdin) =>
+            {
+                if (args[0] == "find-generic-password")
+                    return stored is null ? new CommandResult(44, "") : new CommandResult(0, (afterAddFind?.Invoke() ?? stored) + "\n");
+                var parts = stdin!.Split(' ');
+                stored = parts[Array.IndexOf(parts, "-w") + 1];
+                return new CommandResult(0, "");
+            },
         };
-        var p = new KeychainSecretProtector(runner);
-        p.Protect([1]);
+    }
+
+    [Fact]
+    public void Keychain_creates_key_when_not_found_44_and_passes_secret_via_stdin_not_argv()
+    {
+        var runner = KeychainFake();
+        new KeychainSecretProtector(runner).Protect([1]);
         var add = Assert.Single(runner.Calls, c => c.Args[0] == "-i");
         Assert.Equal("security", add.File);
         Assert.StartsWith("add-generic-password -s PrivatePaste -a data-key -w ", add.Stdin);
@@ -88,52 +101,60 @@ public class UnixSecretProtectorTests : IDisposable
     [Fact]
     public void Keychain_reuses_stored_key_across_instances()
     {
-        string? stored = null;
-        var runner = new FakeRunner
-        {
-            Handler = (_, args, stdin) =>
-            {
-                if (args[0] == "find-generic-password") return stored is null ? new CommandResult(44, "") : new CommandResult(0, stored + "\n");
-                var parts = stdin!.Split(' ');
-                stored = parts[Array.IndexOf(parts, "-w") + 1];
-                return new CommandResult(0, "");
-            },
-        };
+        var runner = KeychainFake();
         var boxed = new KeychainSecretProtector(runner).Protect("abc"u8.ToArray());
         Assert.Equal("abc"u8.ToArray(), new KeychainSecretProtector(runner).Unprotect(boxed));
+        Assert.Single(runner.Calls, c => c.Args[0] == "-i");
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(36)]
+    [InlineData(51)]
+    public void Keychain_other_find_failures_throw_and_never_write(int exitCode)
+    {
+        var runner = new FakeRunner { Handler = (_, _, _) => new CommandResult(exitCode, "") };
+        Assert.Throws<InvalidOperationException>(() => new KeychainSecretProtector(runner).Protect([1]));
+        Assert.DoesNotContain(runner.Calls, c => c.Args[0] == "-i");
     }
 
     [Fact]
-    public void Keychain_find_and_add_failure_throws()
+    public void Keychain_unreadable_existing_value_throws_and_never_overwrites()
     {
-        var runner = new FakeRunner { Handler = (_, _, _) => new CommandResult(1, "") };
+        var runner = new FakeRunner { Handler = (_, _, _) => new CommandResult(0, "not-a-key") };
         Assert.Throws<InvalidOperationException>(() => new KeychainSecretProtector(runner).Protect([1]));
+        Assert.DoesNotContain(runner.Calls, c => c.Args[0] == "-i");
+    }
+
+    [Fact]
+    public void Keychain_throws_when_the_added_key_cannot_be_found_afterwards()
+    {
+        var runner = new FakeRunner
+        {
+            Handler = (_, args, _) => args[0] == "find-generic-password" ? new CommandResult(44, "") : new CommandResult(0, ""),
+        };
+        Assert.Throws<InvalidOperationException>(() => new KeychainSecretProtector(runner).Protect([1]));
+        Assert.Equal(1, runner.Calls.Count(c => c.Args[0] == "-i"));
+    }
+
+    [Fact]
+    public void Keychain_timeout_throws_once_and_later_calls_do_not_touch_the_runner()
+    {
+        var runner = new FakeRunner { Handler = (_, _, _) => throw new TimeoutException("hung") };
+        var p = new KeychainSecretProtector(runner);
+        Assert.Throws<InvalidOperationException>(() => p.Protect([1]));
+        var calls = runner.Calls.Count;
+        Assert.Throws<InvalidOperationException>(() => p.Protect([1]));
+        Assert.Throws<InvalidOperationException>(() => p.Unprotect([1, .. new byte[63]]));
+        Assert.Equal(calls, runner.Calls.Count);
     }
 
     // ---- Linux secret-tool ----
 
-    [Fact]
-    public void SecretTool_stores_the_key_via_stdin_with_the_documented_attributes()
-    {
-        var runner = new FakeRunner
-        {
-            Handler = (_, args, _) => args[0] == "lookup" ? new CommandResult(1, "") : new CommandResult(0, ""),
-        };
-        var p = new SecretToolProtector(runner, Path.Combine(_dir, "key"), new FakeNotifier());
-        p.Protect([1]);
-        var store = Assert.Single(runner.Calls, c => c.Args[0] == "store");
-        Assert.Equal("secret-tool", store.File);
-        Assert.Equal(["store", "--label=PrivatePaste", "service", "privatepaste", "key", "data"], store.Args);
-        Assert.False(string.IsNullOrWhiteSpace(store.Stdin));
-        Assert.Equal(["lookup", "service", "privatepaste", "key", "data"], runner.Calls[0].Args);
-        Assert.False(File.Exists(Path.Combine(_dir, "key")));
-    }
-
-    [Fact]
-    public void SecretTool_reuses_stored_key()
+    private static FakeRunner SecretToolFake()
     {
         string? stored = null;
-        var runner = new FakeRunner
+        return new FakeRunner
         {
             Handler = (_, args, stdin) =>
             {
@@ -142,9 +163,62 @@ public class UnixSecretProtectorTests : IDisposable
                 return new CommandResult(0, "");
             },
         };
+    }
+
+    [Fact]
+    public void SecretTool_not_found_stores_a_new_key_via_stdin_with_the_documented_attributes()
+    {
+        var runner = SecretToolFake();
+        var file = Path.Combine(_dir, "key");
+        new SecretToolProtector(runner, file, new FakeNotifier()).Protect([1]);
+        var store = Assert.Single(runner.Calls, c => c.Args[0] == "store");
+        Assert.Equal("secret-tool", store.File);
+        Assert.Equal(["store", "--label=PrivatePaste", "service", "privatepaste", "key", "data"], store.Args);
+        Assert.False(string.IsNullOrWhiteSpace(store.Stdin));
+        Assert.Equal(["lookup", "service", "privatepaste", "key", "data"], runner.Calls[0].Args);
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
+    public void SecretTool_reuses_stored_key()
+    {
+        var runner = SecretToolFake();
         var file = Path.Combine(_dir, "key");
         var boxed = new SecretToolProtector(runner, file, new FakeNotifier()).Protect("abc"u8.ToArray());
         Assert.Equal("abc"u8.ToArray(), new SecretToolProtector(runner, file, new FakeNotifier()).Unprotect(boxed));
+        Assert.Single(runner.Calls, c => c.Args[0] == "store");
+    }
+
+    [Fact]
+    public void SecretTool_lookup_error_falls_back_to_key_file_without_storing()
+    {
+        var runner = new FakeRunner { Handler = (_, _, _) => new CommandResult(1, "", "Cannot autolaunch D-Bus") };
+        var file = Path.Combine(_dir, "key");
+        var notifier = new FakeNotifier();
+        new SecretToolProtector(runner, file, notifier).Protect([1]);
+        Assert.DoesNotContain(runner.Calls, c => c.Args[0] == "store");
+        Assert.True(File.Exists(file));
+        Assert.Single(notifier.Messages);
+    }
+
+    [Fact]
+    public void SecretTool_other_exit_code_falls_back_without_storing()
+    {
+        var runner = new FakeRunner { Handler = (_, _, _) => new CommandResult(2, "") };
+        new SecretToolProtector(runner, Path.Combine(_dir, "key"), new FakeNotifier()).Protect([1]);
+        Assert.DoesNotContain(runner.Calls, c => c.Args[0] == "store");
+    }
+
+    [Fact]
+    public void SecretTool_timeout_falls_back_and_later_calls_do_not_touch_the_runner()
+    {
+        var runner = new FakeRunner { Handler = (_, _, _) => throw new TimeoutException("hung") };
+        var p = new SecretToolProtector(runner, Path.Combine(_dir, "key"), new FakeNotifier());
+        var boxed = p.Protect([1, 2]);
+        var calls = runner.Calls.Count;
+        Assert.Equal([1, 2], p.Unprotect(boxed));
+        p.Protect([3]);
+        Assert.Equal(calls, runner.Calls.Count);
     }
 
     [Fact]

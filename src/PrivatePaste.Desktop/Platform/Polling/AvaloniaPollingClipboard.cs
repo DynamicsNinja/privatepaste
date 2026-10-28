@@ -10,7 +10,7 @@ namespace PrivatePaste.Desktop.Platform.Polling;
 
 /// <summary>
 /// The <see cref="IClipboardAccess"/> for macOS and Linux: Avalonia's clipboard polled every 500 ms.
-/// Text is compared by value. Images are compared by their PNG bytes when the platform exposes <c>image/png</c> on the
+/// Text wins when both text and an image are present. Text is compared by value; images are compared by their PNG bytes when the platform exposes <c>image/png</c> on the
 /// clipboard (macOS and most X11 clients do); where it does not, the clipboard is text-only.
 /// </summary>
 public static class AvaloniaPollingClipboard
@@ -33,8 +33,10 @@ internal sealed class AvaloniaClipboardBackend : IClipboardBackend
         Dispatcher.UIThread.InvokeAsync<ClipboardContent?>(async () =>
         {
             if (GetClipboard() is not { } clipboard) return null;
-            if (await TryReadPngAsync(clipboard) is { } png) return (ClipboardContent)new ClipboardContent.Image(png);
-            return await clipboard.TryGetTextAsync() is { Length: > 0 } text ? (ClipboardContent)new ClipboardContent.Text(text) : null;
+            var text = await clipboard.TryGetTextAsync();
+            // Text first (office apps put text plus a bitmap); the PNG is only fetched when there is no usable text.
+            var png = string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(clipboard) : null;
+            return ClipboardSelection.Choose(text, () => png);
         });
 
     public Task WriteAsync(ClipboardContent content, CancellationToken ct) =>

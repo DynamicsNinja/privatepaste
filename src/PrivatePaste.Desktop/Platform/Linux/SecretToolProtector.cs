@@ -40,13 +40,23 @@ public sealed class SecretToolProtector : AesGcmSecretProtector
                 var found = runner.Run("secret-tool", ["lookup", .. Attributes], null);
                 if (found.ExitCode == 0 && TryDecode(found.Stdout, out var existing)) return existing;
 
-                var key = RandomNumberGenerator.GetBytes(32);
-                var store = runner.Run("secret-tool", ["store", "--label=PrivatePaste", .. Attributes], Convert.ToBase64String(key));
-                if (store.ExitCode == 0) return key;
+                // Not found is exit 1 with nothing on stdout or stderr. Anything else (D-Bus errors, a locked or missing
+                // keyring, an unreadable value) must not trigger a store: it could replace a key that is merely unreachable.
+                var notFound = found.ExitCode == 1 && found.Stdout.Length == 0 && string.IsNullOrWhiteSpace(found.Stderr);
+                if (notFound)
+                {
+                    var key = RandomNumberGenerator.GetBytes(32);
+                    var store = runner.Run("secret-tool", ["store", "--label=PrivatePaste", .. Attributes], Convert.ToBase64String(key));
+                    if (store.ExitCode == 0) return key;
+                }
             }
             catch (Win32Exception)
             {
                 // secret-tool is not installed.
+            }
+            catch (TimeoutException)
+            {
+                // Hung (no keyring daemon to answer): use the key file. The result is cached, so this costs one timeout per session.
             }
             return CreateKeyFile();
         }
