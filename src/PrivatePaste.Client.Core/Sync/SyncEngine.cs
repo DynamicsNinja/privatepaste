@@ -82,6 +82,11 @@ public sealed class SyncEngine(
     public event EventHandler? Revoked;
     /// <summary>A recovered failure (connect error, clipboard write failure, failed image fetch, ...), for logging.</summary>
     public event EventHandler<SyncError>? Error;
+    /// <summary>
+    /// A clip from another device (live, or the single catch-up clip) was written to the clipboard. Raised only after the
+    /// write succeeded; never for this device's own clips, backfill or history-only clips, or while paused.
+    /// </summary>
+    public event EventHandler<ClipDto>? ClipApplied;
 
     /// <summary>Runs the loop on a background task. No-op if already running or after a revoke.</summary>
     public void Start()
@@ -405,8 +410,9 @@ public sealed class SyncEngine(
     {
         try
         {
-            await coordinator.ApplyRemoteAsync(clip, ct).ConfigureAwait(false);
+            var written = await coordinator.ApplyRemoteAsync(clip, ct).ConfigureAwait(false);
             _lastApplied = (clip.Id, clip.Seq);
+            if (written) Raise(ClipApplied, clip);
         }
         catch (UnauthorizedApiException) { throw; }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

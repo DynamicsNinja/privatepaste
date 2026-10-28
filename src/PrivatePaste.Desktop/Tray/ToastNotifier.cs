@@ -17,13 +17,19 @@ public sealed class ToastNotifier : INotifier
     private ToastWindow? _window;
     private DispatcherTimer? _timer;
 
-    public void Notify(string message) => Dispatcher.UIThread.Post(() => Show(message));
+    public void Notify(string message) => Dispatcher.UIThread.Post(() => Show(w => w.Message = message));
 
-    private void Show(string message)
+    /// <summary>
+    /// Shows the "clip arrived" card. Clips arriving in quick succession update the one toast in place and restart its
+    /// timer; no windows stack up. Never takes the focus. Safe to call from any thread (it only posts to the UI thread).
+    /// </summary>
+    public void NotifyClip(ClipToast toast) => Dispatcher.UIThread.Post(() => Show(w => w.ShowClip(toast)));
+
+    private void Show(Action<ToastWindow> fill)
     {
         _window ??= new ToastWindow();
         _timer ??= CreateTimer();
-        _window.Message = message;
+        fill(_window);
         _timer.Stop();
         if (!_window.IsVisible)
         {

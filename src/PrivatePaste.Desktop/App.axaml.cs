@@ -65,6 +65,10 @@ public partial class App : Application
             if (!_quitting) ShowSignIn();
         });
 
+        // A clip from another device just landed on the clipboard (the host checks the setting). Raised on the sync loop:
+        // build the content there and only post to the UI thread, so the loop never waits for the UI.
+        _host.ClipArrived += (_, clip) => notifier.NotifyClip(ClipToast.For(clip));
+
         // OS logoff/shutdown or any other exit: stop the engine (it saves the cache) before the process ends.
         desktop.Exit += (_, _) => StopHost();
 
@@ -125,7 +129,8 @@ public partial class App : Application
         var vm = new SettingsViewModel(
             server: s.ServerUrl?.TrimEnd('/') ?? "", deviceName: s.DeviceName, hotkey: s.Hotkey, autostart: s.Autostart,
             autostartLabel: _host.Platform.AutostartLabel,
-            applyHotkey: _host.SetHotkey, setAutostart: _host.SetAutostart, signOut: _host.SignOutAsync);
+            applyHotkey: _host.SetHotkey, setAutostart: _host.SetAutostart, signOut: _host.SignOutAsync,
+            notifyOnClipArrival: s.NotifyOnClipArrival, setNotifyOnClipArrival: _host.SetNotifyOnClipArrival);
         var window = new SettingsWindow { DataContext = vm };
         window.Closed += (_, _) => _settings = null;
         _settings = window;

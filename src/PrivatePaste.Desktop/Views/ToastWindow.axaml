@@ -7,13 +7,34 @@
         Background="Transparent" TransparencyLevelHint="Transparent">
   <Border Background="{DynamicResource PpSurface}" BorderBrush="{DynamicResource PpLine}" BorderThickness="1"
           CornerRadius="{StaticResource PpPanelRadius}" Padding="16,12" MaxWidth="360">
-    <StackPanel Orientation="Horizontal" Spacing="12">
-      <Image Source="avares://PrivatePaste/Assets/app-icon-512.png" Width="22" Height="22" VerticalAlignment="Top">
-        <Image.Clip>
-          <RectangleGeometry Rect="0,0,22,22" RadiusX="6" RadiusY="6" />
-        </Image.Clip>
-      </Image>
-      <TextBlock x:Name="MessageText" TextWrapping="Wrap" MaxWidth="290" VerticalAlignment="Center" />
-    </StackPanel>
+    <Panel>
+      <!-- A plain message (errors, status). -->
+      <StackPanel x:Name="MessagePanel" Orientation="Horizontal" Spacing="12">
+        <Image Source="avares://PrivatePaste/Assets/app-icon-512.png" Width="22" Height="22" VerticalAlignment="Top">
+          <Image.Clip>
+            <RectangleGeometry Rect="0,0,22,22" RadiusX="6" RadiusY="6" />
+          </Image.Clip>
+        </Image>
+        <TextBlock x:Name="MessageText" TextWrapping="Wrap" MaxWidth="290" VerticalAlignment="Center" />
+      </StackPanel>
+
+      <!-- A clip from another device just landed on the clipboard: platform icon, "From {device}", one-line preview. -->
+      <Grid x:Name="ClipPanel" IsVisible="False" Width="326" ColumnDefinitions="Auto,*" ColumnSpacing="12">
+        <Border Width="32" Height="32" CornerRadius="{StaticResource PpControlRadius}" Background="{DynamicResource PpRaised}"
+                VerticalAlignment="Center">
+          <Viewbox x:Name="ClipPlatformIcon" Width="18" Height="18">
+            <Canvas Width="24" Height="24">
+              <Path x:Name="ClipPlatformPath" Stroke="{DynamicResource PpAccent}" StrokeThickness="2"
+                    StrokeLineCap="Round" StrokeJoin="Round" />
+            </Canvas>
+          </Viewbox>
+        </Border>
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock x:Name="ClipTitle" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxLines="1" />
+          <TextBlock x:Name="ClipPreview" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                     TextTrimming="CharacterEllipsis" MaxLines="1" />
+        </StackPanel>
+      </Grid>
+    </Panel>
   </Border>
 </Window>

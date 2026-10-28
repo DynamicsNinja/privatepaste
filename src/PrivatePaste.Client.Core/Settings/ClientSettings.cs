@@ -6,4 +6,6 @@ public sealed record ClientSettings(
     string Hotkey = "Ctrl+Shift+V",
     bool Autostart = true,
     bool Paused = false,
-    Guid? DeviceId = null);
+    Guid? DeviceId = null,
+    // A settings file from before this key existed loads as true (the constructor default).
+    bool NotifyOnClipArrival = true);

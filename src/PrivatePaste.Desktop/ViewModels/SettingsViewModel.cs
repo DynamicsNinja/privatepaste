@@ -11,11 +11,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action<HotkeyGesture> _applyHotkey;
     private readonly Action<bool> _setAutostart;
     private readonly Func<Task> _signOut;
+    private readonly Action<bool> _setNotifyOnClipArrival;
     private string _appliedHotkey;
 
     public SettingsViewModel(
         string server, string deviceName, string hotkey, bool autostart, string autostartLabel,
-        Action<HotkeyGesture> applyHotkey, Action<bool> setAutostart, Func<Task> signOut)
+        Action<HotkeyGesture> applyHotkey, Action<bool> setAutostart, Func<Task> signOut,
+        bool notifyOnClipArrival = true, Action<bool>? setNotifyOnClipArrival = null)
     {
         Server = server;
         DeviceName = deviceName;
@@ -26,6 +28,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         _applyHotkey = applyHotkey;
         _setAutostart = setAutostart;
         _signOut = signOut;
+        _notifyOnClipArrival = notifyOnClipArrival;
+        _setNotifyOnClipArrival = setNotifyOnClipArrival ?? (_ => { });
     }
 
     public string Server { get; }
@@ -45,7 +49,13 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnHotkeyChanged(string value) => HotkeyError = null;
 
+    /// <summary>Show a toast when a clip from another device lands on the clipboard. Persisted; on by default.</summary>
+    [ObservableProperty]
+    private bool _notifyOnClipArrival;
+
     partial void OnStartWithOsChanged(bool value) => _setAutostart(value);
+
+    partial void OnNotifyOnClipArrivalChanged(bool value) => _setNotifyOnClipArrival(value);
 
     /// <summary>Validates the typed hotkey; a valid, changed one is applied in canonical form.</summary>
     [RelayCommand]

@@ -32,6 +32,29 @@ public class SettingsTests
         Assert.True(s.Autostart);
         Assert.Equal("Ctrl+Shift+V", s.Hotkey);
         Assert.False(s.Paused);
+        Assert.True(s.NotifyOnClipArrival);
+    }
+
+    [Fact]
+    public void Old_settings_file_without_the_notify_key_loads_with_notifications_on()
+    {
+        var dir = TempDir();
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "settings.json"),
+            """{"serverUrl":"https://x.io/","deviceName":"Laptop","hotkey":"Ctrl+Shift+V","autostart":true,"paused":false,"deviceId":null}""");
+        var s = new SettingsStore(dir).Load();
+        Assert.Equal("Laptop", s.DeviceName);
+        Assert.True(s.NotifyOnClipArrival);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Notify_on_clip_arrival_roundtrips(bool value)
+    {
+        var store = new SettingsStore(TempDir());
+        store.Save(new ClientSettings(DeviceName: "Laptop", NotifyOnClipArrival: value));
+        Assert.Equal(value, store.Load().NotifyOnClipArrival);
     }
 
     [Fact]

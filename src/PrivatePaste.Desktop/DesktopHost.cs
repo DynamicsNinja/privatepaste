@@ -127,6 +127,12 @@ public sealed class DesktopHost : IAsyncDisposable
     public event EventHandler? SignedOut;
     /// <summary>A new hotkey was saved (Task 9 re-registers the global hook).</summary>
     public event EventHandler<HotkeyGesture>? HotkeyChanged;
+    /// <summary>
+    /// A clip from another device was just written to the clipboard by sync (see <see cref="SyncEngine.ClipApplied"/>) and
+    /// <see cref="ClientSettings.NotifyOnClipArrival"/> is on. Raised on the sync engine's loop: handlers must be quick and
+    /// marshal to the UI thread. Never raised for popup picks or restores (those do not go through the engine).
+    /// </summary>
+    public event EventHandler<ClipDto>? ClipArrived;
 
     // ======================================================================== Startup
 
@@ -324,6 +330,10 @@ public sealed class DesktopHost : IAsyncDisposable
             if (_session == session) StateChanged?.Invoke(this, state);
         };
         engine.Error += (_, error) => _log.Error(error.Message, error.Exception);
+        engine.ClipApplied += (_, clip) =>
+        {
+            if (_session == session && !_paused && _settings.NotifyOnClipArrival) ClipArrived?.Invoke(this, clip);
+        };
         // Never block the engine loop: sign out on another task.
         engine.Revoked += (_, _) => _ = Task.Run(() => OnRevokedAsync(session));
 
@@ -455,6 +465,8 @@ public sealed class DesktopHost : IAsyncDisposable
         UpdateSettings(s => s with { Hotkey = gesture.ToString() });
         HotkeyChanged?.Invoke(this, gesture);
     }
+
+    public void SetNotifyOnClipArrival(bool enabled) => UpdateSettings(s => s with { NotifyOnClipArrival = enabled });
 
     public void SetAutostart(bool enabled)
     {

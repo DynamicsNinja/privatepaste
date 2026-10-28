@@ -38,7 +38,11 @@
                          IsVisible="{Binding HotkeyError, Converter={x:Static ObjectConverters.IsNotNull}}" />
             </StackPanel>
 
-            <CheckBox IsChecked="{Binding StartWithOs}" Content="{Binding AutostartLabel}" />
+            <StackPanel Spacing="4">
+              <CheckBox IsChecked="{Binding StartWithOs}" Content="{Binding AutostartLabel}" />
+              <CheckBox x:Name="NotifyOnClipArrivalBox" IsChecked="{Binding NotifyOnClipArrival}"
+                        Content="Notify when a clip arrives" />
+            </StackPanel>
           </StackPanel>
         </Border>
 

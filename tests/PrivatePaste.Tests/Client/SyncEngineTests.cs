@@ -38,6 +38,8 @@ public class SyncEngineTests : IAsyncLifetime
     private int _revoked;
     private volatile bool _paused;
     private readonly ConcurrentQueue<SyncError> _errors = new();
+    /// <summary>Every <see cref="SyncEngine.ClipApplied"/> of every engine, in order.</summary>
+    private readonly ConcurrentQueue<ClipDto> _appliedEvents = new();
 
     /// <summary>When set, the next connect attempts consult it: return an exception to fail that attempt.</summary>
     private Func<int, Exception?>? _connectFailure;
@@ -96,6 +98,7 @@ public class SyncEngineTests : IAsyncLifetime
         engine.StateChanged += (_, s) => _states.Enqueue(s);
         engine.Revoked += (_, _) => Interlocked.Increment(ref _revoked);
         engine.Error += (_, e) => _errors.Enqueue(e);
+        engine.ClipApplied += (_, c) => _appliedEvents.Enqueue(c);
         _engines.Add(engine);
         return engine;
     }
@@ -124,6 +127,77 @@ public class SyncEngineTests : IAsyncLifetime
     private bool Cached(string text) => _cache.Items.Any(i => i.Clip.Text == text);
 
     private int Count(SyncState s) => _states.Count(x => x == s);
+
+    private string[] Notified() => _appliedEvents.Select(c => c.Text ?? "").ToArray();
+
+    // ---------------------------------------------------------------- ClipApplied (the "clip arrived" toast)
+
+    [Fact]
+    public async Task Clip_applied_is_raised_once_for_a_live_clip_from_another_device()
+    {
+        await StartConnectedAsync();
+
+        await _apiB.UploadTextAsync("\n  first line of the clip  \nsecond line", null, false);
+
+        await WaitUntilAsync(() => !_appliedEvents.IsEmpty);
+        await Task.Delay(100);   // nothing else follows
+        var clip = Assert.Single(_appliedEvents);
+        Assert.Equal("B", clip.SourceDeviceName);
+        Assert.Equal("windows", clip.SourceDevicePlatform);
+        var toast = PrivatePaste.Desktop.Tray.ClipToast.For(clip);
+        Assert.Equal("From B", toast.Title);
+        Assert.Equal("first line of the clip", toast.Preview);
+        Assert.Equal("windows", toast.Platform.Key);
+    }
+
+    [Fact]
+    public async Task Clip_applied_is_not_raised_for_own_or_backfilled_clips()
+    {
+        await StartConnectedAsync();
+
+        await _apiA.UploadTextAsync("mine", null, false);
+        await _apiB.UploadTextAsync("old", null, backfill: true);
+        await _apiB.UploadTextAsync("sentinel", null, false);   // messages are handled in order
+
+        await WaitUntilAsync(() => Written().Contains("sentinel") && !_appliedEvents.IsEmpty);
+        Assert.Equal(["sentinel"], Notified());
+    }
+
+    [Fact]
+    public async Task Clip_applied_is_not_raised_when_the_clipboard_write_fails()
+    {
+        await StartConnectedAsync();
+        _clip.WriteFailure = new IOException("clipboard locked");
+        await _apiB.UploadTextAsync("locked", null, false);
+        await WaitUntilAsync(() => !_errors.IsEmpty && Cached("locked"));
+
+        _clip.WriteFailure = null;
+        await _apiB.UploadTextAsync("works", null, false);
+        await WaitUntilAsync(() => Written().Contains("works") && !_appliedEvents.IsEmpty);
+        Assert.Equal(["works"], Notified());
+    }
+
+    [Fact]
+    public async Task Clip_applied_is_not_raised_for_clips_that_arrive_while_paused()
+    {
+        var engine = await PauseWhileBUploadsAsync();
+        Assert.Equal(["first"], Notified());
+
+        _paused = false;
+        await WaitUntilAsync(() => engine.State == SyncState.Connected, AdvanceWhilePaused(engine));
+        Assert.Equal(["first"], Notified());   // the catch-up after a pause is history only
+    }
+
+    [Fact]
+    public async Task Clip_applied_is_raised_once_for_the_single_catch_up_clip()
+    {
+        await PrimeAppliedAsync();
+        await UploadXyzWhileStoppedAsync();
+
+        await StartConnectedAsync();
+
+        Assert.Equal(["first", "z"], Notified());
+    }
 
     [Fact]
     public async Task Live_clip_from_other_device_is_applied()

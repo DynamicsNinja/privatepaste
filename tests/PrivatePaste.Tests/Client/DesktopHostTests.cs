@@ -378,6 +378,46 @@ public class DesktopHostTests : IAsyncLifetime
         await WaitUntilAsync(() => Volatile.Read(ref changes) > before);
     }
 
+    [Fact]
+    public async Task Clip_arrived_is_raised_for_a_live_clip_from_another_device_unless_turned_off()
+    {
+        var host = await SignedInHostAsync();
+        Assert.True(host.Settings.NotifyOnClipArrival);   // on by default
+        var arrived = new System.Collections.Concurrent.ConcurrentQueue<ClipDto>();
+        host.ClipArrived += (_, c) => arrived.Enqueue(c);
+        var phone = await _server.LoginAsync("Phone", "android");
+
+        async Task<ClipDto> UploadAsync(string text)
+        {
+            var r = await phone.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
+            r.EnsureSuccessStatusCode();
+            var clip = (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+            await WaitUntilAsync(() => _clipboard.Writes.OfType<ClipboardContent.Text>().Any(w => w.Value == text));
+            return clip;
+        }
+
+        await UploadAsync("one");
+        await WaitUntilAsync(() => !arrived.IsEmpty);
+        var first = Assert.Single(arrived);
+        Assert.Equal("one", first.Text);
+        Assert.Equal("Phone", first.SourceDeviceName);
+        Assert.Equal("android", first.SourceDevicePlatform);
+
+        // The user's own pick from the popup writes the clipboard too, but is not an arrival.
+        Assert.True(await host.Coordinator!.ApplyRemoteAsync(first with { Hash = "picked-again" }, CancellationToken.None));
+
+        host.SetNotifyOnClipArrival(false);
+        Assert.False(NewSettingsStore().Load().NotifyOnClipArrival);   // persisted
+        await UploadAsync("two");
+        await Task.Delay(100);
+        Assert.Single(arrived);
+
+        host.SetNotifyOnClipArrival(true);
+        await UploadAsync("three");
+        await WaitUntilAsync(() => arrived.Count == 2);
+        Assert.Equal(["one", "three"], arrived.Select(c => c.Text));
+    }
+
     private sealed class BlockedUiContext : SynchronizationContext
     {
         public override void Post(SendOrPostCallback d, object? state) { }   // never pumped while the thread is blocked

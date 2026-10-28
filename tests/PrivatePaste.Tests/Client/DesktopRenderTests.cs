@@ -67,8 +67,90 @@ public class DesktopRenderTests
     [Fact]
     public Task Toast_window_renders() => Session.Value.Dispatch(() =>
     {
-        Render(new ToastWindow { Message = "Clip too large to sync (text over 1 MB)." }, "dark", "toast");
+        Render(new ToastWindow { Message = "Clip too large to sync (text over 1 MB)." }, "dark", "toast", w =>
+        {
+            Assert.True(Find<StackPanel>(w, "MessagePanel").IsVisible);
+            Assert.False(Find<Grid>(w, "ClipPanel").IsVisible);
+        });
     }, CancellationToken.None);
+
+    private static PrivatePaste.Protocol.ClipDto ToastClip(PrivatePaste.Protocol.ClipKind kind, string? text, string device,
+        string? platform, int? w = null, int? h = null) =>
+        new(Guid.NewGuid(), 1, kind, text, "h", w, h, 100, Guid.NewGuid(), device, DateTimeOffset.UtcNow)
+        {
+            SourceDevicePlatform = platform,
+        };
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Clip_toast_renders(string theme) => Session.Value.Dispatch(() =>
+    {
+        var toast = PrivatePaste.Desktop.Tray.ClipToast.For(ToastClip(PrivatePaste.Protocol.ClipKind.Text,
+            "\n  ssh deploy@paste.example.com 'docker compose pull && docker compose up -d --remove-orphans --wait'\nexit",
+            "Pixel 9", "android"));
+        var window = new ToastWindow();
+        window.Message = "an earlier message";   // a clip replaces the message in the same window
+        window.ShowClip(toast);
+        Render(window, theme, "toast-clip", w =>
+        {
+            Assert.False(Find<StackPanel>(w, "MessagePanel").IsVisible);
+            Assert.True(Find<Grid>(w, "ClipPanel").IsVisible);
+            Assert.Equal("From Pixel 9", Find<TextBlock>(w, "ClipTitle").Text);
+            var preview = Find<TextBlock>(w, "ClipPreview").Text!;
+            Assert.Equal(PrivatePaste.Desktop.Tray.ClipToast.PreviewLength, preview.Length);
+            Assert.EndsWith("…", preview);
+            Assert.Equal("Android", Avalonia.Automation.AutomationProperties.GetName(Find<Viewbox>(w, "ClipPlatformIcon")));
+            Assert.IsType<StreamGeometry>(Find<Avalonia.Controls.Shapes.Path>(w, "ClipPlatformPath").Data);
+            Assert.True(w.Bounds.Width <= 362, $"toast is {w.Bounds.Width} wide");
+            Assert.False(w.ShowActivated);   // never steals the focus
+        });
+
+        // A second clip right after updates the same card in place.
+        var image = PrivatePaste.Desktop.Tray.ClipToast.For(ToastClip(PrivatePaste.Protocol.ClipKind.Image, null, "", "web", 1280, 720));
+        var again = new ToastWindow();
+        again.ShowClip(toast);
+        again.ShowClip(image);
+        Render(again, theme, "toast-clip-image", w =>
+        {
+            Assert.Equal("From another device", Find<TextBlock>(w, "ClipTitle").Text);
+            Assert.Equal("Image 1280×720", Find<TextBlock>(w, "ClipPreview").Text);
+            Assert.Equal("Web", Avalonia.Automation.AutomationProperties.GetName(Find<Viewbox>(w, "ClipPlatformIcon")));
+        });
+    }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("short", "short")]
+    [InlineData("\n\n   \n  indented first line  \nsecond", "indented first line")]
+    [InlineData("a\r\nb", "a")]
+    [InlineData("", "")]
+    public void Clip_toast_preview_is_the_first_non_empty_line(string text, string expected) =>
+        Assert.Equal(expected, PrivatePaste.Desktop.Tray.ClipToast.FormatPreview(
+            ToastClip(PrivatePaste.Protocol.ClipKind.Text, text, "PC", "windows")));
+
+    [Fact]
+    public void Clip_toast_preview_is_cut_to_80_chars_with_an_ellipsis()
+    {
+        var exactly = new string('x', 80);
+        Assert.Equal(exactly, PrivatePaste.Desktop.Tray.ClipToast.FormatPreview(
+            ToastClip(PrivatePaste.Protocol.ClipKind.Text, exactly, "PC", "windows")));
+        var cut = PrivatePaste.Desktop.Tray.ClipToast.FormatPreview(
+            ToastClip(PrivatePaste.Protocol.ClipKind.Link, new string('y', 81), "PC", "windows"));
+        Assert.Equal(new string('y', 79) + "…", cut);
+    }
+
+    [Theory]
+    [InlineData("MacBook", "macos", "From MacBook", "macos")]
+    [InlineData("  ", "linux", "From another device", "linux")]
+    [InlineData(null, null, "From another device", "unknown")]
+    public void Clip_toast_title_and_icon(string? device, string? platform, string title, string key)
+    {
+        var toast = PrivatePaste.Desktop.Tray.ClipToast.For(
+            ToastClip(PrivatePaste.Protocol.ClipKind.Image, null, device!, platform, 640, 480));
+        Assert.Equal(title, toast.Title);
+        Assert.Equal(key, toast.Platform.Key);
+        Assert.Equal("Image 640×480", toast.Preview);
+    }
 
     [Theory]
     [InlineData("dark")]

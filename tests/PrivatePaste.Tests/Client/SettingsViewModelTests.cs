@@ -7,13 +7,28 @@ public class SettingsViewModelTests
 {
     private readonly List<HotkeyGesture> _applied = [];
     private readonly List<bool> _autostart = [];
+    private readonly List<bool> _notify = [];
     private int _signOuts;
 
-    private SettingsViewModel Create(string hotkey = "Ctrl+Shift+V", bool autostart = true) => new(
+    private SettingsViewModel Create(string hotkey = "Ctrl+Shift+V", bool autostart = true, bool notify = true) => new(
         server: "https://paste.example.com", deviceName: "PC-work", hotkey: hotkey, autostart: autostart,
         autostartLabel: "Start with Windows",
         applyHotkey: g => _applied.Add(g), setAutostart: v => _autostart.Add(v),
-        signOut: () => { _signOuts++; return Task.CompletedTask; });
+        signOut: () => { _signOuts++; return Task.CompletedTask; },
+        notifyOnClipArrival: notify, setNotifyOnClipArrival: v => _notify.Add(v));
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Notify_on_clip_arrival_shows_the_setting_and_calls_back_on_change(bool initial)
+    {
+        var vm = Create(notify: initial);
+        Assert.Equal(initial, vm.NotifyOnClipArrival);
+        Assert.Empty(_notify);   // showing the stored value is not a change
+        vm.NotifyOnClipArrival = !initial;
+        vm.NotifyOnClipArrival = initial;
+        Assert.Equal([!initial, initial], _notify);
+    }
 
     [Fact]
     public void Shows_current_values()
