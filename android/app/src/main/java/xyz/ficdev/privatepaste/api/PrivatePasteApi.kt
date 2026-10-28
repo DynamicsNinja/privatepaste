@@ -41,6 +41,9 @@ class PrivatePasteApi(
     private val token: String?,
     private val client: OkHttpClient,
 ) {
+    /** Timeout of calls that are not uploads. Tests shorten it. */
+    internal var requestTimeout: Duration = REQUEST_TIMEOUT
+
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun login(password: String, deviceName: String): LoginResponse {
@@ -50,12 +53,12 @@ class PrivatePasteApi(
             put("platform", "android")
         }
         val request = request("api/auth/login", authorized = false).post(jsonBody(body)).build()
-        return execute(request, REQUEST_TIMEOUT, isLogin = true) { decode(it, LoginResponse.serializer()) }
+        return execute(request, requestTimeout, isLogin = true) { decode(it, LoginResponse.serializer()) }
     }
 
     suspend fun logout() {
         val request = request("api/auth/logout").post(ByteArray(0).toRequestBody()).build()
-        execute(request, REQUEST_TIMEOUT) { }
+        execute(request, requestTimeout) { }
     }
 
     suspend fun uploadText(text: String, copiedAt: Instant?, backfill: Boolean): ClipDto {
@@ -92,21 +95,21 @@ class PrivatePasteApi(
             if (!cursor.isNullOrEmpty()) addQueryParameter("cursor", cursor)
             addQueryParameter("limit", limit.toString())
         }
-        return execute(get(url), REQUEST_TIMEOUT) { decode(it, ClipPage.serializer()) }
+        return execute(get(url), requestTimeout) { decode(it, ClipPage.serializer()) }
     }
 
     /** Bumps the clip as freshly copied. Null if it no longer exists. */
     suspend fun restore(id: String): ClipDto? {
-        val request = request(url("api/clips/$id/restore")).post(ByteArray(0).toRequestBody()).build()
-        return execute(request, REQUEST_TIMEOUT, allowNotFound = true) {
+        val request = request(url("api/clips") { addPathSegment(id); addPathSegment("restore") }).post(ByteArray(0).toRequestBody()).build()
+        return execute(request, requestTimeout, allowNotFound = true) {
             if (it.code == 404) null else decode(it, ClipDto.serializer())
         }
     }
 
     /** False if the clip no longer exists. */
     suspend fun delete(id: String): Boolean {
-        val request = request(url("api/clips/$id")).delete().build()
-        return execute(request, REQUEST_TIMEOUT, allowNotFound = true) { it.code != 404 }
+        val request = request(url("api/clips") { addPathSegment(id) }).delete().build()
+        return execute(request, requestTimeout, allowNotFound = true) { it.code != 404 }
     }
 
     suspend fun sync(afterSeq: Long, limit: Int = 200): SyncPage {
@@ -114,12 +117,12 @@ class PrivatePasteApi(
             addQueryParameter("afterSeq", afterSeq.toString())
             addQueryParameter("limit", limit.toString())
         }
-        return execute(get(url), REQUEST_TIMEOUT) { decode(it, SyncPage.serializer()) }
+        return execute(get(url), requestTimeout) { decode(it, SyncPage.serializer()) }
     }
 
-    suspend fun image(id: String): ByteArray = bytes(url("api/clips/$id/image"))
+    suspend fun image(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("image") })
 
-    suspend fun thumbnail(id: String): ByteArray = bytes(url("api/clips/$id/thumbnail"))
+    suspend fun thumbnail(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("thumbnail") })
 
     /** Opens `GET /ws` with the bearer header. The caller owns the socket and its reconnect policy. */
     fun webSocket(listener: WebSocketListener): WebSocket {
@@ -129,7 +132,7 @@ class PrivatePasteApi(
     }
 
     private suspend fun bytes(url: HttpUrl): ByteArray =
-        execute(get(url), REQUEST_TIMEOUT) {
+        execute(get(url), requestTimeout) {
             try {
                 it.body.bytes()
             } catch (e: IOException) {
@@ -204,6 +207,8 @@ class PrivatePasteApi(
                         Result.failure(e)
                     } catch (e: IOException) {
                         Result.failure(ApiException.Transient(e.message ?: "Network error", e))
+                    } catch (e: Exception) {
+                        Result.failure(ApiException.Transient("Unexpected response from the server", e))
                     }
                 }
                 if (cont.isActive) cont.resumeWith(result)

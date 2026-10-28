@@ -270,6 +270,18 @@ class PrivatePasteApiTest {
         assertEquals(Duration.ofMinutes(5), PrivatePasteApi.uploadTimeout(100L * 1024 * 1024))
     }
 
+    @Test fun idWithSlashStaysOneEncodedSegment() = runBlocking<Unit> {
+        server.enqueue(MockResponse().setResponseCode(204))
+        api().delete("a/b")
+        assertEquals("/api/clips/a%2Fb", take().path)
+    }
+
+    @Test fun callTimeoutFiresAsTransient() = runBlocking<Unit> {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val a = api().also { it.requestTimeout = Duration.ofMillis(200) }
+        assertThrowsApi<ApiException.Transient> { a.clips(null, null) }
+    }
+
     private suspend inline fun <reified T : ApiException> assertThrowsApi(block: () -> Unit): T {
         try {
             block()

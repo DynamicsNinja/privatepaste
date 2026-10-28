@@ -55,4 +55,11 @@ class ServerUrlTest {
             assertEquals(s, "That doesn't look like a server address.", rejected(s))
         }
     }
+
+    @Test
+    fun credentialsAreRejected() {
+        val msg = "Remove the user name and password from the address."
+        assertEquals(msg, rejected("https://user:pw@h"))
+        assertEquals(msg, rejected("https://user@h/sub"))
+    }
 }

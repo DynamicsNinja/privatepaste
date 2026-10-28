@@ -12,10 +12,20 @@ object ContentHash {
 
     /** [rgba] must be RGBA8888, unpremultiplied, row-major, with no row padding. */
     fun pixels(rgba: ByteArray, width: Int, height: Int): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        digest.update("i:${width}x$height:".toByteArray(Charsets.UTF_8))
-        digest.update(rgba)
-        return hex(digest.digest())
+        val hasher = PixelHasher(width, height)
+        hasher.update(rgba, 0, rgba.size)
+        return hasher.finish()
+    }
+
+    /** Incremental [pixels]: feed the RGBA bytes in any chunking, then call [finish] once. */
+    class PixelHasher(width: Int, height: Int) {
+        private val digest = MessageDigest.getInstance("SHA-256").apply {
+            update("i:${width}x$height:".toByteArray(Charsets.UTF_8))
+        }
+
+        fun update(rgba: ByteArray, offset: Int, length: Int) = digest.update(rgba, offset, length)
+
+        fun finish(): String = hex(digest.digest())
     }
 
     private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }

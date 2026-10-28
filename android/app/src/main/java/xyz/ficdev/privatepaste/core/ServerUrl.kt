@@ -15,6 +15,7 @@ object ServerUrl {
         require(text.isNotEmpty()) { "Enter a server address." }
         val url = text.toHttpUrlOrNull()
             ?: throw IllegalArgumentException("That doesn't look like a server address.")
+        require(url.username.isEmpty() && url.password.isEmpty()) { "Remove the user name and password from the address." }
         if (!url.isHttps && url.host !in loopbackHosts) {
             throw IllegalArgumentException("Use an https:// address (http:// is only allowed for localhost).")
         }
