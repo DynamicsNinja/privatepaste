@@ -202,28 +202,30 @@ public sealed class ClipboardCoordinator(
     /// Writes a clip from another device to the clipboard. Throws if the clipboard write fails (non-auth, e.g. the
     /// clipboard is locked by another process) after undoing the echo bookkeeping: callers MUST catch it and decide
     /// whether to retry. Network errors fetching an image also propagate (see <see cref="PrivatePasteApi"/>).
+    /// Returns whether the clipboard was written: false when skipped (paused, an image that does not decode, a text clip
+    /// without text), in which case callers must not paste.
     /// </summary>
-    public async Task ApplyRemoteAsync(ClipDto clip, CancellationToken ct)
+    public async Task<bool> ApplyRemoteAsync(ClipDto clip, CancellationToken ct)
     {
-        if (isPaused()) return;
+        if (isPaused()) return false;
         ClipboardContent content;
         if (clip.Kind == ClipKind.Image)
         {
             var png = await api.GetImageAsync(clip.Id, ct).ConfigureAwait(false);
             try { ImageHashing.HashPng(png); }
-            catch (InvalidDataException) { return; }   // e.g. a captive-portal page: transient, skip without side effects
+            catch (InvalidDataException) { return false; }   // e.g. a captive-portal page: transient, skip without side effects
             content = new ClipboardContent.Image(png);
         }
         else
         {
-            if (clip.Text is null) return;
+            if (clip.Text is null) return false;
             content = new ClipboardContent.Text(clip.Text);
         }
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (isPaused()) return;
+            if (isPaused()) return false;
             var previousHash = _lastLocalHash;
             echo.Remember(clip.Hash);
             _lastLocalHash = clip.Hash;
@@ -242,6 +244,7 @@ public sealed class ClipboardCoordinator(
             }
             cache.MarkApplied(clip);
             TrySaveCache();
+            return true;
         }
         finally { _gate.Release(); }
     }
