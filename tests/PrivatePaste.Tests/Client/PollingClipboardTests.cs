@@ -12,7 +12,12 @@ public class PollingClipboardTests
         public ClipboardContent? Current { get; set; }
         public ClipboardContent? Written { get; private set; }
         public int Reads;
-        public Task<ClipboardContent?> ReadAsync(CancellationToken ct) { Interlocked.Increment(ref Reads); return Task.FromResult(Current); }
+        public Task<ClipboardContent?> ReadAsync(CancellationToken ct)
+        {
+            var value = Current;               // capture first: Reads signals "this value was read"
+            Interlocked.Increment(ref Reads);
+            return Task.FromResult(value);
+        }
         public Task WriteAsync(ClipboardContent content, CancellationToken ct) { Written = content; Current = content; return Task.CompletedTask; }
     }
 
@@ -28,7 +33,7 @@ public class PollingClipboardTests
     private static async Task<bool> WaitUntil(Func<bool> cond)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!cond() && DateTime.UtcNow < deadline) await Task.Yield();
+        while (!cond() && DateTime.UtcNow < deadline) await Task.Delay(1);
         return cond();
     }
 
