@@ -41,6 +41,8 @@ public class SyncEngineTests : IAsyncLifetime
 
     /// <summary>When set, the next connect attempts consult it: return an exception to fail that attempt.</summary>
     private Func<int, Exception?>? _connectFailure;
+    /// <summary>When it returns true for an attempt, that connect never completes (and ignores cancellation).</summary>
+    private Func<int, bool>? _connectHangs;
     /// <summary>When set, wraps every socket the engine gets.</summary>
     private Func<WebSocket, WebSocket>? _wrapSocket;
     private readonly ConcurrentQueue<WebSocket> _sockets = new();
@@ -75,6 +77,7 @@ public class SyncEngineTests : IAsyncLifetime
         _connectTimes.Enqueue(_time.GetUtcNow());
         var n = Interlocked.Increment(ref _connects);
         if (_connectFailure?.Invoke(n) is { } failure) throw failure;
+        if (_connectHangs?.Invoke(n) == true) return await new TaskCompletionSource<WebSocket>().Task;
         var client = _server.Server.CreateWebSocketClient();
         client.ConfigureRequest = r => r.Headers.Authorization = "Bearer " + _tokenA;
         var socket = await client.ConnectAsync(new Uri(_server.Server.BaseAddress, "ws"), ct);
@@ -83,11 +86,12 @@ public class SyncEngineTests : IAsyncLifetime
         return socket;
     }
 
-    private SyncEngine CreateEngine(Backoff? backoff = null, IClipboardAccess? clipboard = null)
+    private SyncEngine CreateEngine(Backoff? backoff = null, IClipboardAccess? clipboard = null,
+        Func<CancellationToken, Task<WebSocket>>? connect = null)
     {
         var coordinator = _coordinator = new ClipboardCoordinator(clipboard ?? _clip, _coordApi, _cache, _queue,
             new EchoGuard(_time, TimeSpan.FromSeconds(30)), _notes, _time, () => _paused);
-        var engine = new SyncEngine(_apiA, _cache, coordinator, ConnectAsync, _idA, _time,
+        var engine = new SyncEngine(_apiA, _cache, coordinator, connect ?? ConnectAsync, _idA, _time,
             backoff ?? new Backoff(new Random(1)), () => _paused);
         engine.StateChanged += (_, s) => _states.Enqueue(s);
         engine.Revoked += (_, _) => Interlocked.Increment(ref _revoked);
@@ -360,6 +364,26 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.False(HasThumbnail(image.Id));
         Assert.Equal(SyncState.Connected, engine.State);
         Assert.Empty(_errors);
+    }
+
+    [Fact]
+    public async Task A_connect_that_never_completes_times_out_and_is_retried_after_backoff()
+    {
+        _connectHangs = n => n == 1;   // e.g. a TLS handshake or upgrade that stalls
+        var engine = CreateEngine(connect: ct =>
+            PrivatePaste.Desktop.DesktopHost.ConnectWithTimeoutAsync(ConnectAsync, _time, ct));
+        engine.Start();
+        await WaitUntilAsync(() => Volatile.Read(ref _connects) == 1);
+
+        _time.Advance(PrivatePaste.Desktop.DesktopHost.WebSocketConnectTimeout - TimeSpan.FromMilliseconds(1));
+        await Task.Delay(50);
+        Assert.Equal(SyncState.Connecting, engine.State);
+        _time.Advance(TimeSpan.FromMilliseconds(1));
+        await WaitUntilAsync(() => engine.State == SyncState.Offline);
+        await WaitUntilAsync(() => engine.State == SyncState.Connected, AdvanceWhileOffline(engine));
+
+        Assert.Equal(2, Volatile.Read(ref _connects));
+        Assert.Contains(_errors, e => e.Message == "Could not connect to the server." && e.Exception is TimeoutException);
     }
 
     [Fact]

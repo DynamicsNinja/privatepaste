@@ -309,7 +309,7 @@ public sealed class DesktopHost : IAsyncDisposable
             Platform.Clipboard, api, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused);
         var wsUri = WebSocketUri(http.BaseAddress!);
         var engine = new SyncEngine(
-            api, Cache, coordinator, ct => _transport.Connect(wsUri, token, ct), deviceId,
+            api, Cache, coordinator, ct => ConnectWithTimeoutAsync(t => _transport.Connect(wsUri, token, t), _time, ct), deviceId,
             _time, new Backoff(Random.Shared), () => _paused);
 
         var session = new Session(http, api, coordinator, engine);
@@ -333,6 +333,38 @@ public sealed class DesktopHost : IAsyncDisposable
         if (!text.EndsWith('/')) text += "/";
         // No client-wide timeout: PrivatePasteApi times each call itself (uploads scale with their size).
         return new HttpClient(_transport.CreateHandler()) { BaseAddress = new Uri(text), Timeout = Timeout.InfiniteTimeSpan };
+    }
+
+    public static readonly TimeSpan WebSocketConnectTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Runs a WebSocket connect with a <see cref="WebSocketConnectTimeout"/> limit, so a stalled TLS handshake or upgrade
+    /// becomes a normal connect failure (<see cref="TimeoutException"/>: the engine backs off and retries). The caller's
+    /// cancellation stays an OCE. A connect that ignores cancellation is abandoned and its late socket disposed.
+    /// </summary>
+    public static async Task<WebSocket> ConnectWithTimeoutAsync(Func<CancellationToken, Task<WebSocket>> connect, TimeProvider time,
+        CancellationToken ct)
+    {
+        using var timeout = new CancellationTokenSource(WebSocketConnectTimeout, time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        var attempt = connect(linked.Token);
+        try
+        {
+            return await attempt.WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException e) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            Abandon(attempt);
+            throw new TimeoutException($"The server did not accept the connection within {WebSocketConnectTimeout.TotalSeconds:0} s.", e);
+        }
+        catch (OperationCanceledException)
+        {
+            Abandon(attempt);
+            throw;
+        }
+
+        static void Abandon(Task<WebSocket> attempt) =>
+            attempt.ContinueWith(t => { if (t.IsCompletedSuccessfully) t.Result.Dispose(); }, TaskScheduler.Default);
     }
 
     /// <summary>{base}ws with ws/wss matching http/https.</summary>
