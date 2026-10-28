@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -173,7 +174,7 @@ fun SignInContent(
                             CircularProgressIndicator(
                                 modifier = Modifier.size(18.dp),
                                 strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = LocalContentColor.current,   // the button's content color (onPrimary, or disabled)
                             )
                         }
                         Text(stringResource(R.string.signin_button))

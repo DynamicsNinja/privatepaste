@@ -29,6 +29,7 @@
     <string name="history_empty">Nothing here yet. Copy something on your computer and it shows up here.</string>
     <string name="history_no_matches">No matches.</string>
     <string name="history_copied">Copied</string>
+    <string name="history_copy_failed">Couldn\'t copy the clip.</string>
     <string name="history_image_offline">Image not available offline</string>
     <string name="history_delete_failed">Couldn\'t delete the clip. Check your connection.</string>
     <string name="history_delete_title">Delete this clip from all your devices?</string>

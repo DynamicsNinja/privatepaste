@@ -1,5 +1,6 @@
 package xyz.ficdev.privatepaste.ui
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,7 @@ import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.history.ClipCopier
 import xyz.ficdev.privatepaste.ui.history.ClipRemote
 import xyz.ficdev.privatepaste.ui.history.HistoryViewModel
+import java.io.IOException
 import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -45,9 +47,14 @@ class HistoryViewModelTest {
     private val localImages = HashMap<String, ByteArray>()
     private val remote = FakeRemote()
 
+    private var failImageWrite = false
+
     private val copier = object : ClipCopier {
         override fun writeText(text: String) { events += "copyText:$text" }
-        override fun writeImage(clipId: String, png: ByteArray) { events += "copyImage:$clipId:${png.size}" }
+        override fun writeImage(clipId: String, png: ByteArray) {
+            events += "copyImage:$clipId:${png.size}"
+            if (failImageWrite) throw IOException("disk full")
+        }
     }
 
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
@@ -279,8 +286,58 @@ class HistoryViewModelTest {
         assertEquals(listOf<UiText>(UiText.Res(R.string.history_delete_failed)), messages)
     }
 
+    @Test
+    fun staleSearchResponseIsDropped() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 9, "abc cached"))
+        val gate = CompletableDeferred<Unit>()
+        remote.gates["ab|"] = gate
+        remote.pages["ab|"] = ClipPage(listOf(clip("old", 5, "ab from the server")), null)
+        remote.pages["abc|"] = ClipPage(listOf(clip("new", 4, "abc from the server")), null)
+        val vm = collecting(vm())
+
+        vm.onQueryChange("ab")
+        advanceTimeBy(301)
+        runCurrent()
+        assertEquals(listOf("clips:ab|"), events)   // in flight, suspended
+
+        vm.onQueryChange("abc")
+        advanceTimeBy(100)
+        gate.complete(Unit)                          // the "ab" answer arrives after the query moved on
+        runCurrent()
+        assertEquals(listOf("a"), vm.ids())
+
+        advanceUntilIdle()
+        assertEquals(listOf("clips:ab|", "clips:abc|"), events)
+        assertEquals(listOf("a", "new"), vm.ids())
+    }
+
+    @Test
+    fun imageWriteFailureSaysCouldNotCopy() = runTest(dispatcher) {
+        failImageWrite = true
+        localImages["img"] = ByteArray(4)
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.copy(clip("img", 1, text = null, kind = ClipKind.IMAGE))
+        advanceUntilIdle()
+        assertEquals(listOf("copyImage:img:4"), events)   // no restore after a failed local copy
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_copy_failed)), messages)
+    }
+
+    @Test
+    fun textClipWithoutTextIsNotCopied() = runTest(dispatcher) {
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.copy(clip("t", 1, text = null))
+        vm.copy(clip("l", 2, text = null, kind = ClipKind.LINK))
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), events)
+        assertEquals(emptyList<UiText>(), messages)
+    }
+
     private inner class FakeRemote : ClipRemote {
         val pages = HashMap<String, ClipPage>()
+        /** A response for a "q|cursor" key waits until its gate completes. */
+        val gates = HashMap<String, CompletableDeferred<Unit>>()
         val images = HashMap<String, ByteArray>()
         var failRestore = false
         var failDelete = false
@@ -288,6 +345,7 @@ class HistoryViewModelTest {
         override suspend fun clips(q: String?, cursor: String?, limit: Int): ClipPage {
             val key = "${q.orEmpty()}|${cursor.orEmpty()}"
             events += "clips:$key"
+            gates[key]?.await()
             return pages[key] ?: ClipPage(emptyList(), null)
         }
 

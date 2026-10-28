@@ -173,9 +173,13 @@ class HistoryViewModel(
         viewModelScope.launch {
             val api = remote()?.takeIf { isOnline() }
             when (clip.kind) {
-                ClipKind.TEXT, ClipKind.LINK -> copier.writeText(clip.text.orEmpty())
+                ClipKind.TEXT, ClipKind.LINK -> {
+                    val text = clip.text ?: return@launch   // malformed clip: nothing to copy, no "Copied"
+                    copier.writeText(text)
+                }
                 ClipKind.IMAGE -> {
-                    val png = cachedImage(clip.id) ?: api?.let { fetchImage(it, clip.id) }
+                    // The local lookup may read from disk.
+                    val png = withContext(io) { cachedImage(clip.id) } ?: api?.let { fetchImage(it, clip.id) }
                     if (png == null) {
                         _messages.trySend(UiText.Res(R.string.history_image_offline))
                         return@launch
@@ -185,7 +189,7 @@ class HistoryViewModel(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
-                        _messages.trySend(UiText.Res(R.string.history_image_offline))
+                        _messages.trySend(UiText.Res(R.string.history_copy_failed))
                         return@launch
                     }
                 }
