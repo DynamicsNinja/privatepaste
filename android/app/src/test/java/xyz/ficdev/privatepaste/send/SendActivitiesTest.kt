@@ -74,6 +74,22 @@ class ShareActivityTest {
     }
 
     @Test
+    fun shareActivitySendsStyledTextAsPlainText() {
+        f.respondWith { f.json(f.clipJson("c1", "bold words")) }
+        val styled = android.text.SpannableString("bold words").apply {
+            setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, 4, 0)
+        }
+        val intent = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, styled)
+
+        val controller = Robolectric.buildActivity(ShareActivity::class.java, intent).setup()
+        awaitFinish { controller.get().isFinishing }
+
+        assertEquals("Sent to your devices", awaitToast())
+        assertEquals(1, f.server.requestCount)
+        assertTrue(f.server.takeRequest().body.readUtf8().contains("bold words"))
+    }
+
+    @Test
     fun shareActivityImagePathSendsBytesFromContentUri() {
         f.respondWith { f.json(f.clipJson("i", "")) }
         val uri = android.net.Uri.parse("content://media/external/images/media/7")

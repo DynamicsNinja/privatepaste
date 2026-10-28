@@ -30,7 +30,7 @@ class ShareActivity : ComponentActivity() {
             finish()
             return
         }
-        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()   // styled text arrives as a Spanned
         val mime = intent.type.orEmpty()
         val stream = streamExtra()
         lifecycleScope.launch {
