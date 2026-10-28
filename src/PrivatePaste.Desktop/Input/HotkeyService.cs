@@ -16,8 +16,7 @@ namespace PrivatePaste.Desktop.Input;
 public sealed class HotkeyService : IDisposable
 {
     private readonly SimpleGlobalHook _hook = new();
-    private volatile HotkeyGesture? _gesture;
-    private volatile bool _keyHeld;
+    private readonly HotkeyMatcher _matcher = new();
     private long _mouse = Pack(0, 0);
     private int _started;
     private bool _disposed;
@@ -51,8 +50,7 @@ public sealed class HotkeyService : IDisposable
     public void Register(HotkeyGesture gesture)
     {
         if (_disposed) return;
-        _gesture = gesture;
-        _keyHeld = false;
+        _matcher.Gesture = gesture;
         if (Interlocked.Exchange(ref _started, 1) == 1) return;
         try
         {
@@ -68,7 +66,7 @@ public sealed class HotkeyService : IDisposable
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
     {
-        switch (Evaluate(e.Data.KeyCode, e.RawEvent.Mask, e.IsEventSimulated))
+        switch (_matcher.Evaluate(e.Data.KeyCode, e.RawEvent.Mask, e.IsEventSimulated))
         {
             case HotkeyDecision.Fire:
                 e.SuppressEvent = true;   // honoured on Windows and macOS; ignored elsewhere
@@ -80,44 +78,55 @@ public sealed class HotkeyService : IDisposable
         }
     }
 
-    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e) => Released(e.Data.KeyCode);
-
-    /// <summary>
-    /// The handler logic without the hook: simulated events (our own Ctrl+V) are ignored, the gesture fires once per physical
-    /// press (auto-repeat of the held key is swallowed so it neither re-fires nor leaks to the focused app), and modifiers
-    /// must match exactly.
-    /// </summary>
-    internal HotkeyDecision Evaluate(KeyCode key, EventMask mask, bool simulated)
-    {
-        var gesture = _gesture;
-        if (simulated || gesture is null || key != gesture.Key) return HotkeyDecision.Ignore;
-        // Exact modifier match: Ctrl+Shift+V must not fire for Ctrl+Shift+Alt+V.
-        if (Held(mask, EventMask.Ctrl) != gesture.Ctrl || Held(mask, EventMask.Shift) != gesture.Shift
-            || Held(mask, EventMask.Alt) != gesture.Alt || Held(mask, EventMask.Meta) != gesture.Meta)
-            return HotkeyDecision.Ignore;
-        if (_keyHeld) return HotkeyDecision.Swallow;
-        _keyHeld = true;
-        return HotkeyDecision.Fire;
-    }
-
-    /// <summary>Key-up of the gesture key re-arms it (any key-up of that key, whatever the modifiers).</summary>
-    internal void Released(KeyCode key)
-    {
-        if (_gesture is { } g && key == g.Key) _keyHeld = false;
-    }
-
-    private static bool Held(EventMask mask, EventMask flag) => (mask & flag) != 0;
-
+    private void OnKeyReleased(object? sender, KeyboardHookEventArgs e) => _matcher.Released(e.Data.KeyCode);
     private static long Pack(int x, int y) => ((long)x << 32) | (uint)y;
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _gesture = null;
+        _matcher.Gesture = null;
         try { _hook.Dispose(); }
         catch (Exception) { }
     }
 }
 
 public enum HotkeyDecision { Ignore, Swallow, Fire }
+
+/// <summary>
+/// The pure decision logic of the hotkey, with no hook behind it: simulated events (our own Ctrl+V) are ignored, the gesture
+/// fires once per physical press (auto-repeat of the held key is swallowed so it neither re-fires nor leaks to the focused
+/// app until key-up), and modifiers must match exactly.
+/// </summary>
+public sealed class HotkeyMatcher
+{
+    private HotkeyGesture? _gesture;
+    private bool _keyHeld;
+
+    /// <summary>The gesture to match (null = none). Setting it re-arms the key.</summary>
+    public HotkeyGesture? Gesture
+    {
+        get => Volatile.Read(ref _gesture);
+        set { Volatile.Write(ref _gesture, value); Volatile.Write(ref _keyHeld, false); }
+    }
+
+    public HotkeyDecision Evaluate(KeyCode key, EventMask mask, bool simulated)
+    {
+        var gesture = Gesture;
+        if (simulated || gesture is null || key != gesture.Key) return HotkeyDecision.Ignore;
+        if (Held(mask, EventMask.Ctrl) != gesture.Ctrl || Held(mask, EventMask.Shift) != gesture.Shift
+            || Held(mask, EventMask.Alt) != gesture.Alt || Held(mask, EventMask.Meta) != gesture.Meta)
+            return HotkeyDecision.Ignore;
+        if (Volatile.Read(ref _keyHeld)) return HotkeyDecision.Swallow;
+        Volatile.Write(ref _keyHeld, true);
+        return HotkeyDecision.Fire;
+    }
+
+    /// <summary>Key-up of the gesture key (whatever the modifiers) re-arms it.</summary>
+    public void Released(KeyCode key)
+    {
+        if (Gesture is { } g && key == g.Key) Volatile.Write(ref _keyHeld, false);
+    }
+
+    private static bool Held(EventMask mask, EventMask flag) => (mask & flag) != 0;
+}

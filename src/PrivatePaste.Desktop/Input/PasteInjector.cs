@@ -44,14 +44,19 @@ public sealed class PasteInjector : IPasteInjector
     {
         if (!OperatingSystem.IsWindows()) return true;   // the OS returns focus to the previous app by itself
         var hwnd = _previous;
-        if (hwnd == 0 || !NativeWindows.IsWindow(hwnd)) return false;
-        var foreground = NativeWindows.GetForegroundWindow();
-        // In front already, or still in transition (nothing / one of our windows): fine. Another app: the user moved on.
-        if (foreground != hwnd && foreground != 0 && !NativeWindows.IsOwnWindow(foreground) && !NativeWindows.IsShell(foreground))
-            return false;
+        if (hwnd != 0 && !NativeWindows.IsWindow(hwnd)) return false;
+        if (!CanRefocus(hwnd, NativeWindows.GetForegroundWindow())) return false;
         NativeWindows.ForceForeground(hwnd);
         return true;
     }
+
+    /// <summary>
+    /// Unchanged means: a window was captured, and the foreground is still that window or momentarily nothing (focus in
+    /// transition after the popup closed). Anything else, including the taskbar or our own Settings/sign-in window, counts as
+    /// "the user moved on": copy only, never paste.
+    /// </summary>
+    internal static bool CanRefocus(nint previous, nint foreground) =>
+        previous != 0 && (foreground == 0 || foreground == previous);
 
     public bool SendPaste()
     {

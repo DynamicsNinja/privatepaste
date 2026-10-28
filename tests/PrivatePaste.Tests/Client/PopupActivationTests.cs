@@ -197,6 +197,21 @@ public class PopupActivationTests
     }
 
 
+
+    [Fact]
+    public async Task No_captured_window_means_copy_only_with_toast()
+    {
+        // e.g. tray "Open history": the injector captured nothing, so RefocusPrevious reports false.
+        var a = Create();
+        var clip = Clip();
+        _restore = (_, _) => Task.FromResult(clip);
+        _canRefocus = false;
+        await RunAsync(a, clip);
+        Assert.DoesNotContain("refocus", _log);
+        Assert.DoesNotContain("paste", _log);
+        Assert.Equal([PopupActivation.CopiedToast], _toasts);
+    }
+
     [Fact]
     public void Placement_is_clamped_to_the_working_area()
     {
