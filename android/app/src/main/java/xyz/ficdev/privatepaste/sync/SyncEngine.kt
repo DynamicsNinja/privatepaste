@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancelChildren
@@ -24,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.core.model.ClipDto
@@ -86,7 +88,8 @@ class SyncEngine(
     private enum class Outcome { FAILED, REVOKED }
 
     private val lock = Any()
-    private var job: Job? = null                      // guarded by lock
+    private var job: Job? = null                      // the current run; guarded by lock
+    private var stopping: CompletableDeferred<Unit>? = null   // the latest stop still unwinding; guarded by lock
     private val signedOut = AtomicBoolean(false)
 
     // nudge / background revoke: what to interrupt right now.
@@ -107,24 +110,63 @@ class SyncEngine(
     /** The last clip handed to the applier (id, seq): a repeated broadcast is not applied twice. */
     @Volatile private var lastApplied: Pair<String, Long>? = null
 
-    /** Starts the loop in [scope]. No-op while running or after a revoke. */
+    /**
+     * Starts the loop in [scope]. No-op while running or after a revoke. Called while a [stop] is still unwinding,
+     * the new run waits for that stop (and its save) to finish first, so two runs never overlap.
+     */
     fun start() {
         synchronized(lock) {
             if (job != null || signedOut.get()) return
-            val j = scope.launch(start = CoroutineStart.LAZY) { run() }
+            val previous = stopping
+            val j = scope.launch(start = CoroutineStart.LAZY) {
+                previous?.await()
+                run()
+            }
             job = j
             j.start()
         }
     }
 
-    /** Stops the loop, closes the link and saves. Safe to call when not running. */
+    /**
+     * Stops the loop, closes the link and saves. Safe to call when not running. A concurrent second call returns
+     * only once the first has finished.
+     */
     suspend fun stop() {
-        val j = synchronized(lock) { job.also { job = null } } ?: return
-        j.cancelAndJoin()
-        saveIfDirty()
+        val done = CompletableDeferred<Unit>()
+        var toStop: Job? = null
+        var earlier: CompletableDeferred<Unit>? = null
         synchronized(lock) {
-            if (job == null && !signedOut.get()) _state.value = SyncState.OFFLINE
+            val current = job
+            earlier = stopping
+            if (current != null) {
+                toStop = current
+                job = null
+                stopping = done
+            }
         }
+        val j = toStop
+        val previous = earlier
+        if (j == null) {
+            previous?.await()   // another stop is unwinding: return once it has finished
+            return
+        }
+        // In the engine's scope, not the caller's: a caller cancelled mid-stop never leaves `stopping` pending.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                previous?.await()
+                j.cancelAndJoin()
+            } finally {
+                withContext(NonCancellable) {
+                    saveIfDirty()
+                    synchronized(lock) {
+                        if (stopping === done) stopping = null
+                        if (job == null && !signedOut.get()) _state.value = SyncState.OFFLINE
+                    }
+                    done.complete(Unit)
+                }
+            }
+        }
+        done.await()
     }
 
     /**
@@ -139,8 +181,10 @@ class SyncEngine(
 
     private suspend fun run() {
         val self = currentCoroutineContext().job
+        var mine: CoroutineScope? = null
         try {
             val revoked = coroutineScope {
+                mine = this
                 workers = this
                 pruneThumbnails()
                 try {
@@ -159,8 +203,10 @@ class SyncEngine(
             report("Sync stopped unexpectedly", e)
             if (!signedOut.get()) _state.value = SyncState.OFFLINE
         } finally {
-            workers = null
-            synchronized(lock) { if (job === self && !signedOut.get()) job = null }
+            synchronized(lock) {
+                if (workers === mine) workers = null
+                if (job === self && !signedOut.get()) job = null
+            }
         }
     }
 
@@ -285,14 +331,18 @@ class SyncEngine(
             is WsEvent.Pong -> pings.pong()
             is WsEvent.ClipCreated -> {
                 val clip = event.clip
-                cache.upsert(clip, fromSync = true)   // recorded before the apply, which a stop can cancel midway
+                val changed = cache.upsert(clip, fromSync = true)   // recorded before the apply, which a stop can cancel
                 markDirty()
                 saveIfDue()
                 requestThumbnail(clip)
+                // Never a stale clip: one whose delete (tombstone) or newer version came first, or one older than the
+                // top of the history (a late broadcast, or a newer copy made here).
+                val top = cache.items.value.firstOrNull()
                 val appliedAt = cache.lastAppliedAt
-                if (clip.sourceDeviceId != ownDeviceId && event.live &&
+                if (clip.sourceDeviceId != ownDeviceId && event.live && changed &&
+                    top != null && top.id == clip.id && top.seq == clip.seq &&
                     lastApplied != (clip.id to clip.seq) &&
-                    (appliedAt == null || !appliedAt.isAfter(clip.lastCopiedAt))   // late broadcast of an older clip
+                    (appliedAt == null || !appliedAt.isAfter(clip.lastCopiedAt))
                 ) {
                     // A slow apply (image download) holds up this loop and with it the pong: not a dead link.
                     pings.setBusy(true)

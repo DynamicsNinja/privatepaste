@@ -1,7 +1,11 @@
 package xyz.ficdev.privatepaste.sync
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -63,6 +67,9 @@ class SyncEngineTest {
     private var applyResult = true
     private var flushes = 0
     private var flushError: Exception? = null
+    private var flushGate: CompletableDeferred<Unit>? = null
+    private var flushesInFlight = 0
+    private var maxFlushesInFlight = 0
 
     @Before
     fun setUp() {
@@ -77,12 +84,14 @@ class SyncEngineTest {
         val pages = ArrayDeque<SyncPage>()
         val syncCalls = mutableListOf<Long>()
         var syncError: Exception? = null
+        var syncGate: CompletableDeferred<Unit>? = null
         val thumbCalls = mutableListOf<String>()
         var thumbGate: CompletableDeferred<Unit>? = null
         var thumbError: Exception? = null
 
         override suspend fun sync(afterSeq: Long, limit: Int): SyncPage {
             syncCalls += afterSeq
+            syncGate?.await()
             syncError?.let { throw it }
             return pages.removeFirstOrNull() ?: SyncPage(emptyList(), emptyList(), afterSeq, false)
         }
@@ -126,11 +135,16 @@ class SyncEngineTest {
         var connects = 0
         var failure: Exception? = null
         var autoPong = true
+        var connectGate: CompletableDeferred<Unit>? = null
+
+        /** The gate ignores cancellation: a connect that is slow to notice a stop. */
+        var stubborn = false
 
         val last: FakeLink get() = handedOut.last()
 
         override suspend fun connect(): WsLink {
             connects++
+            connectGate?.let { gate -> if (stubborn) withContext(NonCancellable) { gate.await() } else gate.await() }
             failure?.let { throw it }
             return FakeLink(autoPong).also { handedOut += it }
         }
@@ -155,7 +169,17 @@ class SyncEngineTest {
         queue = queue,
         thumbs = thumbs,
         applier = { clip -> applied += clip; applyResult },
-        flushQueue = { flushes++; flushError?.let { throw it } },
+        flushQueue = {
+            flushes++
+            flushesInFlight++
+            maxFlushesInFlight = maxOf(maxFlushesInFlight, flushesInFlight)
+            try {
+                flushGate?.await()
+                flushError?.let { throw it }
+            } finally {
+                flushesInFlight--
+            }
+        },
         links = links,
         ownDeviceId = own,
         capture = capture,
@@ -614,5 +638,179 @@ class SyncEngineTest {
         runCurrent()
         assertEquals(listOf("img", "next"), applied.map { it.id })
         assertEquals(1, links.connects)
+    }
+
+    // ---------------------------------------------------------------- fix round 1
+
+    @Test
+    fun liveClipAlreadyDeletedIsNotApplied() = runTest {
+        engine().start()
+        runCurrent()
+
+        links.last.push(WsEvent.ClipDeleted("z", 5))
+        links.last.push(WsEvent.ClipCreated(clip("z", 4), live = true))   // its delete overtook it
+        runCurrent()
+
+        assertTrue(applied.isEmpty())
+        assertTrue(cache.items.value.isEmpty())
+    }
+
+    @Test
+    fun liveClipOlderThanTopOfHistoryIsNotApplied() = runTest {
+        engine().start()
+        runCurrent()
+
+        // A newer clip from this device, then a late broadcast of an older one from another device.
+        links.last.push(WsEvent.ClipCreated(clip("mine", 2, minute = 10, device = own), live = true))
+        links.last.push(WsEvent.ClipCreated(clip("old", 1, minute = 5), live = true))
+        runCurrent()
+        assertTrue(applied.isEmpty())
+
+        // Declined apply (lastAppliedAt unchanged), then an older clip: still not applied.
+        applyResult = false
+        val top = clip("top", 3, minute = 20)
+        links.last.push(WsEvent.ClipCreated(top, live = true))
+        links.last.push(WsEvent.ClipCreated(clip("older", 4, minute = 15), live = true))
+        runCurrent()
+        assertEquals(listOf(top), applied)
+    }
+
+    @Test
+    fun startWhileStoppingWaitsForTheOldRun() = runTest {
+        val engine = engine()
+        val gate = CompletableDeferred<Unit>()
+        links.connectGate = gate
+        links.stubborn = true
+        engine.start()
+        runCurrent()
+        assertEquals(1, links.connects)
+
+        var stopped = false
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { engine.stop(); stopped = true }
+        engine.start()
+        runCurrent()
+        assertFalse(stopped)
+        assertEquals("no second loop while the first still unwinds", 1, links.connects)
+
+        links.connectGate = null
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(stopped)
+        assertEquals(2, links.connects)
+        assertEquals(SyncState.CONNECTED, engine.state.value)
+
+        // The new run owns the worker scope: thumbnails still load.
+        links.last.push(WsEvent.ClipCreated(clip("img", 1, kind = ClipKind.IMAGE, hash = "hashimg"), live = false))
+        runCurrent()
+        assertEquals(listOf("img"), api.thumbCalls)
+    }
+
+    @Test
+    fun concurrentStopWaitsForTheFirst() = runTest {
+        val engine = engine()
+        val gate = CompletableDeferred<Unit>()
+        links.connectGate = gate
+        links.stubborn = true
+        engine.start()
+        runCurrent()
+
+        var first = false
+        var second = false
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { engine.stop(); first = true }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { engine.stop(); second = true }
+        runCurrent()
+        assertFalse(first)
+        assertFalse("a second stop must not return before the first has finished", second)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(first)
+        assertTrue(second)
+        assertEquals(SyncState.OFFLINE, engine.state.value)
+    }
+
+    @Test
+    fun nudgeDuringPendingConnectRetriesAtOnce() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        links.connectGate = gate
+        val engine = engine()
+        engine.start()
+        runCurrent()
+        assertEquals(1, links.connects)
+        assertEquals(SyncState.CONNECTING, engine.state.value)
+
+        engine.nudge()
+        runCurrent()
+        assertEquals(2, links.connects)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(1, links.handedOut.size)   // the abandoned attempt never produced a link
+        assertEquals(SyncState.CONNECTED, engine.state.value)
+    }
+
+    @Test
+    fun stopDuringCatchUp() = runTest {
+        api.syncGate = CompletableDeferred()
+        api.pages += page(clip("a", 1), latest = 1)
+        val engine = engine()
+        engine.start()
+        runCurrent()
+        assertEquals(1, api.syncCalls.size)
+
+        engine.stop()
+
+        assertTrue(links.last.closed)
+        assertEquals(SyncState.OFFLINE, engine.state.value)
+        api.syncGate!!.complete(Unit)
+        advanceTimeBy(60_000)
+        assertTrue(cache.items.value.isEmpty())
+        assertEquals(0, flushes)
+        assertEquals(1, links.connects)
+    }
+
+    @Test
+    fun periodicFlush401Revokes() = runTest {
+        queue.enqueueText("waiting", base)
+        val engine = engine()
+        engine.start()
+        runCurrent()
+        assertEquals(1, flushes)
+
+        flushError = ApiException.Unauthorized()
+        advanceTimeBy(30_000)
+        runCurrent()
+
+        assertEquals(2, flushes)
+        assertEquals(SyncState.SIGNED_OUT, engine.state.value)
+        engine.revoked.first()
+        assertTrue(links.last.closed)
+        advanceTimeBy(10 * 60_000)
+        assertEquals(1, links.connects)
+    }
+
+    @Test
+    fun atMostOnePeriodicFlushInFlight() = runTest {
+        queue.enqueueText("waiting", base)
+        engine().start()
+        runCurrent()
+        assertEquals(1, flushes)
+
+        val gate = CompletableDeferred<Unit>()
+        flushGate = gate
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(2, flushes)
+        advanceTimeBy(90_000)   // the slow flush still runs; pings keep the link up meanwhile
+        runCurrent()
+        assertEquals(2, flushes)
+        assertEquals(1, maxFlushesInFlight)
+        assertEquals(1, links.connects)
+
+        flushGate = null
+        gate.complete(Unit)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(3, flushes)
     }
 }
