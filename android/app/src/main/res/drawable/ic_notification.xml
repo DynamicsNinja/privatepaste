@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- White keyhole from branding/app-icon.svg for the status bar. The keyhole spans
      x 23..41, y 17..49 in the 64-unit source; scaled by 0.625 and centred in 24dp. -->
-<!-- Used by the sync service notification (a later task); keep it until then. -->
+<!-- Small icon of every notification (service/Notifications.kt) and of the Quick Settings tile. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    tools:ignore="UnusedResources"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"

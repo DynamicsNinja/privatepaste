@@ -89,6 +89,7 @@ private fun HistoryRoute(deps: UiDeps, session: StoredSession, relativeTime: Rel
                     syncState = deps.syncState,
                     remote = { deps.api()?.asClipRemote() },
                     copier = deps.clipboard.asClipCopier(),
+                    cachedImage = deps.cachedImage,
                 )
             }
         },

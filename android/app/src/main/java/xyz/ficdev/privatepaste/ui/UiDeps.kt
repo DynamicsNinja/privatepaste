@@ -50,6 +50,9 @@ interface UiDeps {
     val requestBatteryExemption: () -> Intent
 
     val appVersion: String
+
+    /** The full PNG of an image clip when this phone still has it locally (offline copy), else null. May read disk. */
+    val cachedImage: (clipId: String) -> ByteArray? get() = { null }
 }
 
 /** Implemented by the Application class. `MainActivity` reads `(application as UiDepsProvider).uiDeps`. */

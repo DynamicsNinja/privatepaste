@@ -32,6 +32,14 @@ class ClipImageFiles(private val dir: File) {
         file
     }
 
+    /** The stored file for [clipId], or null when it was never stored or has rotated out. */
+    fun find(clipId: String): File? = synchronized(lock) {
+        val name = "${clipId.replace(UNSAFE, "_")}.png"
+        dir.listFiles().orEmpty()
+            .filter { it.isFile && it.name.substringAfter('_') == name }
+            .maxByOrNull { order(it) }
+    }
+
     private fun order(f: File): Long = f.name.substringBefore('_').toLongOrNull() ?: -1L
 
     private companion object {
