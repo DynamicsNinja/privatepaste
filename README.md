@@ -127,3 +127,21 @@ PP_DB_KEY=0123456789abcdef0123 PP_PASSWORD=dev PP_DATA_DIR=./data dotnet run --p
 ```
 
 Run the tests with `dotnet test`.
+
+## macOS and Linux
+
+The desktop app also runs on macOS and Linux. These ports are best-effort: they are built in CI but have had less real-world testing than Windows.
+
+**macOS** (Apple Silicon and Intel, `PrivatePaste-<version>-osx-arm64.zip` / `osx-x64.zip`)
+
+- The app is not signed or notarized. Unzip it, then right-click `PrivatePaste.app` and choose Open, or run `xattr -d com.apple.quarantine PrivatePaste.app`.
+- Grant Accessibility access (System Settings > Privacy & Security > Accessibility) so the global hotkey (Cmd+Shift+V) and paste work. After an update macOS can drop the grant because the app is unsigned; remove and re-add it if the hotkey stops working.
+- The sign-in token is encrypted with a random key kept in your login keychain (service `PrivatePaste`). The key is handed to the `security` tool on stdin, so it is not visible in the process list. While the app reads it, other programs run by your user can ask the keychain for it too (macOS prompts).
+- Autostart is a LaunchAgent at `~/Library/LaunchAgents/xyz.ficdev.privatepaste.plist`.
+
+**Linux** (`PrivatePaste-<version>-linux-x64.tar.gz`)
+
+- Unpack it and run `./install.sh` for a launcher in your application menu, or just run `PrivatePaste/PrivatePaste`.
+- An X11 session works best. On Wayland the clipboard and global hotkey are limited by the compositor; the app tells you once.
+- The sign-in token key is stored through the Secret Service. Install `secret-tool` (package `libsecret-tools` on Debian/Ubuntu, `libsecret` on Fedora/Arch) and have a keyring running (GNOME Keyring, KWallet's Secret Service). Without it the app falls back to a key file with mode 600 in `~/.config/privatepaste/` and says so once; that guards against other users, not other programs of yours. If the keyring is locked or unavailable at start, the app reports it and needs a restart after you unlock it (it never replaces a key it cannot reach). macOS behaves the same when the keychain is locked.
+- Autostart is `~/.config/autostart/privatepaste.desktop`.
