@@ -43,6 +43,13 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
     .AddScheme<AuthenticationSchemeOptions, DeviceTokenAuthHandler>(AuthSchemes.DeviceToken, null)
     .AddCookie(AuthSchemes.Cookies, o =>
     {
+        o.LoginPath = "/login";
+        o.Cookie.HttpOnly = true;
+        o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        // Strict is also the CSRF protection for POST /api/clips/image, which parses multipart manually without antiforgery.
+        o.Cookie.SameSite = SameSiteMode.Strict;
+        o.ExpireTimeSpan = TimeSpan.FromDays(30);
+        o.SlidingExpiration = true;
         o.Events.OnRedirectToLogin = ctx =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api"))
@@ -64,17 +71,27 @@ builder.Services.AddAuthorization(o => o.AddPolicy(AuthSchemes.OwnerPolicy, p =>
     .AddAuthenticationSchemes(AuthSchemes.DeviceToken, AuthSchemes.Cookies)
     .RequireAuthenticatedUser()));
 
+builder.Services.AddAntiforgery(o => o.HeaderName = CookieAntiforgery.HeaderName);
+builder.Services.AddRazorPages(o =>
+{
+    o.Conventions.AuthorizeFolder("/", AuthSchemes.OwnerPolicy);
+    o.Conventions.AllowAnonymousToPage("/Login");
+});
+
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(
-        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 5,
-            Window = TimeSpan.FromMinutes(1),
-            QueueLimit = 0,
-        }));
+    // Only attempts (POST) count; the login page itself (GET) is shared with the API policy name but never limited.
+    o.AddPolicy("login", ctx => HttpMethods.IsPost(ctx.Request.Method)
+        ? RateLimitPartition.GetFixedWindowLimiter(
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            })
+        : RateLimitPartition.GetNoLimiter("not-an-attempt"));
 });
 
 // The container is only reachable through the reverse proxy (Dokploy's Traefik), so its forwarded headers are trusted.
@@ -103,6 +120,7 @@ app.Services.GetRequiredService<PasswordVerifier>();
 
 app.UseForwardedHeaders();
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
@@ -112,6 +130,7 @@ app.MapAuthEndpoints();
 app.MapDeviceEndpoints();
 app.MapClipEndpoints();
 app.MapWebSocketEndpoint();
+app.MapRazorPages();
 
 app.Run();
 

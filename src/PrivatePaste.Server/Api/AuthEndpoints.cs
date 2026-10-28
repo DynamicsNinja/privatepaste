@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authentication;
 using System.Security.Claims;
 using PrivatePaste.Protocol;
 using PrivatePaste.Server.Auth;
@@ -29,14 +30,19 @@ public static class AuthEndpoints
             return Results.Ok(new LoginResponse(device.Id, token));
         }).RequireRateLimiting("login").AllowAnonymous();
 
-        app.MapPost("/api/auth/logout", async (ClaimsPrincipal user, DeviceRepository devices, ConnectionHub hub) =>
+        app.MapPost("/api/auth/logout", async (HttpContext http, ClaimsPrincipal user, DeviceRepository devices, ConnectionHub hub) =>
         {
             if (user.DeviceId() is { } id)
             {
                 await devices.RevokeAsync(id);
                 await hub.CloseDeviceAsync(id);
             }
+            else
+            {
+                // A web session (cookie principal) has no device to revoke; end the session itself.
+                await http.SignOutAsync(AuthSchemes.Cookies);
+            }
             return Results.NoContent();
-        }).RequireAuthorization(AuthSchemes.OwnerPolicy);
+        }).RequireAuthorization(AuthSchemes.OwnerPolicy).RequireAntiforgeryForCookieAuth();
     }
 }

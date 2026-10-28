@@ -1,0 +1,37 @@
+@page
+@model DevicesModel
+@{
+    ViewData["Title"] = "Devices";
+}
+<h1>Devices</h1>
+@if (Model.Devices.Count == 0)
+{
+    <p class="muted">No devices are signed in.</p>
+}
+else
+{
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Platform</th><th>Created</th><th>Last seen</th><th></th></tr>
+        </thead>
+        <tbody>
+        @foreach (var d in Model.Devices)
+        {
+            <tr>
+                <td>@d.Name</td>
+                <td>@d.Platform</td>
+                <td>@d.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                <td>@(d.LastSeenAt is { } seen ? seen.UtcDateTime.ToString("yyyy-MM-dd HH:mm") + " UTC" : "never")</td>
+                <td>
+                    <form method="post" asp-page-handler="Revoke">
+                        <input type="hidden" name="id" value="@d.Id">
+                        <button type="submit" class="danger">Revoke</button>
+                    </form>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    </div>
+}
