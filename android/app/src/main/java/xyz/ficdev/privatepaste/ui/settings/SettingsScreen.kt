@@ -2,6 +2,7 @@ package xyz.ficdev.privatepaste.ui.settings
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -64,6 +66,7 @@ fun SettingsScreen(
         onPauseOrDispose {}
     }
     BackHandler(onBack = onBack)
+    val context = LocalContext.current
     SettingsContent(
         state = state,
         onDeliveryMode = vm::setDeliveryMode,
@@ -72,6 +75,15 @@ fun SettingsScreen(
                 batteryLauncher.launch(requestBatteryExemption())
             } catch (_: ActivityNotFoundException) {
                 // Some OEM builds have no such screen; the status stays "Restricted".
+            }
+        },
+        onOpenNotificationSettings = {
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            try {
+                context.startActivity(intent)   // the state is re-read on resume
+            } catch (_: ActivityNotFoundException) {
+                // No such screen on this build: the line stays.
             }
         },
         onSignOut = vm::signOut,
@@ -86,6 +98,7 @@ fun SettingsContent(
     onAllowBackground: () -> Unit,
     onSignOut: () -> Unit,
     onBack: () -> Unit,
+    onOpenNotificationSettings: () -> Unit = {},
 ) {
     var confirmSignOut by rememberSaveable { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
@@ -131,6 +144,19 @@ fun SettingsContent(
                             selected = state.deliveryMode == DeliveryMode.NOTIFICATION,
                             onSelect = { onDeliveryMode(DeliveryMode.NOTIFICATION) },
                         )
+                    }
+                    if (state.notificationsOff) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(R.string.settings_notifications_off),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.error,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = onOpenNotificationSettings, modifier = Modifier.heightIn(min = 48.dp)) {
+                                Text(stringResource(R.string.settings_open_settings))
+                            }
+                        }
                     }
                 }
 

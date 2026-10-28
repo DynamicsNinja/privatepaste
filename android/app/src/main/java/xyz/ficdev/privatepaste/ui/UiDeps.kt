@@ -49,6 +49,9 @@ interface UiDeps {
 
     val isBatteryExempt: () -> Boolean
 
+    /** Whether this app may show notifications at all (the app switch, and the permission on Android 13+). */
+    val areNotificationsEnabled: () -> Boolean get() = { true }
+
     /** The `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` intent for this package. */
     val requestBatteryExemption: () -> Intent
 

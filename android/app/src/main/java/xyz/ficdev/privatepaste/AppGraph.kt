@@ -4,6 +4,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -298,6 +299,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override val settings = this@AppGraph.settings
         override val startService: () -> Unit = { SyncService.start(app) }
         override val isBatteryExempt: () -> Boolean = { BatteryOptimization.isExempt(app) }
+        override val areNotificationsEnabled: () -> Boolean = { NotificationManagerCompat.from(app).areNotificationsEnabled() }
         override val requestBatteryExemption: () -> Intent = { BatteryOptimization.requestIntent(app) }
         override val appVersion: String = versionName()
         override val cachedImage: (String) -> ByteArray? = ::cachedImage

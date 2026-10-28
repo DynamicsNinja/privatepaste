@@ -19,6 +19,8 @@ data class SettingsState(
     val batteryExempt: Boolean = false,
     val signingOut: Boolean = false,
     val appVersion: String = "",
+    /** Delivery by notification while the app's notifications are off: clips would never show up. */
+    val notificationsOff: Boolean = false,
 )
 
 /** Settings: read-only account details, the delivery mode, the battery exemption status and sign-out. */
@@ -29,10 +31,18 @@ class SettingsViewModel(
     private val isBatteryExempt: () -> Boolean,
     private val performSignOut: suspend () -> Unit,
     appVersion: String,
+    private val areNotificationsEnabled: () -> Boolean = { true },
 ) : ViewModel() {
 
     private val local = MutableStateFlow(
-        SettingsState(deliveryMode = readDeliveryMode(), batteryExempt = isBatteryExempt(), appVersion = appVersion),
+        readDeliveryMode().let { mode ->
+            SettingsState(
+                deliveryMode = mode,
+                batteryExempt = isBatteryExempt(),
+                appVersion = appVersion,
+                notificationsOff = notificationsOff(mode),
+            )
+        },
     )
 
     val state: StateFlow<SettingsState> = combine(session, local) { s, l ->
@@ -45,13 +55,19 @@ class SettingsViewModel(
 
     fun setDeliveryMode(mode: DeliveryMode) {
         writeDeliveryMode(mode)
-        local.value = local.value.copy(deliveryMode = readDeliveryMode())
+        val now = readDeliveryMode()
+        local.value = local.value.copy(deliveryMode = now, notificationsOff = notificationsOff(now))
     }
 
-    /** Re-reads the battery exemption, e.g. when the screen resumes after the system dialog. */
+    /** Re-reads the battery exemption and the notification switch, e.g. when the screen resumes after a system screen. */
     fun refresh() {
-        local.value = local.value.copy(batteryExempt = isBatteryExempt())
+        local.value = local.value.copy(
+            batteryExempt = isBatteryExempt(),
+            notificationsOff = notificationsOff(local.value.deliveryMode),
+        )
     }
+
+    private fun notificationsOff(mode: DeliveryMode) = mode == DeliveryMode.NOTIFICATION && !areNotificationsEnabled()
 
     fun signOut() {
         if (local.value.signingOut) return

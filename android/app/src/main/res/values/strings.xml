@@ -54,6 +54,8 @@
     <string name="settings_delivery">Delivery</string>
     <string name="settings_delivery_automatic">Copy automatically</string>
     <string name="settings_delivery_notification">Show a notification with a Copy button</string>
+    <string name="settings_notifications_off">Notifications are off, so clips won\'t show up.</string>
+    <string name="settings_open_settings">Open settings</string>
     <string name="settings_background">Background</string>
     <string name="settings_background_allowed">Allowed</string>
     <string name="settings_background_restricted">Restricted</string>

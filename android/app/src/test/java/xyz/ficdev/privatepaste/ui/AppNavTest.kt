@@ -64,6 +64,8 @@ class FakeUiDeps(app: Application) : UiDeps {
     override val settings = SettingsStore(app)
     override val startService: () -> Unit = { servicesStarted++ }
     override val isBatteryExempt: () -> Boolean = { false }
+    var notificationsEnabled = true
+    override val areNotificationsEnabled: () -> Boolean = { notificationsEnabled }
     override val requestBatteryExemption: () -> Intent = { Intent("test.REQUEST_BATTERY") }
     override val appVersion: String = "0.1.0"
 }
@@ -109,6 +111,26 @@ class AppNavTest {
     fun signInFallsBackToTheModelName() {
         launch()
         compose.onNodeWithText(android.os.Build.MODEL).assertIsDisplayed()
+    }
+
+    @Test
+    fun notificationDeliveryWithNotificationsOffSaysSoAndOpensSettings() {
+        deps.sessionFlow.value = session
+        deps.settings.onboardingDone = true
+        deps.settings.deliveryMode = DeliveryMode.NOTIFICATION
+        deps.notificationsEnabled = false
+        launch()
+
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Notifications are off, so clips won't show up.").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Open settings").performScrollTo().performClick()
+
+        val started = shadowOf(app).nextStartedActivity
+        assertEquals(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS, started.action)
+        assertEquals(app.packageName, started.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE))
+
+        compose.onNodeWithText("Copy automatically").performScrollTo().performClick()
+        compose.onNodeWithText("Notifications are off, so clips won't show up.").assertDoesNotExist()
     }
 
     @Test

@@ -114,6 +114,7 @@ private fun SettingsRoute(deps: UiDeps, session: StoredSession, onBack: () -> Un
                     isBatteryExempt = deps.isBatteryExempt,
                     performSignOut = deps::signOut,
                     appVersion = deps.appVersion,
+                    areNotificationsEnabled = deps.areNotificationsEnabled,
                 )
             }
         },
