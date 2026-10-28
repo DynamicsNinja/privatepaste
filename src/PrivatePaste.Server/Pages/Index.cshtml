@@ -1,0 +1,51 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "History";
+}
+<form method="get" class="search">
+    <input type="search" name="q" value="@Model.Q" placeholder="Search history" aria-label="Search history">
+    <button type="submit">Search</button>
+</form>
+
+@if (Model.Items.Count == 0)
+{
+    <p class="muted">Nothing here yet.</p>
+}
+
+<ul class="clips">
+@foreach (var clip in Model.Items)
+{
+    var kind = clip.Kind.ToString().ToLowerInvariant();
+    <li class="clip" data-id="@clip.Id" data-kind="@kind">
+        <span class="kind kind-@kind" title="@clip.Kind">@(clip.Kind switch { ClipKind.Image => "IMG", ClipKind.Link => "URL", _ => "TXT" })</span>
+        <div class="body">
+            @if (clip.Kind == ClipKind.Image)
+            {
+                <img class="thumb" src="/api/clips/@clip.Id/thumbnail" loading="lazy" alt="Image clip @clip.Width x @clip.Height">
+            }
+            else if (clip.Kind == ClipKind.Link && IndexModel.IsSafeUrl(clip.Text))
+            {
+                <a href="@clip.Text" rel="noopener noreferrer" target="_blank">@IndexModel.Preview(clip.Text)</a>
+            }
+            else
+            {
+                <pre class="text">@IndexModel.Preview(clip.Text)</pre>
+            }
+            <div class="meta">@clip.SourceDeviceName &middot; <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
+        </div>
+        <div class="actions">
+            <button type="button" class="copy">Copy</button>
+            <form method="post" asp-page-handler="Delete" asp-route-q="@Model.Q">
+                <input type="hidden" name="id" value="@clip.Id">
+                <button type="submit" class="danger">Delete</button>
+            </form>
+        </div>
+    </li>
+}
+</ul>
+
+@if (Model.NextCursor is not null)
+{
+    <p><a class="more" asp-page="/Index" asp-route-q="@Model.Q" asp-route-cursor="@Model.NextCursor">Load more</a></p>
+}

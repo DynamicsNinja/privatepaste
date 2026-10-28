@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PrivatePaste.Protocol/PrivatePaste.Protocol.csproj" />
+    <Project Path="src/PrivatePaste.Server/PrivatePaste.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PrivatePaste.Tests/PrivatePaste.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,1 +1,6 @@
 .superpowers/
+.worktrees/
+bin/
+obj/
+*.user
+.devdata/
