@@ -134,6 +134,12 @@ button.copy.done { background: var(--accent); color: var(--accent-ink); }
 .body a { overflow-wrap: anywhere; }
 .thumb { max-width: min(256px, 100%); max-height: 256px; border-radius: 8px; display: block; }
 .meta { color: var(--muted); font-size: .78rem; margin-top: .3rem; }
+
+/* Source device platform: drawn in the muted colour, about the text's cap height, right before the device name. */
+.platform {
+    width: 1.15em; height: 1.15em; vertical-align: -.2em; margin-right: .35em; flex: none;
+    color: var(--muted);
+}
 .actions { flex: none; display: flex; gap: .3rem; align-items: center; }
 .actions form { margin: 0; }
 .more { display: inline-block; margin-top: 1.25rem; }

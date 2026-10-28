@@ -48,7 +48,7 @@
             {
                 <pre class="text">@IndexModel.Preview(clip.Text)</pre>
             }
-            <div class="meta">@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
+            <div class="meta">@PlatformIcons.Svg(clip.SourceDevicePlatform)@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
         </div>
         <div class="actions">
             <button type="button" class="copy">Copy</button>

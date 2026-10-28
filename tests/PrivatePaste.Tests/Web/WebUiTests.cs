@@ -202,6 +202,34 @@ public class WebUiTests
     }
 
     [Fact]
+    public async Task History_shows_the_source_platform_icon_before_the_device_name()
+    {
+        using var factory = new PrivatePasteFactory();
+        await UploadTextAsync(await factory.LoginAsync("Pixel", "android"), "from android");
+        await UploadTextAsync(await factory.LoginAsync("Desk", "windows"), "from windows");
+        await UploadTextAsync(await factory.LoginAsync("Fridge", "tizen"), "from elsewhere");
+        var web = await WebLoginAsync(factory);
+
+        var html = await web.GetStringAsync("/");
+        Assert.Matches("<svg class=\"platform\" data-platform=\"android\"[^>]*aria-label=\"Android\">.*?</svg>Pixel, <time", html);
+        Assert.Matches("<svg class=\"platform\" data-platform=\"windows\"[^>]*aria-label=\"Windows\">.*?</svg>Desk, <time", html);
+        Assert.Matches("<svg class=\"platform\" data-platform=\"unknown\"[^>]*aria-label=\"Unknown device\">.*?</svg>Fridge, <time", html);
+    }
+
+    [Fact]
+    public async Task Devices_page_shows_the_platform_icon_before_each_name()
+    {
+        using var factory = new PrivatePasteFactory();
+        await factory.LoginAsync("Pixel", "android");
+        await factory.LoginAsync("Air", "macos");
+        var web = await WebLoginAsync(factory);
+
+        var html = await web.GetStringAsync("/devices");
+        Assert.Matches("<td class=\"name\"><svg class=\"platform\" data-platform=\"android\"[^>]*>.*?</svg>Pixel</td>", html);
+        Assert.Matches("<td class=\"name\"><svg class=\"platform\" data-platform=\"macos\"[^>]*aria-label=\"macOS\">.*?</svg>Air</td>", html);
+    }
+
+    [Fact]
     public async Task Devices_page_revoke_works()
     {
         using var factory = new PrivatePasteFactory();

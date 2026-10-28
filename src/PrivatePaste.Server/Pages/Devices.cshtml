@@ -19,7 +19,7 @@ else
         @foreach (var d in Model.Devices)
         {
             <tr>
-                <td class="name">@d.Name</td>
+                <td class="name">@PlatformIcons.Svg(d.Platform)@d.Name</td>
                 <td data-label="Platform">@d.Platform</td>
                 <td data-label="Created">@d.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</td>
                 <td data-label="Last seen">@(d.LastSeenAt is { } seen ? seen.UtcDateTime.ToString("yyyy-MM-dd HH:mm") + " UTC" : "never")</td>
