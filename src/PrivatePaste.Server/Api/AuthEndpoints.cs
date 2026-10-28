@@ -12,10 +12,16 @@ public static class AuthEndpoints
 
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/auth/login", async (LoginRequest request, PasswordVerifier verifier, DeviceRepository devices) =>
+        app.MapPost("/api/auth/login", async (LoginRequest request, PasswordVerifier verifier, DeviceRepository devices,
+            CancellationToken ct) =>
         {
-            if (!verifier.Verify(request.Password))
-                return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, detail: "Invalid password.");
+            switch (await verifier.VerifyAsync(request.Password, ct))
+            {
+                case PasswordCheck.Busy:
+                    return Results.Problem(statusCode: StatusCodes.Status429TooManyRequests, detail: "Too many login attempts in progress.");
+                case PasswordCheck.Invalid:
+                    return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, detail: "Invalid password.");
+            }
 
             var name = request.DeviceName?.Trim() ?? "";
             if (name.Length == 0 || name.Length > MaxDeviceNameLength)

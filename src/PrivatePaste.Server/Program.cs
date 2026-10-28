@@ -84,7 +84,7 @@ builder.Services.AddRateLimiter(o =>
     // Only attempts (POST) count; the login page itself (GET) is shared with the API policy name but never limited.
     o.AddPolicy("login", ctx => HttpMethods.IsPost(ctx.Request.Method)
         ? RateLimitPartition.GetFixedWindowLimiter(
-            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            LoginPartition.KeyFor(ctx.Connection.RemoteIpAddress),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 5,

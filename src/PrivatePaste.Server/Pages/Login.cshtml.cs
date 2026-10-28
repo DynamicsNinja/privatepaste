@@ -18,7 +18,10 @@ public class LoginModel(PasswordVerifier verifier) : PageModel
 
     public async Task<IActionResult> OnPostAsync()
     {
-        if (!verifier.Verify(Password))
+        var check = await verifier.VerifyAsync(Password, HttpContext.RequestAborted);
+        if (check == PasswordCheck.Busy)
+            return StatusCode(StatusCodes.Status429TooManyRequests);
+        if (check != PasswordCheck.Valid)
         {
             Failed = true;
             Password = null;
