@@ -8,6 +8,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import xyz.ficdev.privatepaste.PrivatePasteApp
+import xyz.ficdev.privatepaste.R
 
 /**
  * Transparent, no-history target of the clip notification's Copy action. It is in the foreground, so the clipboard
@@ -31,7 +32,7 @@ class CopyActivity : ComponentActivity() {
                     Log.w(TAG, "Copy failed (${e.javaClass.simpleName})")
                     false
                 }
-                Toast.makeText(applicationContext, if (ok) COPIED else FAILED, Toast.LENGTH_SHORT).show()
+                Toast.makeText(applicationContext, if (ok) R.string.copied else R.string.copy_failed, Toast.LENGTH_SHORT).show()
             } finally {
                 Notifications.cancelClip(applicationContext)
                 finish()
@@ -42,7 +43,5 @@ class CopyActivity : ComponentActivity() {
     companion object {
         const val EXTRA_CLIP_ID = "xyz.ficdev.privatepaste.extra.CLIP_ID"
         private const val TAG = "CopyActivity"
-        private const val COPIED = "Copied"
-        private const val FAILED = "Couldn't copy the clip."
     }
 }

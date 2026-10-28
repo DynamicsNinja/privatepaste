@@ -193,12 +193,12 @@ class HistoryViewModel(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
-                        _messages.trySend(UiText.Res(R.string.history_copy_failed))
+                        _messages.trySend(UiText.Res(R.string.copy_failed))
                         return@launch
                     }
                 }
             }
-            _messages.trySend(UiText.Res(R.string.history_copied))
+            _messages.trySend(UiText.Res(R.string.copied))
             if (api != null) {
                 launch(io) {
                     try {

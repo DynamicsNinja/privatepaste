@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import xyz.ficdev.privatepaste.R
 import java.io.FileNotFoundException
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -26,7 +27,7 @@ class ShareActivity : ComponentActivity() {
         val provider = application as? SenderProvider
         val sender = provider?.clipSender
         if (provider == null || sender == null) {
-            showToast(applicationContext, "Sign in to PrivatePaste first")
+            showToast(applicationContext, getString(R.string.sign_in_first))
             finish()
             return
         }

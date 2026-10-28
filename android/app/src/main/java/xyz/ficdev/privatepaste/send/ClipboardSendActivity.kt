@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import xyz.ficdev.privatepaste.R
 import xyz.ficdev.privatepaste.clipboard.ClipboardContent
 import xyz.ficdev.privatepaste.clipboard.ClipboardReader
 import java.io.FileNotFoundException
@@ -20,7 +21,7 @@ class ClipboardSendActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if ((application as? SenderProvider)?.clipSender == null) {
             handled = true
-            showToast(applicationContext, "Sign in to PrivatePaste first")
+            showToast(applicationContext, getString(R.string.sign_in_first))
             finish()
         }
     }
@@ -32,7 +33,7 @@ class ClipboardSendActivity : ComponentActivity() {
         val provider = application as? SenderProvider
         val sender = provider?.clipSender
         if (provider == null || sender == null) {
-            showToast(applicationContext, "Sign in to PrivatePaste first")
+            showToast(applicationContext, getString(R.string.sign_in_first))
             finish()
             return
         }

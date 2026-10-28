@@ -199,7 +199,7 @@ class HistoryViewModelTest {
         vm.copy(text)
         advanceUntilIdle()
         assertEquals(listOf("copyText:secret", "restore:a"), events)
-        assertEquals(listOf<UiText>(UiText.Res(R.string.history_copied)), messages)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copied)), messages)
     }
 
     @Test
@@ -220,7 +220,7 @@ class HistoryViewModelTest {
         vm.copy(clip("a", 1, "x"))
         advanceUntilIdle()
         assertEquals(listOf("copyText:x", "restore:a"), events)
-        assertEquals(listOf<UiText>(UiText.Res(R.string.history_copied)), messages)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copied)), messages)
     }
 
     @Test
@@ -240,8 +240,8 @@ class HistoryViewModelTest {
         assertEquals(listOf("copyText:offline text", "copyImage:img2:3"), events)
         assertEquals(
             listOf(
-                UiText.Res(R.string.history_copied),
-                UiText.Res(R.string.history_copied),
+                UiText.Res(R.string.copied),
+                UiText.Res(R.string.copied),
                 UiText.Res(R.string.history_image_offline),
             ),
             messages,
@@ -310,7 +310,7 @@ class HistoryViewModelTest {
         vm.copy(clip("a", 1, "x"))
         advanceUntilIdle()
         assertEquals(listOf("copyText:x", "restore:a"), events)
-        assertEquals(listOf<UiText>(UiText.Res(R.string.history_copied)), messages)   // the local copy happened
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copied)), messages)   // the local copy happened
         assertEquals(1, unauthorizedCalls)
     }
 
@@ -348,7 +348,7 @@ class HistoryViewModelTest {
         vm.copy(clip("img", 1, text = null, kind = ClipKind.IMAGE))
         advanceUntilIdle()
         assertEquals(listOf("copyImage:img:4"), events)   // no restore after a failed local copy
-        assertEquals(listOf<UiText>(UiText.Res(R.string.history_copy_failed)), messages)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copy_failed)), messages)
     }
 
     @Test

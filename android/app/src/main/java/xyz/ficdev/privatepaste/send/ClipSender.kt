@@ -43,7 +43,7 @@ val SendResult.message: String
         SendResult.AlreadySynced -> "Already on your other devices"
         is SendResult.TooLarge -> message
         is SendResult.Rejected -> message
-        SendResult.SignedOut -> "Sign in to PrivatePaste first"
+        SendResult.SignedOut -> ClipSender.SIGN_IN_FIRST
     }
 
 /** Gives activities the app's [ClipSender]; null means signed out. Implemented by the Application. */
@@ -257,6 +257,9 @@ class ClipSender(
         const val IMAGE_TOO_LARGE = "Clip too large to sync (image over 20 MB)."
         const val GAVE_UP = "Couldn't sync a clip after several tries."
         const val UNREADABLE_IMAGE = "Couldn't read the image"
+
+        /** Same text as `R.string.sign_in_first`, for the send results (no Context here). */
+        const val SIGN_IN_FIRST = "Sign in to PrivatePaste first"
 
         fun fileNameFor(mime: String): String = when (mime.lowercase()) {
             "image/jpeg", "image/jpg" -> "clip.jpg"
