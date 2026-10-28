@@ -316,4 +316,14 @@ public class ClipApiTests
         var form = new MultipartFormDataContent { { new StringContent("true"), "backfill" } };
         Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsync("/api/clips/image", form)).StatusCode);
     }
+
+    [Fact]
+    public async Task Upload_over_50_megapixels_returns_413()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var r = await PostImage(c, PrivatePaste.Tests.Images.TestImages.MakePngHeaderOnly(10000, 5001).ToArray());
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, r.StatusCode);
+        Assert.Contains("Image too large (over 50 megapixels).", await r.Content.ReadAsStringAsync());
+    }
 }

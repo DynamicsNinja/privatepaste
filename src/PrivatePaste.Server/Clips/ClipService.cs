@@ -60,6 +60,10 @@ public sealed class ClipService(
             image.Position = 0;
             processed = images.Process(image);
         }
+        catch (ImageTooLargeException ex)
+        {
+            throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge, ex.Message);
+        }
         catch (InvalidImageException ex)
         {
             throw new ClipRejectedException(StatusCodes.Status400BadRequest, ex.Message);

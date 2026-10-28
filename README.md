@@ -62,7 +62,7 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` c
 | `GET` | `/api/devices` | bearer | Lists devices: `[{id, name, platform, createdAt, lastSeenAt, isCurrent}]`. |
 | `DELETE` | `/api/devices/{id}` | bearer | Revokes a device and closes its WebSockets. 204, or 404. |
 | `POST` | `/api/clips/text` | bearer | Body `{text, copiedAt?, backfill}`. Returns the clip. 400 if empty, 413 if over `PP_MAX_TEXT_KB`. |
-| `POST` | `/api/clips/image` | bearer | `multipart/form-data` (see below). Returns the clip. 400 for an invalid image or body, 413 if over `PP_MAX_IMAGE_MB`. |
+| `POST` | `/api/clips/image` | bearer | `multipart/form-data` (see below). Returns the clip. 400 for an invalid image or body, 413 if over `PP_MAX_IMAGE_MB` or 50 megapixels. |
 | `GET` | `/api/clips?q=&cursor=&limit=` | bearer | History, newest first (`lastCopiedAt` desc). `q` searches text; `limit` defaults to 50 (max 200). Returns `{items, nextCursor}`; pass `nextCursor` back as `cursor` for the next page. |
 | `GET` | `/api/clips/{id}` | bearer | One clip, or 404. |
 | `GET` | `/api/clips/{id}/image` | bearer | The full image as `image/png`. |
@@ -80,7 +80,7 @@ Uploading content that already exists (same `hash`) does not create a duplicate:
 
 `POST /api/clips/image` takes `multipart/form-data` with these parts, in any order:
 
-- `file` (required): the image (PNG, JPEG, WebP, ...). It is normalized to PNG.
+- `file` (required): the image (PNG, JPEG, WebP, ...). It is normalized to PNG, rotated upright per its EXIF orientation. Images over 50 megapixels are rejected with 413.
 - `copiedAt` (optional): ISO 8601 time the image was copied. Only used with `backfill`.
 - `backfill` (optional): `true` for a clip queued while offline.
 
