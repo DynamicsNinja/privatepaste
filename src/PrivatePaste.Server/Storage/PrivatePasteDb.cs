@@ -11,6 +11,8 @@ public sealed class PrivatePasteDb(ServerOptions options)
 {
     static PrivatePasteDb() => SQLitePCL.Batteries_V2.Init();
 
+    private const int SqliteNotADb = 26; // what a wrong key looks like: the file doesn't decrypt to a database
+
     public string DbPath { get; } = Path.Combine(options.DataDir, "privatepaste.db");
 
     public string BlobDir { get; } = Path.Combine(options.DataDir, "blobs");
@@ -29,7 +31,8 @@ public sealed class PrivatePasteDb(ServerOptions options)
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "PRAGMA foreign_keys=ON";
+            // temp_store=MEMORY: sorts and temp tables never spill to (unencrypted) temp files.
+            cmd.CommandText = "PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY;";
             cmd.ExecuteNonQuery();
             return conn;
         }
@@ -57,14 +60,14 @@ public sealed class PrivatePasteDb(ServerOptions options)
                 probe.ExecuteScalar();
             }
         }
-        catch (SqliteException ex)
+        catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteNotADb)
         {
             throw new DatabaseKeyMismatchException(
                 $"PP_DB_KEY does not match the existing database at {DbPath}", ex);
         }
 
         using var schema = conn.CreateCommand();
-        schema.CommandText = ReadSchema();
+        schema.CommandText = "PRAGMA temp_store=MEMORY; " + ReadSchema();
         schema.ExecuteNonQuery();
     }
 

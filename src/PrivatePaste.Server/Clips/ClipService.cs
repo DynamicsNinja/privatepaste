@@ -28,7 +28,8 @@ public sealed class ClipService(
     ImageProcessor images,
     IClipBroadcaster broadcaster,
     ServerOptions options,
-    TimeProvider time)
+    TimeProvider time,
+    ILogger<ClipService> logger)
 {
     // Serializes blob-write + upsert and blob deletion (single-user server, so contention is negligible).
     private readonly SemaphoreSlim _imageLock = new(1, 1);
@@ -106,8 +107,10 @@ public sealed class ClipService(
             seq = deletedSeq;
             if (clip.Kind == ClipKind.Image)
             {
-                blobs.Delete(ClipBlobs.Image(clip.Hash));
-                blobs.Delete(ClipBlobs.Thumbnail(clip.Hash));
+                // The row is gone, so the delete has happened: a blob that can't be removed now is only an orphaned
+                // (still encrypted) file, and must not stop the deletion from being reported to the other devices.
+                TryDeleteBlob(ClipBlobs.Image(clip.Hash));
+                TryDeleteBlob(ClipBlobs.Thumbnail(clip.Hash));
             }
         }
         finally
@@ -117,6 +120,18 @@ public sealed class ClipService(
 
         await broadcaster.ClipDeletedAsync(id, seq);
         return true;
+    }
+
+    private void TryDeleteBlob(string name)
+    {
+        try
+        {
+            blobs.Delete(name);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Could not delete blob {Blob}", name);
+        }
     }
 
     private DateTimeOffset CopiedAt(DateTimeOffset? requested, bool backfill)

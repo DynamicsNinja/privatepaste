@@ -99,4 +99,23 @@ public sealed class PrivatePasteDbTests : IDisposable
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }
+    [Fact]
+    public void Open_keeps_temp_storage_in_memory()
+    {
+        var db = NewDb(KeyA);
+        db.Initialize();
+        using var conn = db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA temp_store";
+        Assert.Equal(2L, (long)cmd.ExecuteScalar()!); // 2 = MEMORY
+    }
+
+    [Fact]
+    public void Initialize_does_not_report_other_errors_as_key_mismatch()
+    {
+        Directory.CreateDirectory(DbPath); // a directory where the database file should be: SQLITE_CANTOPEN
+        var ex = Assert.Throws<SqliteException>(() => NewDb(KeyA).Initialize());
+        Assert.NotEqual(26, ex.SqliteErrorCode);
+    }
+
 }

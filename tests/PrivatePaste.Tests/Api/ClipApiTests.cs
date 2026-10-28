@@ -192,6 +192,19 @@ public class ClipApiTests
     }
 
     [Fact]
+    public async Task Delete_succeeds_even_if_a_blob_file_cannot_be_removed()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var clip = await PostImageOk(c, TestImages.MakePng(10, 10).ToArray());
+        var blob = Directory.GetFiles(Path.Combine(f.DataDir, "blobs"))[0];
+        // On Windows an open handle without FileShare.Delete makes File.Delete throw an IOException.
+        using (new FileStream(blob, FileMode.Open, FileAccess.Read, FileShare.Read))
+            Assert.Equal(HttpStatusCode.NoContent, (await c.DeleteAsync($"/api/clips/{clip.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}")).StatusCode);
+    }
+
+    [Fact]
     public async Task Search_query_param_works()
     {
         using var f = new PrivatePasteFactory();
