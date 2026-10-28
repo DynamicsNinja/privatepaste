@@ -17,13 +17,16 @@ public sealed class EchoGuard(TimeProvider time, TimeSpan window)
         }
     }
 
-    /// <summary>True (and consumed) if remembered within the window.</summary>
+    /// <summary>True if remembered within the window. Not consumed: duplicate change events for our own write stay suppressed.</summary>
     public bool IsEcho(string hash)
     {
         lock (_gate)
-        {
-            if (!_seen.Remove(hash, out var at)) return false;
-            return time.GetUtcNow() - at <= window;
-        }
+            return _seen.TryGetValue(hash, out var at) && time.GetUtcNow() - at <= window;
+    }
+
+    /// <summary>Undo <see cref="Remember"/> (e.g. the clipboard write failed).</summary>
+    public void Forget(string hash)
+    {
+        lock (_gate) _seen.Remove(hash);
     }
 }

@@ -11,7 +11,7 @@ using SkiaSharp;
 
 namespace PrivatePaste.Tests.Client;
 
-public class ClipboardCoordinatorTests : IDisposable
+public partial class ClipboardCoordinatorTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "pp-coord-" + Guid.NewGuid().ToString("N"));
     private readonly PrivatePasteFactory _server = new();
