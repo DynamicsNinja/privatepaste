@@ -23,7 +23,12 @@ public sealed class SecretFile(string path, ISecretProtector protector)
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         var tmp = path + ".tmp";
-        File.WriteAllBytes(tmp, protector.Protect(Encoding.UTF8.GetBytes(value)));
+        File.Delete(tmp);   // a stale file from a crash could carry looser permissions
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
+        // macOS/Linux: owner-only from the moment the file exists (no chmod window). Windows keeps the inherited ACL.
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using (var stream = new FileStream(tmp, options))
+            stream.Write(protector.Protect(Encoding.UTF8.GetBytes(value)));
         File.Move(tmp, path, overwrite: true);
     }
 

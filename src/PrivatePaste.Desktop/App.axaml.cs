@@ -38,7 +38,7 @@ public partial class App : Application
 
         // ---- Composition ----
         var notifier = new ToastNotifier();
-        var platform = PlatformServices.Create(Environment.ProcessPath ?? "PrivatePaste", options.Isolated);
+        var platform = PlatformServices.Create(Environment.ProcessPath ?? "PrivatePaste", options.Isolated, notifier, options.DataDirectory);
         _host = new DesktopHost(platform, options.DataDirectory, notifier, log);
         _tray = new TrayController(this, _host);
 
