@@ -240,20 +240,34 @@ public class DesktopHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_unreadable_cache_key_is_never_overwritten()
+    public async Task An_unreadable_cache_key_is_kept_until_a_sign_in_replaces_it()
     {
         var keyPath = Path.Combine(_dir, "cache.key");
         byte[] foreign = [1, 2, 3, 4, 5];
         File.WriteAllBytes(keyPath, foreign);
         File.WriteAllBytes(Path.Combine(_dir, "cache.dat"), [9, 9, 9]);
 
-        var host = NewHost(new FailingUnprotect());
-
-        Assert.Equal(foreign, File.ReadAllBytes(keyPath));
-        Assert.Contains("Local history is unavailable this session.", _notes.Messages);
-        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.Password, "PC")).Result);
-        Assert.Equal(foreign, File.ReadAllBytes(keyPath));
+        var host = NewHost(new RejectsForeign(foreign));
+        Assert.Equal(foreign, File.ReadAllBytes(keyPath));   // never overwritten just by starting
         Assert.Equal([9, 9, 9], File.ReadAllBytes(Path.Combine(_dir, "cache.dat")));
+        Assert.Contains("Local history is unavailable this session.", _notes.Messages);
+
+        // Signing in starts a new device identity (cache and queue are cleared anyway): a fresh key leaves ephemeral mode.
+        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.Password, "PC")).Result);
+        Assert.NotEqual(foreign, File.ReadAllBytes(keyPath));
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+        var other = await _server.LoginAsync("Phone");
+        (await other.PostAsJsonAsync("/api/clips/text", new TextClipUpload("kept now", null, false), ProtocolJson.Options))
+            .EnsureSuccessStatusCode();
+        await WaitUntilAsync(() => host.Cache.Items.Any(i => i.Clip.Text == "kept now"));
+        await host.DisposeAsync();
+        _hosts.Remove(host);
+
+        _notes.Messages.Clear();
+        var again = NewHost(new RejectsForeign(foreign));
+        Assert.Empty(_notes.Messages);
+        Assert.Contains(again.Cache.Items, i => i.Clip.Text == "kept now");
+        Assert.True(await again.StartAsync());
     }
 
     [Theory]
@@ -399,10 +413,14 @@ public class DesktopHostTests : IAsyncLifetime
         public byte[] Unprotect(byte[] protectedData) => Protect(protectedData);
     }
 
-    private sealed class FailingUnprotect : ISecretProtector
+    /// <summary>Works like <see cref="XorProtector"/> but cannot unlock one particular blob (e.g. another user's key).</summary>
+    private sealed class RejectsForeign(byte[] foreign) : ISecretProtector
     {
-        public byte[] Protect(byte[] plaintext) => plaintext;
-        public byte[] Unprotect(byte[] protectedData) => throw new System.Security.Cryptography.CryptographicException("not yours");
+        private readonly XorProtector _inner = new();
+        public byte[] Protect(byte[] plaintext) => _inner.Protect(plaintext);
+        public byte[] Unprotect(byte[] protectedData) => protectedData.AsSpan().SequenceEqual(foreign)
+            ? throw new System.Security.Cryptography.CryptographicException("not yours")
+            : _inner.Unprotect(protectedData);
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

@@ -32,10 +32,11 @@ public sealed class DesktopHost : IAsyncDisposable
     private readonly HostTransport _transport;
     private readonly SettingsStore _settingsStore;
     private readonly SecretFile _tokenFile;
-    private readonly byte[] _cacheKey;
-    private readonly string _cachePath;
-    private readonly string _queuePath;
-    private readonly string? _ephemeralDirectory;
+    // Replaced once when a sign-in leaves ephemeral mode (see LeaveEphemeralMode); otherwise fixed.
+    private byte[] _cacheKey;
+    private string _cachePath;
+    private string _queuePath;
+    private string? _ephemeralDirectory;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly SemaphoreSlim _pauseGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -92,7 +93,8 @@ public sealed class DesktopHost : IAsyncDisposable
 
     public PlatformServices Platform { get; }
     public string DataDirectory { get; }
-    public HistoryCache Cache { get; }
+    /// <summary>The local history. A different instance only after a sign-in that left ephemeral mode.</summary>
+    public HistoryCache Cache { get; private set; }
 
     /// <summary>A snapshot of the persisted settings.</summary>
     public ClientSettings Settings => _settings;
@@ -179,6 +181,7 @@ public sealed class DesktopHost : IAsyncDisposable
             }
 
             // A new device identity: history and unsent clips of any earlier sign-in do not carry over.
+            LeaveEphemeralMode();
             Cache.Clear();
             ClearQueue();
             try { _tokenFile.Write(login.Token); }
@@ -517,6 +520,32 @@ public sealed class DesktopHost : IAsyncDisposable
             _log.Error("Could not create the cache key.", e);
             return null;
         }
+    }
+
+    /// <summary>
+    /// The cache key could not be read at startup (this session runs on a throwaway key in a temp folder). A sign-in clears
+    /// the history and the queue anyway, so nothing is lost by replacing the unreadable key with a fresh one: from now on
+    /// history is kept in the data directory again. Caller holds _lifecycle, with no session running.
+    /// </summary>
+    private void LeaveEphemeralMode()
+    {
+        if (_ephemeralDirectory is not { } ephemeral) return;
+        var key = RandomNumberGenerator.GetBytes(32);
+        try { new SecretFile(Path.Combine(DataDirectory, "cache.key"), Platform.SecretProtector).Write(Convert.ToBase64String(key)); }
+        catch (Exception e)
+        {
+            _log.Error("Could not replace the unreadable cache key; local history stays unavailable this session.", e);
+            return;
+        }
+        Cache.Changed -= OnCacheChanged;
+        Cache.Clear();
+        (_cacheKey, _cachePath, _queuePath, _ephemeralDirectory) =
+            (key, Path.Combine(DataDirectory, "cache.dat"), Path.Combine(DataDirectory, "queue.dat"), null);
+        Cache = new HistoryCache(_cachePath, _cacheKey);
+        Cache.Changed += OnCacheChanged;
+        try { Directory.Delete(ephemeral, recursive: true); }
+        catch (Exception) { }
+        _log.Info("Replaced the unreadable cache key; local history is kept again.");
     }
 
     private void ClearQueue()

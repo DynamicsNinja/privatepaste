@@ -381,7 +381,8 @@ public sealed class SyncEngine(
                 link.PongReceived();
                 return;
             case WsTypes.ClipCreated when msg.Clip is { } clip:
-                var added = cache.Upsert(clip);
+                // Recorded (and saved when due) before the apply, which a stop can cancel midway.
+                if (cache.Upsert(clip)) OnHistoryChanged();
                 coordinator.Thumbnails.Request(clip);
                 if (clip.SourceDeviceId != ownDeviceId && msg.Live == true && !isPaused()
                     && _lastApplied != (clip.Id, clip.Seq)
@@ -392,7 +393,6 @@ public sealed class SyncEngine(
                     try { await ApplyAsync(clip, ct).ConfigureAwait(false); }
                     finally { link.SetBusy(false); }
                 }
-                if (added) OnHistoryChanged();
                 return;
             case WsTypes.ClipDeleted when msg.Id is { } id:
                 if (cache.Remove(id, msg.Seq ?? 0)) OnHistoryChanged();
