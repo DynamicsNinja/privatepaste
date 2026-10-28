@@ -208,10 +208,10 @@ data class StoredSession(val serverUrl: String, val deviceId: String, val device
 class SessionStore(file: CryptoFile) { fun load(): StoredSession?; fun save(s: StoredSession); fun clear() }
 class HistoryCache(file: CryptoFile, private val max: Int = 200) {
     val items: StateFlow<List<ClipDto>>          // lastCopiedAt desc
-    val highestSeq: Long; val lastAppliedAt: Instant?
+    val highestSeq: Long; val lastAppliedAt: Instant?; val lastAppliedHash: String?   // both persisted
     fun upsert(clip: ClipDto, fromSync: Boolean): Boolean   // false when nothing changed
     fun remove(id: String, seq: Long): Boolean
-    fun markApplied(at: Instant); fun advanceSeq(seq: Long); fun clear(); fun save()   // save is serialized, never concurrent
+    fun markApplied(at: Instant, hash: String); fun advanceSeq(seq: Long); fun clear(); fun save()   // save is serialized, never concurrent
 }
 class ThumbnailStore(dir: File, keys: KeyProvider) { fun get(hash: String): ByteArray?; fun put(hash: String, png: ByteArray); fun prune(keep: Set<String>); fun clear() }
 data class QueuedClip(val id: String /* uuid */, val kind: ClipKind, val text: String?, val imageFile: String?, val mime: String?,
@@ -310,7 +310,7 @@ class SessionManager(store: SessionStore, cache: HistoryCache, thumbs: Thumbnail
   - it is newer than both `lastAppliedAt` and `capture.lastLocalCaptureAt`;
   - `queue.isEmpty`.
 - Live events:
-  - `ClipCreated(live=true)` from another device: upsert, then apply, then `markApplied(clip.lastCopiedAt)`.
+  - `ClipCreated(live=true)` from another device: upsert, then apply, then `markApplied(clip.lastCopiedAt, clip.hash)` when apply returned true.
   - `live=false`: history only.
   - Own device: upsert only.
   - `ClipDeleted`: `remove`.
@@ -368,6 +368,7 @@ class SessionManager(store: SessionStore, cache: HistoryCache, thumbs: Thumbnail
 
 **Interfaces:**
 - Consumes: Task 4 `ClipboardWriter`, `SettingsStore`; Task 5 `SyncEngine`, `SessionManager`, `ClipApplier`; Task 7 `ClipSender.flushQueue`.
+- Produces (in addition): `PrivatePasteApp` implements Task 8's `UiDepsProvider`.
 - Produces:
   - `SyncService.start(context)` / `SyncService.stop(context)`. The service runs only while signed in.
   - `Notifications` channels:
@@ -416,7 +417,7 @@ class SessionManager(store: SessionStore, cache: HistoryCache, thumbs: Thumbnail
 sealed interface SendResult { data object Sent; data object Queued; data object AlreadySynced;
     data class TooLarge(val message: String); data class Rejected(val message: String); data object SignedOut }
 class ClipSender(api: PrivatePasteApi, queue: OutboundQueue, cache: HistoryCache, capture: LocalCaptureClock,
-    lastAppliedHash: () -> String?, notifier: (String) -> Unit, clock: Clock) {
+    notifier: (String) -> Unit, clock: Clock) {
     suspend fun sendText(text: String): SendResult
     suspend fun sendImage(open: () -> InputStream, mime: String): SendResult   // reads at most 20 MB + 1 byte
     suspend fun flushQueue()                                                   // passed to SyncEngine
@@ -424,7 +425,7 @@ class ClipSender(api: PrivatePasteApi, queue: OutboundQueue, cache: HistoryCache
 ```
 - Send rules:
   - Size checks come before anything else.
-  - If the content hash equals the last clip this phone applied, return `AlreadySynced` ("Already on your other devices").
+  - If the content hash equals `cache.lastAppliedHash`, return `AlreadySynced` ("Already on your other devices").
   - Live upload (`backfill=false`):
     - On success, upsert with `fromSync=false` and `capture.record(serverClip.lastCopiedAt)`. Toast "Sent to your devices".
     - On `Transient`: enqueue with the copy time, `capture.record(copyTime)`, toast "Offline. Will send when connected."
@@ -433,7 +434,7 @@ class ClipSender(api: PrivatePasteApi, queue: OutboundQueue, cache: HistoryCache
 - `flushQueue` uploads in FIFO order as `backfill=true` with the original `copiedAt`:
   - Transient failure: `recordFailure()`. At 5 attempts the item goes to the back; at 10 it is dropped with a single notifier message, "Couldn't sync a clip after several tries."
   - `Rejected`: drop the item with its message.
-  - `Unauthorized`: stop.
+  - `Unauthorized`: rethrow, so the engine treats it as revoked.
   - The function returns while paused or cancelled without counting an attempt.
 - `ShareActivity` sends the shared item, toasts the result and finishes. Multiple items (`ACTION_SEND_MULTIPLE`) are not registered.
 - The tile's `onClick`:
@@ -465,6 +466,7 @@ class ClipSender(api: PrivatePasteApi, queue: OutboundQueue, cache: HistoryCache
 - Test: `android/app/src/test/java/xyz/ficdev/privatepaste/ui/*Test.kt` (ViewModels on the JVM; Compose screens rendered with Robolectric + `createComposeRule`)
 
 **Interfaces:**
+- Produces: `interface UiDeps` (exposes everything below that the screens need: session manager, cache, thumbnail store, clipboard writer, settings, `api(): PrivatePasteApi?`, `syncState: StateFlow<SyncState>`, `startService: () -> Unit`, battery helpers as lambdas) and `interface UiDepsProvider { val uiDeps: UiDeps }`. `MainActivity` reads `(application as UiDepsProvider).uiDeps`. Task 6's `PrivatePasteApp` implements `UiDepsProvider`. ViewModels take their dependencies as constructor parameters, and tests use fakes.
 - Consumes: Task 5 `SessionManager` (`session`, `signIn`, `signOut`), `SyncEngine.state`; Task 4 `HistoryCache.items`, `ThumbnailStore`, `ClipboardWriter`, `SettingsStore`; Task 3 `PrivatePasteApi` (`clips`, `restore`, `delete`, `thumbnail`, `image`); Task 6 `BatteryOptimization`, `SyncService.start` (call through a lambda so this task compiles before Task 6 lands).
 - Screens and copy:
   - **Sign in.** Logo plus the fields "Server address", "Password" and "Device name" (default `Build.MODEL`), and the button "Sign in". Errors:
