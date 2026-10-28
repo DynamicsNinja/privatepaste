@@ -3,6 +3,9 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using PrivatePaste.Client.Core.Platform;
+using PrivatePaste.Desktop.Input;
+using PrivatePaste.Protocol;
 using PrivatePaste.Desktop.Logging;
 using PrivatePaste.Desktop.Platform;
 using PrivatePaste.Desktop.Tray;
@@ -22,6 +25,10 @@ public partial class App : Application
     private TrayController? _tray;
     private SignInWindow? _signIn;
     private SettingsWindow? _settings;
+    private PopupWindow? _popup;
+    private HotkeyService? _hotkeys;
+    private PasteInjector? _injector;
+    private PopupActivation? _activation;
     private bool _quitting;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
@@ -46,8 +53,10 @@ public partial class App : Application
         _tray.SignInRequested += (_, _) => ShowSignIn();
         _tray.SettingsRequested += (_, _) => ShowSettings();
         _tray.SignOutRequested += (_, _) => _ = _host.SignOutAsync();
-        _tray.OpenHistoryRequested += (_, _) => { };   // Task 9: history popup
+        _tray.OpenHistoryRequested += (_, _) => { if (_popup is null) _injector?.CapturePrevious(); ShowPopup(CursorPoint()); };
         _tray.QuitRequested += (_, _) => _ = QuitAsync();
+
+        SetUpPopup(notifier);
 
         // ---- Host events ----
         _host.SignedOut += (_, _) => Dispatcher.UIThread.Post(() =>
@@ -123,10 +132,88 @@ public partial class App : Application
         window.Show();
     }
 
+    // ======================================================================== History popup and global hotkey
+
+    private void SetUpPopup(ToastNotifier notifier)
+    {
+        var host = _host!;
+        _injector = new PasteInjector();
+        _activation = new PopupActivation(
+            isSignedIn: () => _host?.IsSignedIn == true,
+            isPaused: () => _host?.Paused == true,
+            restore: (id, ct) => (_host?.Api ?? throw new InvalidOperationException("Signed out.")).RestoreAsync(id, ct),
+            applyRemote: (clip, ct) => (_host?.Coordinator ?? throw new InvalidOperationException("Signed out.")).ApplyRemoteAsync(clip, ct),
+            writeLocalText: (text, ct) => (_host ?? throw new InvalidOperationException("Shut down.")).Platform.Clipboard
+                .WriteAsync(new ClipboardContent.Text(text), ct),
+            injector: _injector, toast: notifier.Notify, time: TimeProvider.System, isMacOs: OperatingSystem.IsMacOS());
+
+        _hotkeys = new HotkeyService();
+        // Hook thread: capture the window you are in and the cursor now, then hand over to the UI thread.
+        _hotkeys.Pressed += (_, _) =>
+        {
+            if (_popup is null) _injector.CapturePrevious();   // while the popup is up the hotkey only closes it
+            var cursor = CursorPoint();
+            Dispatcher.UIThread.Post(() => ShowPopup(cursor));
+        };
+        _hotkeys.Failed += (_, e) =>
+        {
+            Log?.Error("The global hotkey is unavailable.", e);
+            notifier.Notify("The history hotkey is unavailable. Use the tray menu instead.");
+        };
+        // A saved hotkey replaces the match in the running hook, so the old combination stops working at once.
+        host.HotkeyChanged += (_, gesture) => _hotkeys?.Register(gesture);
+        _hotkeys.Register(HotkeyGesture.TryParse(host.Settings.Hotkey, out var g) && g is not null
+            ? g
+            : new HotkeyGesture(Ctrl: !OperatingSystem.IsMacOS(), Shift: true, Alt: false, Meta: OperatingSystem.IsMacOS(),
+                SharpHook.Data.KeyCode.VcV));
+    }
+
+    private PixelPoint CursorPoint()
+    {
+        if (OperatingSystem.IsWindows() && NativeWindows.CursorPosition() is var (x, y)) return new PixelPoint(x, y);
+        var (mx, my) = _hotkeys?.LastMousePosition ?? (0, 0);
+        return new PixelPoint(mx, my);
+    }
+
+    /// <summary>UI thread. Toggles the popup; signed out, shows the sign-in window instead.</summary>
+    private void ShowPopup(PixelPoint cursor)
+    {
+        if (_host is null || _quitting) return;
+        if (_popup is not null)
+        {
+            _popup.Close();
+            return;
+        }
+        if (!_host.IsSignedIn)
+        {
+            ShowSignIn();
+            return;
+        }
+        var vm = new PopupViewModel(_host.Cache, SearchServerAsync, ActivateFromPopupAsync, TimeProvider.System);
+        var window = new PopupWindow { DataContext = vm };
+        window.Closed += (_, _) => { if (_popup == window) _popup = null; };
+        _popup = window;
+        window.ShowAt(cursor);
+    }
+
+    private async Task<IReadOnlyList<ClipDto>> SearchServerAsync(string query, CancellationToken ct)
+    {
+        var api = _host?.Api;
+        if (api is null) return [];
+        return (await api.ListAsync(query, null, 50, ct)).Items;
+    }
+
+    private Task ActivateFromPopupAsync(ClipDto clip)
+    {
+        _popup?.Close();   // hide first: the restore/paste must not happen with the popup holding the focus
+        return _activation!.ActivateAsync(clip);
+    }
+
     private async Task QuitAsync()
     {
         if (_quitting) return;
         _quitting = true;
+        StopPopupAndHotkey();
         if (_host is not null) await _host.DisposeAsync();
         _host = null;
         _tray?.Dispose();
@@ -134,8 +221,18 @@ public partial class App : Application
         _desktop?.Shutdown();
     }
 
+    /// <summary>Stops the global hook (no more hotkey events) and closes the popup. Safe to call twice.</summary>
+    private void StopPopupAndHotkey()
+    {
+        var hotkeys = _hotkeys;
+        _hotkeys = null;
+        hotkeys?.Dispose();
+        try { _popup?.Close(); } catch (Exception) { }
+    }
+
     private void StopHost()
     {
+        StopPopupAndHotkey();
         var host = _host;
         _host = null;
         if (host is null) return;
