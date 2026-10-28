@@ -6,7 +6,12 @@ using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Client.Core.Api;
 
-/// <summary>Typed client for the PrivatePaste server API. The caller owns the <see cref="HttpClient"/> (BaseAddress = server URL).</summary>
+/// <summary>
+/// Typed client for the PrivatePaste server API. The caller owns the <see cref="HttpClient"/> (BaseAddress = server URL).
+/// Exception contract: <see cref="HttpRequestException"/> = offline/transient (network failure, HttpClient timeout with the
+/// TimeoutException as inner, or a 2xx with an unparseable body such as a captive-portal page); <see cref="UnauthorizedApiException"/> = 401;
+/// any other <see cref="ApiException"/> = the server rejected the request. Caller cancellation surfaces as <see cref="OperationCanceledException"/>.
+/// </summary>
 public sealed class PrivatePasteApi(HttpClient http)
 {
     /// <summary>Sent as a Bearer token when set.</summary>
@@ -22,7 +27,7 @@ public sealed class PrivatePasteApi(HttpClient http)
     public async Task LogoutAsync(CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Post, "api/auth/logout");
-        await SendAsync(req, ct);
+        using var _ = await SendAsync(req, ct);
     }
 
     public async Task<ClipDto> UploadTextAsync(string text, DateTimeOffset? copiedAt, bool backfill, CancellationToken ct = default)
@@ -48,7 +53,7 @@ public sealed class PrivatePasteApi(HttpClient http)
 
     public async Task<ClipPage> ListAsync(string? query, string? cursor, int limit = 50, CancellationToken ct = default)
     {
-        var url = $"api/clips?limit={limit}";
+        var url = $"api/clips?limit={limit.ToString(CultureInfo.InvariantCulture)}";
         if (!string.IsNullOrEmpty(query)) url += "&q=" + Uri.EscapeDataString(query);
         if (!string.IsNullOrEmpty(cursor)) url += "&cursor=" + Uri.EscapeDataString(cursor);
         using var req = Request(HttpMethod.Get, url);
@@ -64,7 +69,7 @@ public sealed class PrivatePasteApi(HttpClient http)
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Delete, $"api/clips/{id}");
-        await SendAsync(req, ct);
+        using var _ = await SendAsync(req, ct);
     }
 
     public Task<byte[]> GetImageAsync(Guid id, CancellationToken ct = default) => GetBytesAsync($"api/clips/{id}/image", ct);
@@ -73,7 +78,7 @@ public sealed class PrivatePasteApi(HttpClient http)
 
     public async Task<SyncResponse> SyncAsync(long afterSeq, int limit = 200, CancellationToken ct = default)
     {
-        using var req = Request(HttpMethod.Get, $"api/sync?afterSeq={afterSeq}&limit={limit}");
+        using var req = Request(HttpMethod.Get, $"api/sync?afterSeq={afterSeq.ToString(CultureInfo.InvariantCulture)}&limit={limit.ToString(CultureInfo.InvariantCulture)}");
         return await SendJsonAsync<SyncResponse>(req, ct);
     }
 
@@ -95,13 +100,25 @@ public sealed class PrivatePasteApi(HttpClient http)
     private async Task<T> SendJsonAsync<T>(HttpRequestMessage req, CancellationToken ct)
     {
         using var res = await SendAsync(req, ct);
-        return await res.Content.ReadFromJsonAsync<T>(ProtocolJson.Options, ct)
-            ?? throw new ApiException(res.StatusCode, "Empty response from server.");
+        try
+        {
+            return await res.Content.ReadFromJsonAsync<T>(ProtocolJson.Options, ct)
+                ?? throw new HttpRequestException("Unexpected response from server.");
+        }
+        catch (Exception e) when (e is JsonException or NotSupportedException)
+        {
+            throw new HttpRequestException("Unexpected response from server.", e);
+        }
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
     {
-        var res = await http.SendAsync(req, ct);
+        HttpResponseMessage res;
+        try { res = await http.SendAsync(req, ct); }
+        catch (TaskCanceledException e) when (!ct.IsCancellationRequested)
+        {
+            throw new HttpRequestException("Request timed out.", e.InnerException ?? e);
+        }
         if (res.IsSuccessStatusCode) return res;
         try
         {

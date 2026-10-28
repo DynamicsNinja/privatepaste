@@ -125,4 +125,87 @@ public class ApiClientTests
         await api.LogoutAsync();
         await Assert.ThrowsAsync<UnauthorizedApiException>(() => api.ListAsync(null, null));
     }
+
+    private sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> f) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => f(request, ct);
+    }
+
+    private static PrivatePasteApi Stub(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> f, TimeSpan? timeout = null)
+    {
+        var http = new HttpClient(new StubHandler(f)) { BaseAddress = new Uri("http://localhost/") };
+        if (timeout is { } t) http.Timeout = t;
+        return new PrivatePasteApi(http) { Token = "t" };
+    }
+
+    private static Task<HttpResponseMessage> Reply(HttpStatusCode code, string body, string contentType) =>
+        Task.FromResult(new HttpResponseMessage(code) { Content = new StringContent(body, System.Text.Encoding.UTF8, contentType) });
+
+    [Fact]
+    public async Task Network_failure_is_http_request_exception()
+    {
+        var api = Stub((_, _) => throw new HttpRequestException("down"));
+        await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null, null));
+    }
+
+    [Fact]
+    public async Task Timeout_is_http_request_exception_with_inner()
+    {
+        var api = Stub(async (_, ct) => { await Task.Delay(TimeSpan.FromSeconds(30), ct); return new HttpResponseMessage(); },
+            TimeSpan.FromMilliseconds(100));
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null, null));
+        Assert.NotNull(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_is_operation_canceled()
+    {
+        var api = Stub(async (_, ct) => { await Task.Delay(TimeSpan.FromSeconds(30), ct); return new HttpResponseMessage(); });
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => api.ListAsync(null, null, ct: cts.Token));
+    }
+
+    [Theory]
+    [InlineData("<html>portal</html>", "text/html")]
+    [InlineData("{not json", "application/json")]
+    public async Task Unparseable_success_body_is_http_request_exception(string body, string type)
+    {
+        var api = Stub((_, _) => Reply(HttpStatusCode.OK, body, type));
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null, null));
+        Assert.Equal("Unexpected response from server.", ex.Message);
+        Assert.NotNull(ex.InnerException);
+    }
+
+    [Theory]
+    [InlineData("{\"title\":\"T\",\"detail\":\"D\"}", "D")]
+    [InlineData("{\"title\":\"T\"}", "T")]
+    [InlineData("{}", "400 Bad Request")]
+    [InlineData("oops", "400 Bad Request")]
+    public async Task Error_message_comes_from_problem_details(string body, string expected)
+    {
+        var api = Stub((_, _) => Reply(HttpStatusCode.BadRequest, body, "application/problem+json"));
+        var ex = await Assert.ThrowsAsync<ApiException>(() => api.ListAsync(null, null));
+        Assert.Equal(expected, ex.Message);
+        Assert.Equal(HttpStatusCode.BadRequest, ex.Status);
+    }
+
+    [Fact]
+    public async Task Query_and_cursor_are_escaped()
+    {
+        var seen = new List<string>();
+        var api = Stub((r, _) => { seen.Add(r.RequestUri!.OriginalString); return Reply(HttpStatusCode.OK, "{\"items\":[]}", "application/json"); });
+        await api.ListAsync("a&b #c+d", "x&y z#+");
+        Assert.Contains("q=a%26b%20%23c%2Bd", seen[0]);
+        Assert.Contains("cursor=x%26y%20z%23%2B", seen[0]);
+    }
+
+    [Fact]
+    public async Task Search_with_special_characters_finds_clip()
+    {
+        using var server = new PrivatePasteFactory();
+        var api = await LoggedInAsync(server);
+        await api.UploadTextAsync("a&b #c+d", null, false);
+        var page = await api.ListAsync("a&b #c+d", null);
+        Assert.Equal("a&b #c+d", Assert.Single(page.Items).Text);
+    }
 }
