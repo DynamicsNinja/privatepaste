@@ -127,6 +127,26 @@ public class WebSocketTests
     }
 
     [Fact]
+    public async Task Image_backfill_fields_after_file_pushed_with_live_false()
+    {
+        using var factory = new PrivatePasteFactory();
+        var (a, _, _) = await factory.LoginDeviceAsync("A");
+        var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
+        using var b = await ConnectAsync(factory, tokenB);
+        var form = new MultipartFormDataContent
+        {
+            { new ByteArrayContent(Images.TestImages.MakePng(8, 8).ToArray()), "file", "x.png" },
+            { new StringContent("true"), "backfill" },
+        };
+
+        (await a.PostAsync("/api/clips/image", form)).EnsureSuccessStatusCode();
+
+        var msg = await ReceiveMessageAsync(b);
+        Assert.Equal(WsTypes.ClipCreated, msg.Type);
+        Assert.False(msg.Live);
+    }
+
+    [Fact]
     public async Task Delete_is_pushed()
     {
         using var factory = new PrivatePasteFactory();

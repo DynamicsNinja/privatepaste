@@ -50,14 +50,14 @@ public sealed class ClipService(
         return result.Clip;
     }
 
-    public async Task<ClipDto> AddImageAsync(Stream image, DateTimeOffset? copiedAt, bool backfill, DeviceIdentity device)
+    /// <summary>Adds an image already read into memory with <see cref="BufferImageAsync"/>.</summary>
+    public async Task<ClipDto> AddImageAsync(MemoryStream image, DateTimeOffset? copiedAt, bool backfill, DeviceIdentity device)
     {
-        using var buffered = await ReadLimitedAsync(image);
-
         ProcessedImage processed;
         try
         {
-            processed = images.Process(buffered);
+            image.Position = 0;
+            processed = images.Process(image);
         }
         catch (InvalidImageException ex)
         {
@@ -127,7 +127,11 @@ public sealed class ClipService(
         return at < now ? at : now;
     }
 
-    private async Task<MemoryStream> ReadLimitedAsync(Stream input)
+    /// <summary>
+    /// Reads an uploaded image into memory (never to disk), rejecting it with 413 as soon as it exceeds
+    /// <see cref="ServerOptions.MaxImageBytes"/>.
+    /// </summary>
+    public async Task<MemoryStream> BufferImageAsync(Stream input)
     {
         var buffer = new MemoryStream();
         try

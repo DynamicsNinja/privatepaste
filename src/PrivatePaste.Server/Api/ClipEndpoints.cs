@@ -30,8 +30,8 @@ public static class ClipEndpoints
         group.MapPost("clips/text", (TextClipUpload upload, ClaimsPrincipal user, ClipService service) =>
             service.AddTextAsync(upload, user.ToDeviceIdentity()));
 
-        // Streams the multipart body so image bytes are never buffered to disk. The small copiedAt/backfill
-        // fields must precede the file part.
+        // Parses the multipart body by hand so the image is read into memory (bounded by MaxImageBytes) and never
+        // buffered to disk. Parts may come in any order: the image is only processed once every part has been read.
         group.MapPost("clips/image", async (HttpRequest request, ClaimsPrincipal user, ClipService service) =>
         {
             if (!MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType)
@@ -42,33 +42,50 @@ public static class ClipEndpoints
             var reader = new MultipartReader(boundary, request.Body);
             DateTimeOffset? copiedAt = null;
             var backfill = false;
-            MultipartSection? section;
-            while ((section = await reader.ReadNextSectionAsync()) is not null)
+            MemoryStream? image = null;
+            try
             {
-                var disposition = section.GetContentDispositionHeader();
-                if (disposition is null || !(disposition.IsFormDisposition() || disposition.IsFileDisposition()))
-                    continue;
-                var name = HeaderUtilities.RemoveQuotes(disposition.Name).Value;
-
-                if (name == "file")
-                    return Results.Ok(await service.AddImageAsync(section.Body, copiedAt, backfill, user.ToDeviceIdentity()));
-
-                if (name is "copiedAt" or "backfill")
+                MultipartSection? section;
+                while ((section = await reader.ReadNextSectionAsync()) is not null)
                 {
-                    using var text = new StreamReader(section.Body, Encoding.UTF8, leaveOpen: true);
-                    var value = (await ReadSmallAsync(text)).Trim();
-                    if (name == "backfill")
-                        backfill = bool.TryParse(value, out var b) && b;
-                    else if (value.Length > 0)
+                    var disposition = section.GetContentDispositionHeader();
+                    if (disposition is null || !(disposition.IsFormDisposition() || disposition.IsFileDisposition()))
+                        continue;
+                    var name = HeaderUtilities.RemoveQuotes(disposition.Name).Value;
+
+                    if (name == "file")
                     {
-                        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
-                            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Invalid copiedAt.");
-                        copiedAt = parsed;
+                        if (image is not null)
+                            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Duplicate 'file' part.");
+                        image = await service.BufferImageAsync(section.Body);
+                    }
+                    else if (name is "copiedAt" or "backfill")
+                    {
+                        using var text = new StreamReader(section.Body, Encoding.UTF8, leaveOpen: true);
+                        var value = (await ReadSmallAsync(text)).Trim();
+                        if (name == "backfill")
+                            backfill = bool.TryParse(value, out var b) && b;
+                        else if (value.Length > 0)
+                        {
+                            if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+                                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Invalid copiedAt.");
+                            copiedAt = parsed;
+                        }
                     }
                 }
-            }
 
-            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Missing 'file' part.");
+                if (image is null)
+                    return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Missing 'file' part.");
+                return Results.Ok(await service.AddImageAsync(image, copiedAt, backfill, user.ToDeviceIdentity()));
+            }
+            catch (InvalidDataException)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Malformed multipart body.");
+            }
+            finally
+            {
+                image?.Dispose();
+            }
         });
 
         group.MapGet("clips", async (ClipRepository repo, string? q, string? cursor, int? limit) =>

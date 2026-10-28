@@ -247,6 +247,34 @@ public class ClipApiTests
     }
 
     [Fact]
+    public async Task Image_fields_after_file_part_are_honored()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var now = f.Clock.GetUtcNow();
+        var form = new MultipartFormDataContent
+        {
+            { new ByteArrayContent(TestImages.MakePng(12, 12).ToArray()), "file", "x.png" },
+            { new StringContent(now.AddHours(-1).ToString("O")), "copiedAt" },
+            { new StringContent("true"), "backfill" },
+        };
+        var r = await c.PostAsync("/api/clips/image", form);
+        r.EnsureSuccessStatusCode();
+        var clip = (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        Assert.Equal(now.AddHours(-1), clip.LastCopiedAt);
+    }
+
+    [Fact]
+    public async Task Malformed_multipart_body_400()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        var content = new ByteArrayContent(System.Text.Encoding.ASCII.GetBytes("--abc\r\nthis is not a header\r\n\r\nx\r\n--abc--\r\n"));
+        content.Headers.TryAddWithoutValidation("Content-Type", "multipart/form-data; boundary=abc");
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsync("/api/clips/image", content)).StatusCode);
+    }
+
+    [Fact]
     public async Task Image_without_file_part_400()
     {
         using var f = new PrivatePasteFactory();
