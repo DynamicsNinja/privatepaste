@@ -17,6 +17,8 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
 
     private readonly object _gate = new();
     private readonly List<CachedClip> _items = [];
+    private const int MaxTombstones = 1000;
+    private readonly Dictionary<Guid, long> _tombstones = [];
     private long _highestSeq;
     private DateTimeOffset? _lastAppliedAt;
 
@@ -31,11 +33,18 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     {
         lock (_gate)
         {
+            if (clip.Seq > _highestSeq) _highestSeq = clip.Seq;
+            // Broadcasts can arrive out of order: ignore anything older than what we hold or already deleted.
+            if (_tombstones.TryGetValue(clip.Id, out var dead) && dead >= clip.Seq) return;
+            var existing = _items.Find(i => i.Clip.Id == clip.Id);
+            if (existing is not null && clip.Seq <= existing.Clip.Seq) return;
+            if (thumbnailPng is null && existing is not null && existing.Clip.Hash == clip.Hash)
+                thumbnailPng = existing.ThumbnailPng;
+            _tombstones.Remove(clip.Id);
             _items.RemoveAll(i => i.Clip.Id == clip.Id);
             _items.Add(new CachedClip(clip, thumbnailPng));
             _items.Sort(Compare);
             if (_items.Count > capacity) _items.RemoveRange(capacity, _items.Count - capacity);
-            if (clip.Seq > _highestSeq) _highestSeq = clip.Seq;
         }
     }
 
@@ -45,12 +54,15 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         {
             _items.RemoveAll(i => i.Clip.Id == id);
             if (seq > _highestSeq) _highestSeq = seq;
+            if (!_tombstones.TryGetValue(id, out var prev) || seq > prev) _tombstones[id] = seq;
+            TrimTombstones(_tombstones);
         }
     }
 
     public void MarkApplied(ClipDto clip)
     {
-        lock (_gate) _lastAppliedAt = clip.LastCopiedAt;
+        lock (_gate)
+            if (_lastAppliedAt is null || clip.LastCopiedAt > _lastAppliedAt) _lastAppliedAt = clip.LastCopiedAt;
     }
 
     public IReadOnlyList<CachedClip> Search(string query)
@@ -67,7 +79,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         byte[] plaintext;
         lock (_gate)
             plaintext = JsonSerializer.SerializeToUtf8Bytes(
-                new Snapshot(_highestSeq, _lastAppliedAt, _items.ToList()), ProtocolJson.Options);
+                new Snapshot(_highestSeq, _lastAppliedAt, _items.ToList(), new Dictionary<Guid, long>(_tombstones)), ProtocolJson.Options);
 
         var file = new byte[NonceSize + TagSize + plaintext.Length];
         var nonce = file.AsSpan(0, NonceSize);
@@ -106,12 +118,18 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             cache._items.AddRange(loaded);
             cache._highestSeq = Math.Max(snap.HighestSeq, loaded.Select(i => i.Clip.Seq).DefaultIfEmpty(0).Max());
             cache._lastAppliedAt = snap.LastAppliedAt;
+            if (snap.Tombstones is not null)
+            {
+                foreach (var (id, seq) in snap.Tombstones) cache._tombstones[id] = seq;
+                TrimTombstones(cache._tombstones);
+            }
         }
         catch (Exception)
         {
             cache._items.Clear();
             cache._highestSeq = 0;
             cache._lastAppliedAt = null;
+            cache._tombstones.Clear();
         }
         return cache;
     }
@@ -123,6 +141,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             _items.Clear();
             _highestSeq = 0;
             _lastAppliedAt = null;
+            _tombstones.Clear();
         }
         try { File.Delete(path); } catch (IOException) { }
         try { File.Delete(path + ".tmp"); } catch (IOException) { }
@@ -134,5 +153,13 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         return c != 0 ? c : b.Clip.Seq.CompareTo(a.Clip.Seq);
     }
 
-    private sealed record Snapshot(long HighestSeq, DateTimeOffset? LastAppliedAt, List<CachedClip> Items);
+    private static void TrimTombstones(Dictionary<Guid, long> t)
+    {
+        if (t.Count <= MaxTombstones) return;
+        foreach (var k in t.OrderBy(kv => kv.Value).Take(t.Count - MaxTombstones).Select(kv => kv.Key).ToList())
+            t.Remove(k);
+    }
+
+    private sealed record Snapshot(long HighestSeq, DateTimeOffset? LastAppliedAt, List<CachedClip> Items,
+        Dictionary<Guid, long>? Tombstones = null);
 }

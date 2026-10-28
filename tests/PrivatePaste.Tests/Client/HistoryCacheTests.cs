@@ -130,4 +130,87 @@ public class HistoryCacheTests : IDisposable
         Assert.Empty(c.Items);
         Assert.Equal(0, c.HighestSeq);
     }
+
+    [Fact]
+    public void Stale_seq_upsert_is_ignored()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var id = Guid.NewGuid();
+        c.Upsert(Clip(5, "new", 5, id));
+        c.Upsert(Clip(3, "old", 3, id));
+        var item = Assert.Single(c.Items);
+        Assert.Equal(5, item.Clip.Seq);
+        Assert.Equal(T0.AddMinutes(5), item.Clip.LastCopiedAt);
+        Assert.Equal(5, c.HighestSeq);
+    }
+
+    [Fact]
+    public void Late_upsert_after_remove_does_not_resurrect()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var id = Guid.NewGuid();
+        c.Remove(id, 8);
+        c.Upsert(Clip(6, "ghost", 6, id));
+        Assert.Empty(c.Items);
+        c.Upsert(Clip(8, "ghost", 6, id));
+        Assert.Empty(c.Items);
+        Assert.Equal(8, c.HighestSeq);
+    }
+
+    [Fact]
+    public void Newer_upsert_after_remove_is_accepted()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var id = Guid.NewGuid();
+        c.Remove(id, 8);
+        c.Upsert(Clip(9, "back", 9, id));
+        Assert.Equal("back", Assert.Single(c.Items).Clip.Text);
+    }
+
+    [Fact]
+    public void Tombstones_survive_save_load()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        var id = Guid.NewGuid();
+        c.Remove(id, 8);
+        c.Save();
+        var l = HistoryCache.Load(FilePath, key);
+        l.Upsert(Clip(6, "ghost", 6, id));
+        Assert.Empty(l.Items);
+    }
+
+    [Fact]
+    public void Tombstones_are_bounded()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var first = Guid.NewGuid();
+        c.Remove(first, 1);
+        for (var i = 2; i <= 1001; i++) c.Remove(Guid.NewGuid(), i);
+        c.Upsert(Clip(1, "x", 1, first));
+        Assert.Single(c.Items);
+    }
+
+    [Fact]
+    public void Bump_without_thumbnail_keeps_existing_thumbnail()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var id = Guid.NewGuid();
+        var thumb = new byte[] { 1, 2, 3 };
+        var a = Clip(1, null, 1, id, ClipKind.Image);
+        c.Upsert(a, thumb);
+        c.Upsert(a with { Seq = 2, LastCopiedAt = T0.AddMinutes(9) });
+        Assert.Equal(thumb, Assert.Single(c.Items).ThumbnailPng);
+        c.Upsert(a with { Seq = 3, Hash = "different" });
+        Assert.Null(Assert.Single(c.Items).ThumbnailPng);
+    }
+
+    [Fact]
+    public void Mark_applied_never_moves_backwards()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        c.MarkApplied(Clip(2, "b", 5));
+        c.MarkApplied(Clip(1, "a", 2));
+        Assert.Equal(T0.AddMinutes(5), c.LastAppliedAt);
+    }
 }
