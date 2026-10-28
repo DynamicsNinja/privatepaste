@@ -26,6 +26,7 @@ import xyz.ficdev.privatepaste.core.model.ClipPage
 import xyz.ficdev.privatepaste.core.model.LoginResponse
 import xyz.ficdev.privatepaste.core.model.ProtocolJson
 import xyz.ficdev.privatepaste.core.model.SyncPage
+import xyz.ficdev.privatepaste.sync.SyncApi
 import java.io.IOException
 import java.time.Duration
 import java.time.Instant
@@ -40,7 +41,7 @@ class PrivatePasteApi(
     private val baseUrl: HttpUrl,
     private val token: String?,
     private val client: OkHttpClient,
-) {
+) : SyncApi {
     /** Timeout of calls that are not uploads. Tests shorten it. */
     internal var requestTimeout: Duration = REQUEST_TIMEOUT
 
@@ -112,7 +113,8 @@ class PrivatePasteApi(
         return execute(request, requestTimeout, allowNotFound = true) { it.code != 404 }
     }
 
-    suspend fun sync(afterSeq: Long, limit: Int = 200): SyncPage {
+    /** `limit` defaults to 200 (declared on [SyncApi]). */
+    override suspend fun sync(afterSeq: Long, limit: Int): SyncPage {
         val url = url("api/sync") {
             addQueryParameter("afterSeq", afterSeq.toString())
             addQueryParameter("limit", limit.toString())
@@ -122,7 +124,7 @@ class PrivatePasteApi(
 
     suspend fun image(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("image") })
 
-    suspend fun thumbnail(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("thumbnail") })
+    override suspend fun thumbnail(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("thumbnail") })
 
     /** Opens `GET /ws` with the bearer header. The caller owns the socket and its reconnect policy. */
     fun webSocket(listener: WebSocketListener): WebSocket {
