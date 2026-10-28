@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Logo colours are fixed in both modes (branding/README.md). -->
+    <color name="ic_launcher_background">#221D40</color>
+    <color name="logo_keyhole">#B7A5FF</color>
+    <color name="window_background">#F6F4FD</color>
+</resources>
