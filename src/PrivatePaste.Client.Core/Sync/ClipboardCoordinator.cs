@@ -28,6 +28,7 @@ public sealed class ClipboardCoordinator(
     private readonly SemaphoreSlim _gate = new(1, 1);
     private string? _lastLocalHash;
     private DateTimeOffset? _ownWriteAt;
+    private bool _saveFailureNotified;
 
     public async Task OnClipboardChangedAsync(CancellationToken ct)
     {
@@ -35,7 +36,9 @@ public sealed class ClipboardCoordinator(
         // Read before waiting on the gate so copies made during a slow upload are each captured, in order.
         var content = await clipboard.ReadAsync(ct);
         if (content is null) return;
+        var readAt = time.GetUtcNow();
 
+        // Ordering of captures relies on SemaphoreSlim granting the gate to async waiters in FIFO order.
         await _gate.WaitAsync(ct);
         try
         {
@@ -43,14 +46,13 @@ public sealed class ClipboardCoordinator(
 
             // Cheap checks first: whitespace, then size, so oversized items never get decoded or hashed.
             if (content is ClipboardContent.Text { Value: var v } && string.IsNullOrWhiteSpace(v)) return;
-            if (content is ClipboardContent.Text tx && Encoding.UTF8.GetByteCount(tx.Value) > MaxTextBytes)
+            if (OversizeFingerprint(content) is { } fingerprint)
             {
-                notifier.Notify("Clip too large to sync (text over 1 MB).");
-                return;
-            }
-            if (content is ClipboardContent.Image im && im.Png.Length > MaxImageBytes)
-            {
-                notifier.Notify("Image too large to sync (over 20 MB).");
+                if (fingerprint == _lastLocalHash) return;   // same oversized content again: already notified
+                _lastLocalHash = fingerprint;
+                notifier.Notify(content is ClipboardContent.Text
+                    ? "Clip too large to sync (text over 1 MB)."
+                    : "Image too large to sync (over 20 MB).");
                 return;
             }
 
@@ -66,35 +68,37 @@ public sealed class ClipboardCoordinator(
             }
             catch (InvalidDataException)
             {
-                _ownWriteAt = null;
                 return;
             }
 
-            // The first change right after our own write is that write (possibly transformed by the OS).
+            // The first image change right after our own image write is that write (the OS may have transformed it).
+            // Measured from when the clipboard was read, so a copy read before the write (and queued behind it) is not mistaken.
             if (_ownWriteAt is { } at)
             {
-                _ownWriteAt = null;
-                if (time.GetUtcNow() - at <= OwnWriteWindow)
+                if (readAt - at > OwnWriteWindow) _ownWriteAt = null;
+                else if (readAt >= at && content is ClipboardContent.Image)
                 {
+                    _ownWriteAt = null;
                     _lastLocalHash = hash;
                     return;
                 }
             }
 
             if (hash == _lastLocalHash) return;
-            _lastLocalHash = hash;
-            if (echo.IsEcho(hash)) return;
+            if (echo.IsEcho(hash)) { _lastLocalHash = hash; return; }
 
             var copiedAt = time.GetUtcNow();
             try
             {
                 var result = await UploadAsync(content, copiedAt, backfill: false, ct);
+                _lastLocalHash = hash;
                 cache.Upsert(result);
                 TrySaveCache();
             }
             catch (Exception e) when (IsTransient(e))
             {
                 queue.Enqueue(content, copiedAt);
+                _lastLocalHash = hash;
             }
             catch (ApiException e) when (e is not UnauthorizedApiException)
             {
@@ -105,8 +109,8 @@ public sealed class ClipboardCoordinator(
     }
 
     /// <summary>
-    /// Call after sync is resumed: remembers what is on the clipboard right now without uploading it, so content copied
-    /// while paused is never sent.
+    /// Remembers what is on the clipboard right now without uploading it, so content copied while paused is never sent.
+    /// Call this BEFORE un-pausing (while <c>isPaused()</c> is still true), so no change event can slip in between.
     /// </summary>
     public async Task OnResumedAsync(CancellationToken ct)
     {
@@ -119,8 +123,11 @@ public sealed class ClipboardCoordinator(
             {
                 _lastLocalHash = content switch
                 {
-                    ClipboardContent.Text t when !string.IsNullOrWhiteSpace(t.Value) => ContentHash.ForText(t.Value),
-                    ClipboardContent.Image i when i.Png.Length <= MaxImageBytes => ImageHashing.HashPng(i.Png),
+                    null => null,
+                    ClipboardContent.Text t when string.IsNullOrWhiteSpace(t.Value) => null,
+                    _ when OversizeFingerprint(content) is { } f => f,
+                    ClipboardContent.Text t => ContentHash.ForText(t.Value),
+                    ClipboardContent.Image i => ImageHashing.HashPng(i.Png),
                     _ => null,
                 };
             }
@@ -160,6 +167,11 @@ public sealed class ClipboardCoordinator(
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Writes a clip from another device to the clipboard. Throws if the clipboard write fails (non-auth, e.g. the
+    /// clipboard is locked by another process) after undoing the echo bookkeeping: callers MUST catch it and decide
+    /// whether to retry. Network errors fetching an image also propagate (see <see cref="PrivatePasteApi"/>).
+    /// </summary>
     public async Task ApplyRemoteAsync(ClipDto clip, CancellationToken ct)
     {
         if (isPaused()) return;
@@ -184,7 +196,7 @@ public sealed class ClipboardCoordinator(
             var previousHash = _lastLocalHash;
             echo.Remember(clip.Hash);
             _lastLocalHash = clip.Hash;
-            _ownWriteAt = time.GetUtcNow();
+            _ownWriteAt = content is ClipboardContent.Image ? time.GetUtcNow() : null;   // text relies on the exact-hash echo
             try
             {
                 await clipboard.WriteAsync(content, ct);
@@ -213,11 +225,35 @@ public sealed class ClipboardCoordinator(
 
     private void TrySaveCache()
     {
-        try { cache.Save(); }
+        try
+        {
+            cache.Save();
+            _saveFailureNotified = false;
+        }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
+            if (_saveFailureNotified) return;
+            _saveFailureNotified = true;
             notifier.Notify("Could not save local history.");
         }
+    }
+
+    /// <summary>For oversized content: "oversize:" + SHA-256 of the raw bytes (no decoding); null when within limits.</summary>
+    private static string? OversizeFingerprint(ClipboardContent content)
+    {
+        byte[] bytes;
+        switch (content)
+        {
+            case ClipboardContent.Text t when Encoding.UTF8.GetByteCount(t.Value) > MaxTextBytes:
+                bytes = Encoding.UTF8.GetBytes(t.Value);
+                break;
+            case ClipboardContent.Image i when i.Png.Length > MaxImageBytes:
+                bytes = i.Png;
+                break;
+            default:
+                return null;
+        }
+        return "oversize:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
     }
 
     private Task<ClipDto> UploadAsync(ClipboardContent content, DateTimeOffset copiedAt, bool backfill, CancellationToken ct) =>
