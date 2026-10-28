@@ -324,4 +324,42 @@ class ClipSenderTest {
         assertEquals(f.now, f.capture.lastLocalCaptureAt)
         assertEquals(1, f.server.requestCount)
     }
+
+    /** A send in flight when the session ends: its completion writes nothing (the next session's stores are clean). */
+    private fun sendThatEndsMidFlight(response: MockResponse): SendResult = runBlocking {
+        var ending = false
+        val sender = ClipSender(f.api, f.queue, f.cache, f.capture, { }, java.time.Clock.fixed(f.now, java.time.ZoneOffset.UTC)) { ending }
+        val release = java.util.concurrent.CountDownLatch(1)
+        f.respondWith {
+            release.await(10, TimeUnit.SECONDS)
+            response
+        }
+        val send = async(Dispatchers.IO) { sender.sendText("late") }
+        f.server.takeRequest(10, TimeUnit.SECONDS) ?: fail("the upload never started")
+        ending = true   // sign-out or revoke begins while the upload runs
+        release.countDown()
+        send.await()
+    }
+
+    @Test
+    fun sendCompletingAfterSignOutWritesNothing() {
+        val result = sendThatEndsMidFlight(f.json(f.clipJson("c1", "late")))
+
+        assertEquals(SendResult.SignedOut, result)
+        assertTrue(f.cache.items.value.isEmpty())
+        assertNull(f.capture.lastLocalCaptureAt)
+        val reloaded = xyz.ficdev.privatepaste.storage.HistoryCache(
+            xyz.ficdev.privatepaste.storage.CryptoFile(java.io.File(f.dir, "cache.bin"), f.keys, xyz.ficdev.privatepaste.storage.KeyAliases.CACHE),
+        )
+        assertTrue("nothing saved", reloaded.items.value.isEmpty())
+    }
+
+    @Test
+    fun sendFailingAfterSignOutIsNotQueued() {
+        val result = sendThatEndsMidFlight(f.problem(503, "down"))
+
+        assertEquals(SendResult.SignedOut, result)
+        assertTrue("never reaches the next session's queue", f.queue.isEmpty)
+        assertNull(f.capture.lastLocalCaptureAt)
+    }
 }

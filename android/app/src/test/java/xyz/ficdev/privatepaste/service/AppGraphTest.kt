@@ -4,12 +4,14 @@ import android.Manifest
 import android.app.NotificationManager
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -67,5 +69,30 @@ class AppGraphTest {
         awaitUntil("signed out") { app.uiDeps.session.value == null && app.graph.current.value == null }
 
         assertNull(shadowOf(nm).getNotification(Notifications.ID_CLIP))
+    }
+
+    @Test
+    fun sendInFlightAtSignOutNeverReachesTheNextSession() {
+        app.signInTo(server)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val started = java.util.concurrent.CountDownLatch(1)
+        server.other = { req ->
+            if (req.path == "/api/clips/text") {
+                started.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                MockResponse().setResponseCode(503)   // offline: a live send would queue the clip
+            } else null
+        }
+        val sender = app.clipSender ?: throw AssertionError("no sender")
+        val send = app.appScope.async { sender.sendText("typed before sign-out") }
+        started.await(10, java.util.concurrent.TimeUnit.SECONDS)
+
+        runBlocking { app.uiDeps.signOut() }
+        app.signInTo(server)   // the next session
+        release.countDown()
+
+        assertEquals(xyz.ficdev.privatepaste.send.SendResult.SignedOut, runBlocking { send.await() })
+        assertTrue("the next session's queue is empty", app.graph.queue.isEmpty)
+        assertTrue(app.graph.cache.items.value.isEmpty())
     }
 }

@@ -32,7 +32,7 @@ class TestSenderApp : Application(), SenderProvider {
 }
 
 /** A ClipSender wired to a MockWebServer and real (temp-dir) storage. */
-class SenderFixture(dir: File) {
+class SenderFixture(val dir: File) {
     val server = MockWebServer().also { it.start() }
     val keys = InMemoryKeyProvider()
     val queue = OutboundQueue(

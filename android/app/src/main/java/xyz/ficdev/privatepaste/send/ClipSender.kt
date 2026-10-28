@@ -91,8 +91,15 @@ class ClipSender(
     private val capture: LocalCaptureClock,
     private val notifier: (String) -> Unit,
     private val clock: Clock,
+    private val isEnding: () -> Boolean = { false },
 ) {
     private val flushLock = Mutex()
+
+    /**
+     * Held while a live send records its outcome (cache, queue, capture clock). The host sets the flag behind
+     * [isEnding] under this lock, so once it is set no send writes anything and none is half-way through.
+     */
+    val commitLock = Any()
 
     suspend fun sendText(text: String): SendResult = withContext(Dispatchers.IO) {
         if (text.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES) return@withContext SendResult.TooLarge(TEXT_TOO_LARGE)
@@ -131,12 +138,19 @@ class ClipSender(
         }
     }
 
+    /**
+     * Uploads now; on a transient failure queues instead. Once the session is ending ([isEnding]) the outcome is not
+     * recorded: no cache upsert or save, no enqueue, so a send still in flight never reaches the next session.
+     */
     private suspend fun live(copiedAt: Instant, enqueue: () -> Unit, upload: suspend () -> ClipDto): SendResult =
         try {
             val clip = upload()
-            cache.upsert(clip, fromSync = false)
-            cache.save()
-            capture.record(clip.lastCopiedAt)
+            synchronized(commitLock) {
+                if (isEnding()) return SendResult.SignedOut
+                cache.upsert(clip, fromSync = false)
+                cache.save()
+                capture.record(clip.lastCopiedAt)
+            }
             SendResult.Sent
         } catch (e: ApiException.Unauthorized) {
             SendResult.SignedOut
@@ -144,8 +158,11 @@ class ClipSender(
             SendResult.Rejected(e.message ?: "The server refused the clip")
         } catch (e: ApiException) { // Transient, RateLimited
             try {
-                enqueue()
-                capture.record(copiedAt)
+                synchronized(commitLock) {
+                    if (isEnding()) return SendResult.SignedOut
+                    enqueue()
+                    capture.record(copiedAt)
+                }
                 SendResult.Queued
             } catch (io: IOException) {
                 Log.w(TAG, "Cannot queue the clip (${io.javaClass.simpleName})")

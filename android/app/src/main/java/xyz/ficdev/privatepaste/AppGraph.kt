@@ -122,7 +122,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     inner class SessionGraph(val session: StoredSession) {
         val api: PrivatePasteApi = api(session.serverUrl.toHttpUrl(), session.token)
         private val capture = LocalCaptureClock()
-        val sender = ClipSender(api, queue, cache, capture, app::notifyUser, clock)
+        val sender = ClipSender(api, queue, cache, capture, app::notifyUser, clock, isEnding = { ending })
 
         /** The engine's scope: IO for its file writes; a child of the app scope. */
         private val scope = CoroutineScope(SupervisorJob(appScope.coroutineContext.job) + Dispatchers.IO)
@@ -142,8 +142,15 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             scope = scope,
         )
 
-        /** Set once sign-out or revoke begins: the engine must not be started again. */
+        /**
+         * Set once sign-out or revoke begins: the engine must not be started again, and a send still in flight must
+         * not write its result (see [markEnding]).
+         */
         @Volatile var ending = false
+            private set
+
+        /** Sets [ending] under the sender's commit lock: no live send is half-way through writing once this returns. */
+        fun markEnding() = synchronized(sender.commitLock) { ending = true }
 
         /**
          * A new engine reports OFFLINE until its loop runs. Until it has tried once (left OFFLINE), that reads as
@@ -204,7 +211,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         lifecycle.withLock {
             val g = _current.value
             if (g != null) {
-                g.ending = true
+                g.markEnding()
                 g.engine.stop()
             }
             sessions.signOut()
@@ -215,7 +222,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     private suspend fun onRevoked(g: SessionGraph) = withContext(NonCancellable) {
         lifecycle.withLock {
             if (_current.value !== g) return@withLock   // already signed out or replaced
-            g.ending = true
+            g.markEnding()
             g.engine.stop()   // already stopped by the revoke; waits for its final save
             sessions.onRevoked()
             Notifications.postSignedOut(app)
@@ -227,7 +234,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
 
     // Caller holds lifecycle.
     private suspend fun end(g: SessionGraph) {
-        g.ending = true
+        g.markEnding()
         g.engine.stop()
         withContext(Dispatchers.IO) { imageFiles.clear() }   // plaintext copies of clips: gone with the session
         Notifications.cancelClip(app)   // a clip preview (maybe a password) is gone with the session too
