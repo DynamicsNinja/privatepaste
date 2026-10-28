@@ -22,7 +22,18 @@ public sealed record SyncError(string Message, Exception Exception);
 /// The host must sequence Resume as: <c>await coordinator.OnResumedAsync(ct)</c> while still paused, THEN flip the flag,
 /// so nothing copied while paused is uploaded and the engine reconnects (and catches up) on its next poll.
 /// </para>
-/// All waiting uses the injected <see cref="TimeProvider"/>. Events are raised on the engine's background task.
+/// <para>
+/// Catch-up applies a clip only when something was applied before (<c>LastAppliedAt</c> set: the first sync after sign-in
+/// is history only, which also keeps backfilled clips off the clipboard) and never on the first successful catch-up after
+/// a pause (clips copied elsewhere while paused go to history only). Live clips are applied as usual.
+/// </para>
+/// All waiting uses the injected <see cref="TimeProvider"/>. The backoff is reset only after a connection stayed up for one
+/// ping interval (25 s), so a server that accepts and then drops at once still sees growing delays.
+/// <para>
+/// Events are raised on the engine's loop. Handlers must be quick and must not block on (or synchronously wait for)
+/// <see cref="StopAsync"/>; marshal to the UI thread instead. A throwing handler is caught (reported via <see cref="Error"/>)
+/// and never stops the engine.
+/// </para>
 /// </summary>
 public sealed class SyncEngine(
     PrivatePasteApi api, HistoryCache cache, ClipboardCoordinator coordinator,
@@ -49,6 +60,8 @@ public sealed class SyncEngine(
     private bool _dirty;
     private DateTimeOffset? _lastSaveAt;
     private (Guid Id, long Seq)? _lastApplied;
+    /// <summary>Set when a pause is observed; the next successful catch-up is history only. Loop thread only.</summary>
+    private bool _resumingFromPause;
 
     public SyncState State => _state;
     public event EventHandler<SyncState>? StateChanged;
@@ -98,6 +111,7 @@ public sealed class SyncEngine(
             {
                 if (isPaused())
                 {
+                    _resumingFromPause = true;
                     var poll = Task.Delay(PollInterval, time, stop);   // timer exists before the state is visible
                     SetState(SyncState.Paused);
                     await poll;
@@ -113,6 +127,7 @@ public sealed class SyncEngine(
                     case Outcome.Stopped:
                         return;
                     case Outcome.Paused:
+                        _resumingFromPause = true;
                         continue;
                 }
 
@@ -150,6 +165,7 @@ public sealed class SyncEngine(
         var link = new Link(socket, lifetime);
         PeriodicTimer? timer = null;
         Task? monitor = null;
+        DateTimeOffset? connectedAt = null;
         try
         {
             await CatchUpAsync(lifetime.Token);
@@ -159,8 +175,8 @@ public sealed class SyncEngine(
             link.LastPingAt = time.GetUtcNow();
             timer = new PeriodicTimer(PollInterval, time);   // created before Connected is visible
             monitor = MonitorAsync(link, timer);
+            connectedAt = time.GetUtcNow();
             SetState(SyncState.Connected);
-            backoff.Reset();
             return await ReceiveLoopAsync(link);
         }
         catch (UnauthorizedApiException)
@@ -194,6 +210,8 @@ public sealed class SyncEngine(
             if (monitor is not null) await monitor;   // never throws
             socket.Dispose();
             SaveIfDirty();
+            // Only a connection that proved stable resets the delays (runs on the loop thread, after the monitor ended).
+            if (connectedAt is { } since && time.GetUtcNow() - since >= PingInterval) backoff.Reset();
         }
     }
 
@@ -237,12 +255,16 @@ public sealed class SyncEngine(
         }
         if (changed) OnHistoryChanged();
 
+        var afterPause = _resumingFromPause;
+        _resumingFromPause = false;   // cleared only once a catch-up completed
+        if (afterPause || cache.LastAppliedAt is not { } lastApplied) return;   // history only
+
         // Apply at most the newest caught-up clip from another device that is still present, if newer than the last applied.
         var present = cache.Items.ToDictionary(i => i.Clip.Id, i => i.Clip.Seq);
         var newest = caught
             .Where(c => c.SourceDeviceId != ownDeviceId && present.TryGetValue(c.Id, out var seq) && seq == c.Seq)
             .MaxBy(c => (c.LastCopiedAt, c.Seq));
-        if (newest is not null && !isPaused() && (cache.LastAppliedAt is not { } applied || newest.LastCopiedAt > applied))
+        if (newest is not null && !isPaused() && newest.LastCopiedAt > lastApplied)
             await ApplyAsync(newest, ct);
     }
 
@@ -358,7 +380,7 @@ public sealed class SyncEngine(
     {
         lock (_saveGate) _dirty = true;
         SaveIfDue();
-        HistoryChanged?.Invoke(this, EventArgs.Empty);
+        Raise(HistoryChanged, EventArgs.Empty);
     }
 
     private void SaveIfDue()
@@ -396,17 +418,42 @@ public sealed class SyncEngine(
     {
         if (Interlocked.Exchange(ref _signedOut, 1) != 0) return;
         SetState(SyncState.SignedOut);
-        Revoked?.Invoke(this, EventArgs.Empty);
+        Raise(Revoked, EventArgs.Empty);
     }
 
     private void SetState(SyncState state)
     {
         if (_state == state) return;
         _state = state;
-        StateChanged?.Invoke(this, state);
+        Raise(StateChanged, state);
     }
 
-    private void Report(string message, Exception e) => Error?.Invoke(this, new SyncError(message, e));
+    private void Report(string message, Exception e)
+    {
+        try { Error?.Invoke(this, new SyncError(message, e)); }
+        catch (Exception) { }   // the log sink itself failed: nowhere left to report it
+    }
+
+    /// <summary>Invokes each subscriber separately so one throwing handler neither skips the others nor faults the loop.</summary>
+    private void Raise<T>(EventHandler<T>? handler, T args)
+    {
+        if (handler is null) return;
+        foreach (var d in handler.GetInvocationList())
+        {
+            try { ((EventHandler<T>)d)(this, args); }
+            catch (Exception e) { Report("A sync event handler failed.", e); }
+        }
+    }
+
+    private void Raise(EventHandler? handler, EventArgs args)
+    {
+        if (handler is null) return;
+        foreach (var d in handler.GetInvocationList())
+        {
+            try { ((EventHandler)d)(this, args); }
+            catch (Exception e) { Report("A sync event handler failed.", e); }
+        }
+    }
 
     private enum PingDue { None, Send, Timeout }
 

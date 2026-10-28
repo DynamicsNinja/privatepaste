@@ -37,6 +37,8 @@ public class SyncEngineTests : IAsyncLifetime
     /// <summary>When set, wraps every socket the engine gets.</summary>
     private Func<WebSocket, WebSocket>? _wrapSocket;
     private readonly ConcurrentQueue<WebSocket> _sockets = new();
+    /// <summary>Client (fake) clock reading at each connect attempt.</summary>
+    private readonly ConcurrentQueue<DateTimeOffset> _connectTimes = new();
 
     private string CachePath => Path.Combine(_dir, "h.enc");
 
@@ -60,6 +62,7 @@ public class SyncEngineTests : IAsyncLifetime
 
     private async Task<WebSocket> ConnectAsync(CancellationToken ct)
     {
+        _connectTimes.Enqueue(_time.GetUtcNow());
         var n = Interlocked.Increment(ref _connects);
         if (_connectFailure?.Invoke(n) is { } failure) throw failure;
         var client = _server.Server.CreateWebSocketClient();
@@ -164,39 +167,64 @@ public class SyncEngineTests : IAsyncLifetime
     {
         foreach (var t in new[] { "x", "y", "z" })
         {
-            await _apiB.UploadTextAsync(t, null, false);
             _server.Clock.Advance(TimeSpan.FromMinutes(1));
+            await _apiB.UploadTextAsync(t, null, false);
         }
+    }
+
+    /// <summary>Runs the engine once so a live clip from B gets applied (LastAppliedAt is set), then stops it.</summary>
+    private async Task PrimeAppliedAsync()
+    {
+        var engine = await StartConnectedAsync();
+        await _apiB.UploadTextAsync("first", null, false);
+        await WaitUntilAsync(() => Written().Contains("first"));
+        await engine.StopAsync();
+        Assert.NotNull(_cache.LastAppliedAt);
     }
 
     [Fact]
     public async Task Catch_up_after_offline_applies_only_newest_once()
     {
+        await PrimeAppliedAsync();
         await UploadXyzWhileStoppedAsync();
 
         var engine = await StartConnectedAsync();
 
-        Assert.Equal(["z"], Written());
+        Assert.Equal(["first", "z"], Written());
         Assert.True(Cached("x") && Cached("y") && Cached("z"));
         await engine.StopAsync();
-        Assert.Equal(["z"], Written());
+        Assert.Equal(["first", "z"], Written());
     }
 
     [Fact]
     public async Task Catch_up_does_not_reapply_already_applied()
     {
+        await PrimeAppliedAsync();
         await UploadXyzWhileStoppedAsync();
-        var first = await StartConnectedAsync();
-        await first.StopAsync();
-        Assert.Equal(["z"], Written());
+        var second = await StartConnectedAsync();
+        await second.StopAsync();
+        Assert.Equal(["first", "z"], Written());
 
         // Restart with the same (persisted) cache and a fresh clipboard.
         _cache = HistoryCache.Load(CachePath, _key);
-        Assert.Equal(3, _cache.Items.Count);
+        Assert.Equal(4, _cache.Items.Count);
         _clip = new FakeClipboard();
         await StartConnectedAsync();
 
         Assert.Empty(_clip.Writes);
+    }
+
+    [Fact]
+    public async Task First_catch_up_with_fresh_cache_is_history_only()
+    {
+        await UploadXyzWhileStoppedAsync();
+        await _apiB.UploadTextAsync("old", null, backfill: true);
+
+        await StartConnectedAsync();
+
+        Assert.Empty(_clip.Writes);
+        Assert.True(Cached("x") && Cached("y") && Cached("z") && Cached("old"));
+        Assert.Null(_cache.LastAppliedAt);
     }
 
     [Fact]
@@ -255,52 +283,100 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(3, Volatile.Read(ref _connects));
     }
 
-    [Fact]
-    public async Task Server_close_reconnects_and_backoff_is_reset_after_connecting()
+    /// <summary>Advances the client clock 100 ms per poll, but only while the engine waits in Offline (its timer then exists).</summary>
+    private Action AdvanceWhileOffline(SyncEngine engine) => () =>
     {
-        // Two failures push the backoff to its 2nd step; a successful connect must reset it to 1 s.
+        if (engine.State == SyncState.Offline) _time.Advance(TimeSpan.FromMilliseconds(100));
+    };
+
+    [Fact]
+    public async Task Backoff_is_reset_only_after_the_connection_stayed_up_one_ping_interval()
+    {
+        // Two failures push the backoff to its 3rd step; a connection that lasts 25 s resets it to 1 s.
         _connectFailure = n => n is 1 or 2 ? new WebSocketException("dropped") : null;
         var engine = CreateEngine(new Backoff(new Random(5)));
         engine.Start();
-        await WaitUntilAsync(() => engine.State == SyncState.Connected, () => _time.Advance(TimeSpan.FromSeconds(1)));
+        await WaitUntilAsync(() => engine.State == SyncState.Connected, AdvanceWhileOffline(engine));
         Assert.Equal(3, Volatile.Read(ref _connects));
 
-        // Server-side drop (not a revoke): abort our socket from under the engine.
-        Assert.True(_sockets.TryPeek(out var socket));
-        socket.Abort();
+        var sock = Assert.Single(_sockets);
+        _time.Advance(TimeSpan.FromSeconds(25));   // stays up one ping interval
+        sock.Abort();                              // then a server-side drop (not a revoke)
         await WaitUntilAsync(() => engine.State == SyncState.Offline);
-        _time.Advance(TimeSpan.FromSeconds(1.2));   // first backoff step again (<= 1.2 s)
+        _time.Advance(TimeSpan.FromSeconds(1.2));  // first backoff step again (<= 1.2 s)
         await WaitUntilAsync(() => engine.State == SyncState.Connected);
         Assert.Equal(4, Volatile.Read(ref _connects));
         Assert.Equal(0, Volatile.Read(ref _revoked));
     }
 
     [Fact]
+    public async Task Server_accepting_then_closing_immediately_keeps_growing_the_backoff()
+    {
+        _wrapSocket = s => new TestSocket(s) { CloseImmediately = true };
+        var expected = new Backoff(new Random(9));
+        var delays = Enumerable.Range(0, 3).Select(_ => expected.Next()).ToArray();
+        var engine = CreateEngine(new Backoff(new Random(9)));
+        engine.Start();
+
+        await WaitUntilAsync(() => Volatile.Read(ref _connects) == 4, AdvanceWhileOffline(engine));
+
+        var times = _connectTimes.ToArray();
+        Assert.True(Count(SyncState.Connected) >= 3);   // every attempt did get connected
+        for (var i = 0; i < 3; i++)
+        {
+            var gap = times[i + 1] - times[i];
+            Assert.InRange(gap, delays[i], delays[i] + TimeSpan.FromMilliseconds(250));
+        }
+    }
+
+    [Fact]
     public async Task Missing_pong_aborts_and_reconnects()
     {
-        PingDroppingSocket? first = null;
-        _wrapSocket = s => first is null ? first = new PingDroppingSocket(s) : s;
+        TestSocket? first = null;
+        _wrapSocket = s => first is null ? first = new TestSocket(s) { DropPings = true } : s;
         var engine = await StartConnectedAsync();
 
-        await WaitUntilAsync(() => Volatile.Read(ref _connects) == 2, () => _time.Advance(TimeSpan.FromSeconds(1)));
-        await WaitUntilAsync(() => engine.State == SyncState.Connected);
-        Assert.True(first!.PingsDropped >= 1);
-        Assert.Contains(SyncState.Offline, _states);
+        _time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => first!.PingsSent == 1);
+        _time.Advance(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => engine.State == SyncState.Offline);
+        _time.Advance(TimeSpan.FromSeconds(1.2));   // first backoff step
+        await WaitUntilAsync(() => Volatile.Read(ref _connects) == 2 && engine.State == SyncState.Connected);
+        Assert.Contains(_errors, e => e.Message.Contains("pong"));
     }
 
     [Fact]
     public async Task Pong_keeps_connection_alive()
     {
+        TestSocket? socket = null;
+        _wrapSocket = s => socket = new TestSocket(s);
         var engine = await StartConnectedAsync();
-        for (var i = 0; i < 60; i++)   // over two ping intervals, one second at a time
+
+        for (var i = 1; i <= 3; i++)
         {
-            _time.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(20);
+            _time.Advance(TimeSpan.FromSeconds(25));                    // ping due
+            await WaitUntilAsync(() => socket!.PingsSent == i);
+            await WaitUntilAsync(() => socket!.PongsHandled == i);      // engine has processed the pong
+            _time.Advance(TimeSpan.FromSeconds(10));                    // past the pong timeout
         }
         await _apiB.UploadTextAsync("still here", null, false);
         await WaitUntilAsync(() => Written().Contains("still here"));
         Assert.Equal(1, Volatile.Read(ref _connects));
         Assert.Equal(SyncState.Connected, engine.State);
+    }
+
+    [Fact]
+    public async Task Throwing_event_handler_does_not_stop_the_engine()
+    {
+        var engine = CreateEngine();
+        engine.StateChanged += (_, _) => throw new InvalidOperationException("bad handler");
+        engine.HistoryChanged += (_, _) => throw new InvalidOperationException("bad handler");
+        engine.Start();
+
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+        await _apiB.UploadTextAsync("hi", null, false);
+        await WaitUntilAsync(() => Written().Contains("hi"));
+        Assert.Equal(1, Volatile.Read(ref _connects));
     }
 
     [Fact]
@@ -322,6 +398,8 @@ public class SyncEngineTests : IAsyncLifetime
     [Fact]
     public async Task Slow_apply_does_not_trip_the_pong_timeout()
     {
+        TestSocket? socket = null;
+        _wrapSocket = s => socket = new TestSocket(s);
         var slow = new GatedClipboard();
         var engine = CreateEngine(clipboard: slow);
         engine.Start();
@@ -334,6 +412,7 @@ public class SyncEngineTests : IAsyncLifetime
             _time.Advance(TimeSpan.FromSeconds(1));
             await Task.Delay(5);
         }
+        Assert.Equal(0, socket!.PingsSent);   // no ping (so no pong deadline) while the loop is busy
         slow.Release.SetResult();
         await WaitUntilAsync(() => slow.Written is not null);
 
@@ -359,11 +438,20 @@ public class SyncEngineTests : IAsyncLifetime
         }
     }
 
-    [Fact]
-    public async Task Paused_engine_disconnects_and_ignores_updates()
+    /// <summary>Advances the client clock 1 s per poll, but only while the engine sits in Paused (its poll timer then exists).</summary>
+    private Action AdvanceWhilePaused(SyncEngine engine) => () =>
+    {
+        if (engine.State == SyncState.Paused) _time.Advance(TimeSpan.FromSeconds(1));
+    };
+
+    /// <summary>Connected engine with one applied live clip ("first"), then paused while B uploads "while paused".</summary>
+    private async Task<SyncEngine> PauseWhileBUploadsAsync()
     {
         var engine = await StartConnectedAsync();
         Assert.True(_sockets.TryPeek(out var socket));
+        await _apiB.UploadTextAsync("first", null, false);
+        await WaitUntilAsync(() => Written().Contains("first"));
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
 
         _paused = true;
         _time.Advance(TimeSpan.FromSeconds(1));   // pause is polled every second
@@ -374,13 +462,56 @@ public class SyncEngineTests : IAsyncLifetime
         _time.Advance(TimeSpan.FromSeconds(5));
         Assert.Equal(SyncState.Paused, engine.State);
         Assert.Equal(1, Volatile.Read(ref _connects));
-        Assert.Empty(_clip.Writes);
+        Assert.Equal(["first"], Written());
         Assert.False(Cached("while paused"));
+        return engine;
+    }
+
+    [Fact]
+    public async Task Paused_engine_disconnects_and_ignores_updates()
+    {
+        var engine = await PauseWhileBUploadsAsync();
 
         _paused = false;
-        await WaitUntilAsync(() => engine.State == SyncState.Connected, () => _time.Advance(TimeSpan.FromSeconds(1)));
+        await WaitUntilAsync(() => engine.State == SyncState.Connected, AdvanceWhilePaused(engine));
         Assert.Equal(2, Volatile.Read(ref _connects));
         Assert.True(Cached("while paused"));
+        Assert.Equal(["first"], Written());   // the first catch-up after a pause is history only
+    }
+
+    [Fact]
+    public async Task Live_clip_after_resume_is_applied()
+    {
+        var engine = await PauseWhileBUploadsAsync();
+        _paused = false;
+        await WaitUntilAsync(() => engine.State == SyncState.Connected, AdvanceWhilePaused(engine));
+
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await _apiB.UploadTextAsync("after resume", null, false);
+        await WaitUntilAsync(() => Written().Contains("after resume"));
+        Assert.Equal(["first", "after resume"], Written());
+    }
+
+    [Fact]
+    public async Task Resume_skip_survives_a_failed_reconnect()
+    {
+        var engine = await PauseWhileBUploadsAsync();
+        _connectFailure = n => n == 2 ? new WebSocketException("dropped") : null;
+
+        _paused = false;
+        await WaitUntilAsync(() => engine.State == SyncState.Connected,
+            () => { AdvanceWhilePaused(engine)(); AdvanceWhileOffline(engine)(); });
+        Assert.Equal(3, Volatile.Read(ref _connects));
+        Assert.True(Cached("while paused"));
+        Assert.Equal(["first"], Written());
+
+        // A later reconnect (not after a pause) applies catch-up as usual.
+        await engine.StopAsync();
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await _apiB.UploadTextAsync("later", null, false);
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+        Assert.Equal(["first", "later"], Written());
     }
 
     [Fact]
@@ -394,11 +525,18 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(0, Volatile.Read(ref _connects));
     }
 
-    /// <summary>Delegates to a real socket but silently drops outgoing pings, so no pong ever comes back.</summary>
-    private sealed class PingDroppingSocket(WebSocket inner) : WebSocket
+    /// <summary>
+    /// Delegates to a real socket and observes ping/pong. <see cref="PongsHandled"/> counts a pong only when the engine
+    /// asks for the next message, i.e. after it has finished handling the pong. Optionally drops pings or closes at once.
+    /// </summary>
+    private sealed class TestSocket(WebSocket inner) : WebSocket
     {
-        private int _dropped;
-        public int PingsDropped => Volatile.Read(ref _dropped);
+        private int _pings, _pongs;
+        private volatile bool _lastWasPong;
+        public bool DropPings { get; init; }
+        public bool CloseImmediately { get; init; }
+        public int PingsSent => Volatile.Read(ref _pings);
+        public int PongsHandled => Volatile.Read(ref _pongs);
         public override WebSocketCloseStatus? CloseStatus => inner.CloseStatus;
         public override string? CloseStatusDescription => inner.CloseStatusDescription;
         public override WebSocketState State => inner.State;
@@ -407,13 +545,28 @@ public class SyncEngineTests : IAsyncLifetime
         public override Task CloseAsync(WebSocketCloseStatus s, string? d, CancellationToken ct) => inner.CloseAsync(s, d, ct);
         public override Task CloseOutputAsync(WebSocketCloseStatus s, string? d, CancellationToken ct) => inner.CloseOutputAsync(s, d, ct);
         public override void Dispose() => inner.Dispose();
-        public override Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken ct) => inner.ReceiveAsync(buffer, ct);
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken ct)
+        {
+            if (_lastWasPong)
+            {
+                _lastWasPong = false;
+                Interlocked.Increment(ref _pongs);
+            }
+            if (CloseImmediately)
+                return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true, WebSocketCloseStatus.EndpointUnavailable, "bye");
+            var r = await inner.ReceiveAsync(buffer, ct);
+            if (r.MessageType == WebSocketMessageType.Text && Encoding.UTF8.GetString(buffer.Array!, buffer.Offset, r.Count).Contains("\"pong\""))
+                _lastWasPong = true;
+            return r;
+        }
+
         public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType type, bool end, CancellationToken ct)
         {
             if (Encoding.UTF8.GetString(buffer).Contains("\"ping\""))
             {
-                Interlocked.Increment(ref _dropped);
-                return Task.CompletedTask;
+                Interlocked.Increment(ref _pings);
+                if (DropPings) return Task.CompletedTask;
             }
             return inner.SendAsync(buffer, type, end, ct);
         }
