@@ -9,6 +9,7 @@ Your own vault for everything you copy. Deep violet night with a soft lilac glow
 | `logo.svg` | Logo with rounded corners and a hairline lilac edge. Web header, favicon, sign-in page. |
 | `app-icon.svg` | Full-bleed square for app icons (the OS applies its own corner mask). |
 | `app-icon-512.png` | 512×512 raster of `app-icon.svg` for installers and the Android launcher. |
+| `platform-icons/` | 24×24 stroked icons for a clip's source device platform: `windows`, `macos` (⌘), `linux` (>_), `android`, `web` (globe), and `unknown` ("Unknown device", a monitor) for anything else or no platform. |
 
 ## Wordmark
 
