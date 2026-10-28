@@ -2,6 +2,8 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using PrivatePaste.Server.Api;
@@ -36,6 +38,13 @@ builder.Services.AddSingleton<IClipBroadcaster>(sp => sp.GetRequiredService<Conn
 builder.Services.AddSingleton<ClipService>();
 builder.Services.AddHealthChecks();
 
+// Persist the keys behind the session cookie and antiforgery tokens so a redeploy doesn't log the web UI out.
+// They are encrypted at rest with a key derived from PP_DB_KEY, like everything else under /data.
+builder.Services.AddDataProtection()
+    .SetApplicationName("PrivatePaste")
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(serverOptions.DataDir, "dp-keys")));
+builder.Services.Configure<KeyManagementOptions>(o => o.XmlEncryptor = new DbKeyXmlEncryptor(serverOptions));
+
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
@@ -46,7 +55,8 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
         o.LoginPath = "/login";
         o.Cookie.HttpOnly = true;
         o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-        // Strict is also the CSRF protection for POST /api/clips/image, which parses multipart manually without antiforgery.
+        // Strict SameSite is defense in depth; cookie-authenticated unsafe API calls (including POST /api/clips/image)
+        // additionally require the antiforgery header (RequireAntiforgeryForCookieAuth).
         o.Cookie.SameSite = SameSiteMode.Strict;
         o.ExpireTimeSpan = TimeSpan.FromDays(30);
         o.SlidingExpiration = true;
@@ -118,6 +128,12 @@ catch (DatabaseKeyMismatchException ex)
 // Hash the password now rather than on the first login attempt.
 app.Services.GetRequiredService<PasswordVerifier>();
 
+app.Use((context, next) =>
+{
+    // No page of this app is meant to be framed (clickjacking). Set before antiforgery, which would add SAMEORIGIN.
+    context.Response.Headers.XFrameOptions = "DENY";
+    return next(context);
+});
 app.UseForwardedHeaders();
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseStaticFiles();

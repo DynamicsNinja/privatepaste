@@ -242,4 +242,54 @@ public class WebUiTests
         Assert.Equal(HttpStatusCode.Redirect, (await web.GetAsync("/")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await web.GetAsync("/api/clips")).StatusCode);
     }
+
+    [Fact]
+    public async Task Image_upload_via_cookie_requires_antiforgery_without_buffering_the_body()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = await WebLoginAsync(factory);
+        var token = await TokenFromAsync(web, "/");
+        var bytes = Images.TestImages.MakePng(200, 200).ToArray();
+        Assert.True(bytes.Length > 100 * 1024);
+        MultipartFormDataContent Form() => new() { { new ByteArrayContent(bytes), "file", "x.png" } };
+
+        var created = new System.Collections.Concurrent.ConcurrentBag<string>();
+        using (var watcher = new FileSystemWatcher(Path.GetTempPath(), "ASPNETCORE_*") { EnableRaisingEvents = true })
+        {
+            watcher.Created += (_, e) => created.Add(e.FullPath);
+            Assert.Equal(HttpStatusCode.BadRequest, (await web.PostAsync("/api/clips/image", Form())).StatusCode);
+            await Task.Delay(300);
+        }
+        Assert.Empty(created);
+
+        var with = new HttpRequestMessage(HttpMethod.Post, "/api/clips/image") { Content = Form() };
+        with.Headers.Add("RequestVerificationToken", token);
+        Assert.Equal(HttpStatusCode.OK, (await web.SendAsync(with)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/login")]
+    [InlineData("/health")]
+    [InlineData("/api/clips")]
+    public async Task Responses_forbid_framing(string path)
+    {
+        using var factory = new PrivatePasteFactory();
+        var response = await WebClient(factory).GetAsync(path);
+        Assert.Equal("DENY", Assert.Single(response.Headers.GetValues("X-Frame-Options")));
+    }
+
+    [Fact]
+    public async Task Data_protection_keys_are_persisted_encrypted()
+    {
+        using var factory = new PrivatePasteFactory();
+        await WebLoginAsync(factory);
+        var keys = Directory.GetFiles(Path.Combine(factory.DataDir, "dp-keys"), "*.xml");
+        Assert.NotEmpty(keys);
+        foreach (var key in keys)
+        {
+            var xml = await File.ReadAllTextAsync(key);
+            Assert.Contains("encryptedSecret", xml);
+            Assert.DoesNotContain("<masterKey", xml);
+        }
+    }
 }
