@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -54,8 +55,13 @@ import kotlinx.coroutines.flow.filter
 import xyz.ficdev.privatepaste.R
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.ui.BrandMark
+import xyz.ficdev.privatepaste.ui.BrandMarkSize
 import xyz.ficdev.privatepaste.ui.RelativeTime
 import xyz.ficdev.privatepaste.ui.theme.Live
+
+/** The history screen's top bar (brand mark, connection chip, settings button); for tests and screenshots. */
+const val HISTORY_TOP_BAR_TAG = "history_top_bar"
 
 @Composable
 fun HistoryScreen(
@@ -120,14 +126,11 @@ fun HistoryContent(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .testTag(HISTORY_TOP_BAR_TAG)
                     .padding(start = 16.dp, end = 4.dp, top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
+                BrandMark(BrandMarkSize.TopBar)
                 Spacer(Modifier.weight(1f))
                 StatusChip(state.syncState)
                 IconButton(onClick = onOpenSettings) {

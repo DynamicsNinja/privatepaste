@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -17,6 +18,7 @@ import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.storage.DeliveryMode
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.ui.history.HISTORY_TOP_BAR_TAG
 import xyz.ficdev.privatepaste.ui.history.HistoryContent
 import xyz.ficdev.privatepaste.ui.history.HistoryState
 import xyz.ficdev.privatepaste.ui.settings.SettingsContent
@@ -31,7 +33,7 @@ import java.time.ZoneId
 import java.util.Locale
 
 /**
- * Saves PNGs of the three screens, dark and light, into the directory named by PP_SCREENSHOT_DIR
+ * Saves PNGs of the three screens (plus a close-up of the history top bar), dark and light, into the directory named by PP_SCREENSHOT_DIR
  * (e.g. `android/app/build/screenshots`). Skipped when the variable is not set.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -70,14 +72,18 @@ class ScreenshotTest {
     @Test fun signInLight() = shootOne("signin", dark = false) { SignInSample() }
     @Test fun historyDark() = shootOne("history", dark = true) { HistorySample() }
     @Test fun historyLight() = shootOne("history", dark = false) { HistorySample() }
+    // Close-ups of the history top bar (brand mark, connection chip, settings button).
+    @Test fun historyHeaderDark() = shootOne("history-header", dark = true, tag = HISTORY_TOP_BAR_TAG) { HistorySample() }
+    @Test fun historyHeaderLight() = shootOne("history-header", dark = false, tag = HISTORY_TOP_BAR_TAG) { HistorySample() }
     @Test fun settingsDark() = shootOne("settings", dark = true) { SettingsSample() }
     @Test fun settingsLight() = shootOne("settings", dark = false) { SettingsSample() }
 
-    private fun shootOne(name: String, dark: Boolean, content: @Composable () -> Unit) {
+    private fun shootOne(name: String, dark: Boolean, tag: String? = null, content: @Composable () -> Unit) {
         assumeTrue("PP_SCREENSHOT_DIR not set", dir != null)
         compose.setContent { PrivatePasteTheme(darkTheme = dark) { content() } }
         compose.waitForIdle()
-        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        val node = if (tag == null) compose.onRoot() else compose.onNodeWithTag(tag)
+        val bitmap = node.captureToImage().asAndroidBitmap()
         dir!!.mkdirs()
         File(dir, "$name-${if (dark) "dark" else "light"}.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)

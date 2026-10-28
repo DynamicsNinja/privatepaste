@@ -1,13 +1,17 @@
 package xyz.ficdev.privatepaste.ui
 
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,6 +64,24 @@ class HistoryScreenTest {
         compose.onNodeWithText("Search history").assertExists()
         compose.onNodeWithText("Connected").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun topBarShowsTheBrandMarkBeforeTheChipAndSettings() {
+        show(HistoryState(syncState = SyncState.OFFLINE))
+        val brand = compose.onNodeWithTag(BRAND_MARK_TAG).assertIsDisplayed()
+        brand.assertContentDescriptionEquals("PrivatePaste")
+        val chip = compose.onNodeWithText("Offline").assertIsDisplayed()
+        val settings = compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+
+        val brandBounds = brand.getUnclippedBoundsInRoot()
+        val chipBounds = chip.getUnclippedBoundsInRoot()
+        val settingsBounds = settings.getUnclippedBoundsInRoot()
+        // Logo tile (32 dp) + wordmark on the left, top-bar sized, then the chip and the settings button on the right.
+        val height = (brandBounds.bottom - brandBounds.top).value
+        assertTrue("brand mark is $height dp tall", height in 32f..40f)
+        assertTrue(brandBounds.right < chipBounds.left)
+        assertTrue(chipBounds.right <= settingsBounds.left)
     }
 
     @Test
