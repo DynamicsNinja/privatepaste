@@ -29,6 +29,17 @@ public sealed class ClipboardCoordinator(
     private string? _lastLocalHash;
     private DateTimeOffset? _ownWriteAt;
     private bool _saveFailureNotified;
+    private long _lastLocalCaptureTicks;   // UTC ticks; 0 = none
+
+    /// <summary>
+    /// When the user last copied something here that is (or will be) synced: the server time of a successful live upload,
+    /// or the copy time of a clip queued offline. A catch-up never applies a clip that is not newer than this.
+    /// </summary>
+    public DateTimeOffset? LastLocalCaptureAt =>
+        Interlocked.Read(ref _lastLocalCaptureTicks) is var t and not 0 ? new DateTimeOffset(t, TimeSpan.Zero) : null;
+
+    /// <summary>True while copies made offline still wait in the queue (they are newer than anything a catch-up brings).</summary>
+    public bool HasQueuedClips => queue.Count > 0;
 
     public async Task OnClipboardChangedAsync(CancellationToken ct)
     {
@@ -92,12 +103,14 @@ public sealed class ClipboardCoordinator(
             {
                 var result = await UploadAsync(content, copiedAt, backfill: false, ct).ConfigureAwait(false);
                 _lastLocalHash = hash;
-                cache.Upsert(result);
+                RecordLocalCapture(result.LastCopiedAt);
+                cache.Upsert(result, fromSync: false);
                 TrySaveCache();
             }
             catch (Exception e) when (IsTransient(e))
             {
                 queue.Enqueue(content, copiedAt);
+                RecordLocalCapture(copiedAt);
                 _lastLocalHash = hash;
             }
             catch (ApiException e) when (e is not UnauthorizedApiException)
@@ -160,7 +173,7 @@ public sealed class ClipboardCoordinator(
                     continue;
                 }
                 queue.Dequeue();   // uploaded: never re-send it, even if the local cache cannot be saved
-                cache.Upsert(result);
+                cache.Upsert(result, fromSync: false);
                 TrySaveCache();
             }
         }
@@ -213,6 +226,18 @@ public sealed class ClipboardCoordinator(
             TrySaveCache();
         }
         finally { _gate.Release(); }
+    }
+
+    private void RecordLocalCapture(DateTimeOffset at)
+    {
+        var ticks = at.UtcTicks;
+        var seen = Interlocked.Read(ref _lastLocalCaptureTicks);
+        while (ticks > seen)
+        {
+            var was = Interlocked.CompareExchange(ref _lastLocalCaptureTicks, ticks, seen);
+            if (was == seen) return;
+            seen = was;
+        }
     }
 
     private static bool IsTransient(Exception e) => e switch

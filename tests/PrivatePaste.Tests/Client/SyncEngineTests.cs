@@ -27,6 +27,13 @@ public class SyncEngineTests : IAsyncLifetime
     private Guid _idA;
     private string _tokenA = null!;
     private HistoryCache _cache = null!;
+    /// <summary>The coordinator's own HTTP path (same device token as <see cref="_apiA"/>), so its uploads can be failed.</summary>
+    private SwitchHandler _handlerA = null!;
+    private PrivatePasteApi _coordApi = null!;
+    private OutboundQueue _queue = null!;
+    /// <summary>The coordinator of the engine created last.</summary>
+    private ClipboardCoordinator _coordinator = null!;
+    private readonly ListNotifier _notes = new();
     private int _connects;
     private int _revoked;
     private volatile bool _paused;
@@ -51,6 +58,9 @@ public class SyncEngineTests : IAsyncLifetime
         _apiB = new PrivatePasteApi(_server.CreateClient());
         _apiB.Token = (await _apiB.LoginAsync(PrivatePasteFactory.Password, "B", "windows")).Token;
         _cache = new HistoryCache(CachePath, _key);
+        _handlerA = new SwitchHandler(_server.Server.CreateHandler());
+        _coordApi = new PrivatePasteApi(new HttpClient(_handlerA) { BaseAddress = new Uri("http://localhost/") }) { Token = _tokenA };
+        _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
     }
 
     public async Task DisposeAsync()
@@ -75,8 +85,8 @@ public class SyncEngineTests : IAsyncLifetime
 
     private SyncEngine CreateEngine(Backoff? backoff = null, IClipboardAccess? clipboard = null)
     {
-        var coordinator = new ClipboardCoordinator(clipboard ?? _clip, _apiA, _cache, new OutboundQueue(Path.Combine(_dir, "q.enc"), _key),
-            new EchoGuard(_time, TimeSpan.FromSeconds(30)), new ListNotifier(), _time, () => _paused);
+        var coordinator = _coordinator = new ClipboardCoordinator(clipboard ?? _clip, _coordApi, _cache, _queue,
+            new EchoGuard(_time, TimeSpan.FromSeconds(30)), _notes, _time, () => _paused);
         var engine = new SyncEngine(_apiA, _cache, coordinator, ConnectAsync, _idA, _time,
             backoff ?? new Backoff(new Random(1)), () => _paused);
         engine.StateChanged += (_, s) => _states.Enqueue(s);
@@ -212,6 +222,88 @@ public class SyncEngineTests : IAsyncLifetime
         await StartConnectedAsync();
 
         Assert.Empty(_clip.Writes);
+    }
+
+    /// <summary>The user copies something here (live upload through the coordinator) while the engine is not running.</summary>
+    private async Task CopyLocallyAsync(string text)
+    {
+        _clip.Current = new ClipboardContent.Text(text);
+        await _coordinator.OnClipboardChangedAsync(default);
+    }
+
+    [Fact]
+    public async Task Catch_up_never_overwrites_a_newer_local_copy()
+    {
+        await PrimeAppliedAsync();
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await _apiB.UploadTextAsync("remote", null, false);
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        var engine = CreateEngine();
+        await CopyLocallyAsync("local, copied after remote");
+
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+
+        Assert.Equal(["first"], Written());
+        Assert.True(Cached("remote"));
+    }
+
+    [Fact]
+    public async Task Catch_up_does_not_apply_while_local_copies_are_queued()
+    {
+        await PrimeAppliedAsync();
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await _apiB.UploadTextAsync("remote", null, false);
+        var engine = CreateEngine();
+        _handlerA.Offline = true;
+        await CopyLocallyAsync("queued while offline");   // queued at the client clock, which is OLDER than "remote"
+        Assert.Equal(1, _queue.Count);
+        _handlerA.Offline = false;
+
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+
+        Assert.Equal(["first"], Written());
+        Assert.Equal(0, _queue.Count);   // flushed after the catch-up
+    }
+
+    [Fact]
+    public async Task Catch_up_applies_a_remote_clip_newer_than_everything_once()
+    {
+        await PrimeAppliedAsync();
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        var engine = CreateEngine();
+        await CopyLocallyAsync("local, older");
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await _apiB.UploadTextAsync("remote, newest", null, false);
+
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+        Assert.Equal(["first", "remote, newest"], Written());
+
+        await engine.StopAsync();
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+        Assert.Equal(["first", "remote, newest"], Written());
+    }
+
+    [Fact]
+    public async Task Catch_up_never_applies_a_backfilled_clip_older_than_a_local_copy()
+    {
+        await PrimeAppliedAsync();
+        var firstAt = _cache.LastAppliedAt!.Value;
+        _server.Clock.Advance(TimeSpan.FromMinutes(2));
+        var engine = CreateEngine();
+        await CopyLocallyAsync("local");
+        var local = _cache.Items.Single(i => i.Clip.Text == "local").Clip;
+        await _apiB.DeleteAsync(local.Id);   // gone from history, but still what the user has on the clipboard
+        await _apiB.UploadTextAsync("backfilled", firstAt.AddMinutes(1), backfill: true);
+
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+
+        Assert.Equal(["first"], Written());
+        Assert.True(Cached("backfilled") && !Cached("local"));
     }
 
     [Fact]

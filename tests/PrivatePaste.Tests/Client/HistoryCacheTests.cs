@@ -262,4 +262,16 @@ public class HistoryCacheTests : IDisposable
         Assert.False(c.Remove(id, 4));                 // nothing held
         Assert.False(c.Upsert(Clip(3, "a", 1, id)));   // already deleted
     }
+
+    [Fact]
+    public void Own_upload_responses_do_not_move_the_sync_position()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Clip(3, "synced", 1));
+        Assert.True(c.Upsert(Clip(9, "uploaded here", 2), fromSync: false));
+        Assert.Equal(3, c.HighestSeq);
+        c.Save();
+        Assert.Equal(3, HistoryCache.Load(FilePath, key).HighestSeq);
+    }
 }

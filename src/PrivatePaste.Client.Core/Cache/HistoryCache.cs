@@ -30,6 +30,10 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     /// </summary>
     public event EventHandler? Changed;
 
+    /// <summary>
+    /// How far the sync stream (catch-up and live pushes) has been read. Local uploads do not move it: a clip uploaded
+    /// here while the socket is down must not make the next catch-up skip other devices' clips with lower seqs.
+    /// </summary>
     public long HighestSeq { get { lock (_gate) return _highestSeq; } }
 
     public DateTimeOffset? LastAppliedAt { get { lock (_gate) return _lastAppliedAt; } }
@@ -37,19 +41,22 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     /// <summary>Snapshot, newest first (LastCopiedAt desc, then Seq desc).</summary>
     public IReadOnlyList<CachedClip> Items { get { lock (_gate) return _items.ToArray(); } }
 
-    /// <summary>Adds or replaces a clip. False when nothing changed (not newer than what is held, or already deleted).</summary>
-    public bool Upsert(ClipDto clip, byte[]? thumbnailPng = null)
+    /// <summary>
+    /// Adds or replaces a clip. False when nothing changed (not newer than what is held, or already deleted).
+    /// <paramref name="fromSync"/> is false for the response to this device's own upload (see <see cref="HighestSeq"/>).
+    /// </summary>
+    public bool Upsert(ClipDto clip, byte[]? thumbnailPng = null, bool fromSync = true)
     {
-        if (!UpsertLocked(clip, thumbnailPng)) return false;
+        if (!UpsertLocked(clip, thumbnailPng, fromSync)) return false;
         Changed?.Invoke(this, EventArgs.Empty);
         return true;
     }
 
-    private bool UpsertLocked(ClipDto clip, byte[]? thumbnailPng)
+    private bool UpsertLocked(ClipDto clip, byte[]? thumbnailPng, bool fromSync)
     {
         lock (_gate)
         {
-            if (clip.Seq > _highestSeq) _highestSeq = clip.Seq;
+            if (fromSync && clip.Seq > _highestSeq) _highestSeq = clip.Seq;
             // Broadcasts can arrive out of order: ignore anything older than what we hold or already deleted.
             if (_tombstones.TryGetValue(clip.Id, out var dead) && dead >= clip.Seq) return false;
             var existing = _items.Find(i => i.Clip.Id == clip.Id);
@@ -132,7 +139,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             loaded.Sort(Compare);
             if (loaded.Count > capacity) loaded.RemoveRange(capacity, loaded.Count - capacity);
             cache._items.AddRange(loaded);
-            cache._highestSeq = Math.Max(snap.HighestSeq, loaded.Select(i => i.Clip.Seq).DefaultIfEmpty(0).Max());
+            cache._highestSeq = snap.HighestSeq;
             cache._lastAppliedAt = snap.LastAppliedAt;
             if (snap.Tombstones is not null)
             {

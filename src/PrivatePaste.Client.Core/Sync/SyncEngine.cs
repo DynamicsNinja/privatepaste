@@ -25,7 +25,9 @@ public sealed record SyncError(string Message, Exception Exception);
 /// <para>
 /// Catch-up applies a clip only when something was applied before (<c>LastAppliedAt</c> set: the first sync after sign-in
 /// is history only, which also keeps backfilled clips off the clipboard) and never on the first successful catch-up after
-/// a pause (clips copied elsewhere while paused go to history only). Live clips are applied as usual.
+/// a pause (clips copied elsewhere while paused go to history only). It never overwrites a newer local copy: the candidate
+/// must be the top of the history, newer than <c>LastAppliedAt</c> and the coordinator's <c>LastLocalCaptureAt</c>, with
+/// the offline queue empty. Live clips are applied as usual.
 /// </para>
 /// All waiting uses the injected <see cref="TimeProvider"/>. The backoff is reset only after a connection stayed up for one
 /// ping interval (25 s), so a server that accepts and then drops at once still sees growing delays.
@@ -258,13 +260,19 @@ public sealed class SyncEngine(
         _resumingFromPause = false;   // cleared only once a catch-up completed
         if (afterPause || cache.LastAppliedAt is not { } lastApplied) return;   // history only
 
-        // Apply at most the newest caught-up clip from another device that is still present, if newer than the last applied.
-        var present = cache.Items.ToDictionary(i => i.Clip.Id, i => i.Clip.Seq);
+        // Apply at most the newest caught-up clip from another device, and only if it is the newest thing there is: the top of
+        // the history, newer than the last applied clip and than the last local copy, with no local copy still queued.
+        var items = cache.Items;
+        var present = items.ToDictionary(i => i.Clip.Id, i => i.Clip.Seq);
         var newest = caught
             .Where(c => c.SourceDeviceId != ownDeviceId && present.TryGetValue(c.Id, out var seq) && seq == c.Seq)
             .MaxBy(c => (c.LastCopiedAt, c.Seq));
-        if (newest is not null && !isPaused() && newest.LastCopiedAt > lastApplied)
-            await ApplyAsync(newest, ct).ConfigureAwait(false);
+        if (newest is null || isPaused()) return;
+        if (coordinator.HasQueuedClips) return;
+        if (items[0].Clip.Id != newest.Id || items[0].Clip.Seq != newest.Seq) return;
+        if (newest.LastCopiedAt <= lastApplied) return;
+        if (coordinator.LastLocalCaptureAt is { } localCopy && newest.LastCopiedAt <= localCopy) return;
+        await ApplyAsync(newest, ct).ConfigureAwait(false);
     }
 
     private async Task<Outcome> ReceiveLoopAsync(Link link)
