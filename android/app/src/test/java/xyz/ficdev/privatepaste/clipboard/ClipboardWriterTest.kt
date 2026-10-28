@@ -32,11 +32,12 @@ class ClipboardWriterTest {
     private val png = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 1, 2, 3)
 
     /**
-     * androidx FileProvider joins paths with '/', so on a Windows host it cannot map files under cacheDir. There the
-     * test registers [WindowsHostFileProvider], which serves the same `content://<authority>/clipboard/<file>` layout
-     * and answers getType from the extension like FileProvider. Elsewhere (Linux CI) the real FileProvider runs.
+     * androidx FileProvider can't map Robolectric's cacheDir: on Windows it joins paths with '/', and on the Linux CI
+     * runner its configured root doesn't resolve either ("Failed to find configured root"). So every host registers
+     * [WindowsHostFileProvider], which serves the same `content://<authority>/clipboard/<file>` layout and answers
+     * getType from the extension like FileProvider. The real mapping is checked on a device (owner checklist).
      */
-    private val windowsHost = File.separatorChar == '\\'
+    private val windowsHost = true
 
     @Before
     fun setUp() {

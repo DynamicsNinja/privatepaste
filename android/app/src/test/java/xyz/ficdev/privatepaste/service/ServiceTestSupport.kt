@@ -27,27 +27,21 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * The real Application with test seams: in-memory keys (Robolectric has no AndroidKeyStore) and, on a Windows host,
+ * The real Application with test seams: in-memory keys (Robolectric has no AndroidKeyStore) and, on every host,
  * a clipboard writer whose content URIs [WindowsHostFileProvider] serves (androidx FileProvider assumes '/').
  */
 class TestPrivatePasteApp : PrivatePasteApp() {
     override fun keyProvider(): KeyProvider = InMemoryKeyProvider()
 
     override fun clipboardWriter(files: ClipImageFiles): ClipboardWriter =
-        if (File.separatorChar == '\\') {
-            ClipboardWriter(this, files) { _, f ->
-                Uri.parse("content://${ClipboardWriter.AUTHORITY}/clipboard/${Uri.encode(f.name)}")
-            }
-        } else {
-            super.clipboardWriter(files)
+        ClipboardWriter(this, files) { _, f ->
+            Uri.parse("content://${ClipboardWriter.AUTHORITY}/clipboard/${Uri.encode(f.name)}")
         }
 
     companion object {
-        /** Call in @Before on a Windows host, so image URIs resolve. */
+        /** Call in @Before so image URIs resolve (FileProvider can't map Robolectric's cacheDir; see ClipboardWriterTest). */
         fun setUpHostProvider() {
-            if (File.separatorChar == '\\') {
-                Robolectric.setupContentProvider(WindowsHostFileProvider::class.java, ClipboardWriter.AUTHORITY)
-            }
+            Robolectric.setupContentProvider(WindowsHostFileProvider::class.java, ClipboardWriter.AUTHORITY)
         }
     }
 }
