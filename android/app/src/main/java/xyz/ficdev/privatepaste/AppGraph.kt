@@ -230,6 +230,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         g.ending = true
         g.engine.stop()
         withContext(Dispatchers.IO) { imageFiles.clear() }   // plaintext copies of clips: gone with the session
+        Notifications.cancelClip(app)   // a clip preview (maybe a password) is gone with the session too
         if (_current.value === g) _current.value = null
         g.close()
     }
