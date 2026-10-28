@@ -37,16 +37,25 @@ internal sealed class SwitchHandler(HttpMessageHandler real) : HttpMessageHandle
     /// <summary>When set, upload requests wait for this task before being forwarded.</summary>
     public Task? Hold { get; set; }
     public List<string> Uploads { get; } = [];
+    /// <summary>When set, a text upload whose JSON body matches gets a 503 (a transient failure) instead of reaching the server.</summary>
+    public Func<string, bool>? FailTextUpload { get; set; }
+    /// <summary>When set and it returns a response, that response is used instead of the server's (runs first).</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage?>? Respond { get; set; }
     private readonly HttpMessageInvoker _inner = new(real, disposeHandler: false);
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
+        if (Respond?.Invoke(request) is { } canned) return canned;
         if (Offline) throw new HttpRequestException("offline");
         if (Statuses.TryDequeue(out var status)) return new HttpResponseMessage((System.Net.HttpStatusCode)status);
         if (request.RequestUri!.AbsolutePath.StartsWith("/api/clips/") && request.Method == HttpMethod.Post)
         {
             if (request.Content is { } c && request.RequestUri.AbsolutePath.EndsWith("/text"))
-                Uploads.Add(await c.ReadAsStringAsync(ct));
+            {
+                var body = await c.ReadAsStringAsync(ct);
+                Uploads.Add(body);
+                if (FailTextUpload?.Invoke(body) == true) return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+            }
             if (Hold is { } h) await h;
         }
         return await _inner.SendAsync(request, ct);

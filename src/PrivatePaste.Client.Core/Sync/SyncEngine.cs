@@ -14,7 +14,8 @@ public sealed record SyncError(string Message, Exception Exception);
 /// <summary>
 /// Keeps the local history in live sync with the server and applies clips from other devices to the clipboard.
 /// Per connection: connect, catch up via <c>/api/sync</c> (applying at most the newest caught-up clip from another device),
-/// flush the offline queue, then receive pushes, with an app-level ping every 25 s and a 10 s pong timeout.
+/// flush the offline queue, then receive pushes, with an app-level ping every 25 s and a 10 s pong timeout. While connected,
+/// a non-empty offline queue is flushed again every 30 s (a live upload that failed transiently waits there).
 /// A 1008 close or a 401 from any API call raises <see cref="Revoked"/> once and stops for good (State = SignedOut);
 /// any other failure sets State = Offline and reconnects after <see cref="Backoff.Next"/>.
 /// <para>
@@ -46,11 +47,13 @@ public sealed class SyncEngine(
     private static readonly TimeSpan PongTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan SaveInterval = TimeSpan.FromSeconds(2);
+    /// <summary>While connected, queued clips (a transient upload failure) are retried this often.</summary>
+    private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(30);
     private const int MaxMessageBytes = 8 * 1024 * 1024;   // text clips are at most 1 MB; JSON escaping can grow that
     private static readonly byte[] PingBytes = JsonSerializer.SerializeToUtf8Bytes(new WsMessage(WsTypes.Ping), ProtocolJson.Options);
 
     private enum Outcome { Failed, Revoked, Paused, Stopped }
-    private enum AbortReason { None, Paused, PongTimeout, SendFailed }
+    private enum AbortReason { None, Paused, PongTimeout, SendFailed, Revoked }
 
     private readonly object _gate = new();
     private CancellationTokenSource? _stop;
@@ -195,6 +198,8 @@ public sealed class SyncEngine(
             {
                 case AbortReason.Paused:
                     return Outcome.Paused;
+                case AbortReason.Revoked:
+                    return Outcome.Revoked;
                 case AbortReason.PongTimeout:
                     Report("No pong from the server; reconnecting.", e);
                     break;
@@ -350,9 +355,11 @@ public sealed class SyncEngine(
         }
     }
 
-    /// <summary>Every second while connected: pause check, ping/pong bookkeeping, throttled cache save.</summary>
+    /// <summary>Every second while connected: pause check, ping/pong bookkeeping, queue retry, throttled cache save.</summary>
     private async Task MonitorAsync(Link link, PeriodicTimer timer)
     {
+        var lastFlushAt = time.GetUtcNow();   // the connect itself just flushed
+        Task? flush = null;
         try
         {
             while (await timer.WaitForNextTickAsync(link.Token).ConfigureAwait(false))
@@ -372,6 +379,12 @@ public sealed class SyncEngine(
                         await link.Socket.SendAsync(PingBytes, WebSocketMessageType.Text, true, link.Token).ConfigureAwait(false);
                         break;
                 }
+                if (now - lastFlushAt >= FlushInterval)
+                {
+                    lastFlushAt = now;
+                    // In the background: a slow upload must not hold up pings or the pause check.
+                    if (flush is null or { IsCompleted: true } && coordinator.HasQueuedClips) flush = FlushAsync(link);
+                }
                 SaveIfDue();
             }
         }
@@ -379,6 +392,29 @@ public sealed class SyncEngine(
         catch (Exception)
         {
             link.Abort(AbortReason.SendFailed);   // the receive loop reports the resulting failure
+        }
+        finally
+        {
+            if (flush is not null) await flush.ConfigureAwait(false);   // never throws; the link token is cancelled by now
+        }
+    }
+
+    /// <summary>A periodic retry of the offline queue. Never throws: a 401 ends the link as revoked.</summary>
+    private async Task FlushAsync(Link link)
+    {
+        try
+        {
+            await Task.Yield();   // off the monitor's tick
+            await coordinator.FlushQueueAsync(link.Token).ConfigureAwait(false);
+        }
+        catch (UnauthorizedApiException)
+        {
+            link.Abort(AbortReason.Revoked);
+        }
+        catch (OperationCanceledException) when (link.Token.IsCancellationRequested) { }
+        catch (Exception e)
+        {
+            Report("Could not send the queued clips.", e);
         }
     }
 

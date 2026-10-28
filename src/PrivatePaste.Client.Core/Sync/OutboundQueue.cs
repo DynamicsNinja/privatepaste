@@ -34,13 +34,39 @@ public sealed class OutboundQueue(string path, byte[] key)
         }
     }
 
-    public bool TryPeek(out (ClipboardContent Content, DateTimeOffset CopiedAt) item)
+    /// <summary>Counts one more transient failure of the head item (persisted); returns its attempt count, 0 when empty.</summary>
+    public int RecordFailure()
+    {
+        lock (_gate)
+        {
+            if (_items.Count == 0) return 0;
+            var head = _items[0] with { Attempts = _items[0].Attempts + 1 };
+            _items[0] = head;
+            Save();
+            return head.Attempts;
+        }
+    }
+
+    /// <summary>Moves the head item to the back, so the items behind it get their turn.</summary>
+    public void MoveHeadToBack()
+    {
+        lock (_gate)
+        {
+            if (_items.Count < 2) return;
+            var head = _items[0];
+            _items.RemoveAt(0);
+            _items.Add(head);
+            Save();
+        }
+    }
+
+    public bool TryPeek(out (ClipboardContent Content, DateTimeOffset CopiedAt, int Attempts) item)
     {
         lock (_gate)
         {
             if (_items.Count == 0) { item = default; return false; }
             var e = _items[0];
-            item = (e.IsImage ? new ClipboardContent.Image(e.Png!) : new ClipboardContent.Text(e.Text!), e.CopiedAt);
+            item = (e.IsImage ? new ClipboardContent.Image(e.Png!) : new ClipboardContent.Text(e.Text!), e.CopiedAt, e.Attempts);
             return true;
         }
     }
@@ -90,5 +116,5 @@ public sealed class OutboundQueue(string path, byte[] key)
         AtomicFile.Write(path, file);
     }
 
-    private sealed record Entry(bool IsImage, string? Text, byte[]? Png, DateTimeOffset CopiedAt);
+    private sealed record Entry(bool IsImage, string? Text, byte[]? Png, DateTimeOffset CopiedAt, int Attempts = 0);
 }

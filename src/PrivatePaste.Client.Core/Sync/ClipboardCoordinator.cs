@@ -11,7 +11,7 @@ namespace PrivatePaste.Client.Core.Sync;
 /// <summary>
 /// Decides what happens when the user copies something and when a clip arrives from another device.
 /// Failure classes for uploads: <see cref="HttpRequestException"/>, any 5xx, 408 and 429 are transient (live copy is queued,
-/// a flush stops and keeps the item); other 4xx (400, 413, ...) are rejections (item dropped, one notification);
+/// a flush counts an attempt, see <see cref="FlushQueueAsync"/>); other 4xx (400, 413, ...) are rejections (item dropped, one notification);
 /// <see cref="UnauthorizedApiException"/> is NOT swallowed, queued or dropped: it propagates to the caller (sync engine/host),
 /// which signs out. A queued item stays queued; a live copy that hit it is not retained.
 /// </summary>
@@ -21,6 +21,10 @@ public sealed class ClipboardCoordinator(
 {
     public const int MaxTextBytes = 1024 * 1024;
     public const int MaxImageBytes = 20 * 1024 * 1024;
+    /// <summary>A queued clip that failed this many times (transiently) moves to the back of the queue.</summary>
+    public const int RotateAfterAttempts = 5;
+    /// <summary>A queued clip that failed this many times is dropped.</summary>
+    public const int DropAfterAttempts = 10;
 
     /// <summary>After the app writes the clipboard, the first change seen within this span is its own write (OS may transform it).</summary>
     private static readonly TimeSpan OwnWriteWindow = TimeSpan.FromSeconds(1);
@@ -149,13 +153,18 @@ public sealed class ClipboardCoordinator(
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Uploads queued clips in order, each at most once per call. A transient failure counts an attempt on the item:
+    /// the first <see cref="RotateAfterAttempts"/>-1 stop the flush (the next one retries); from then on the item moves to
+    /// the back so later items still go out; after <see cref="DropAfterAttempts"/> it is dropped with one notification.
+    /// </summary>
     public async Task FlushQueueAsync(CancellationToken ct)
     {
         if (isPaused()) return;
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            while (!isPaused() && queue.TryPeek(out var item))
+            for (var remaining = queue.Count; remaining > 0 && !isPaused() && queue.TryPeek(out var item); remaining--)
             {
                 ClipDto result;
                 try
@@ -164,7 +173,16 @@ public sealed class ClipboardCoordinator(
                 }
                 catch (Exception e) when (IsTransient(e))
                 {
-                    return;
+                    var attempts = queue.RecordFailure();
+                    if (attempts >= DropAfterAttempts)
+                    {
+                        queue.Dequeue();
+                        notifier.Notify("Couldn't sync a clip after several tries.");
+                        continue;
+                    }
+                    if (attempts < RotateAfterAttempts) return;
+                    queue.MoveHeadToBack();
+                    continue;
                 }
                 catch (ApiException e) when (e is not UnauthorizedApiException)
                 {

@@ -23,7 +23,6 @@ namespace PrivatePaste.Desktop;
 public sealed class DesktopHost : IAsyncDisposable
 {
     private static readonly TimeSpan EchoWindow = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan LogoutTimeout = TimeSpan.FromSeconds(5);
 
     private readonly INotifier _notifier;
@@ -164,7 +163,7 @@ public sealed class DesktopHost : IAsyncDisposable
             LoginResponse login;
             try
             {
-                login = await new PrivatePasteApi(http).LoginAsync(password, deviceName, Platform.PlatformName, _shutdown.Token);
+                login = await new PrivatePasteApi(http, _time).LoginAsync(password, deviceName, Platform.PlatformName, _shutdown.Token);
             }
             catch (Exception e)
             {
@@ -305,7 +304,7 @@ public sealed class DesktopHost : IAsyncDisposable
     private void StartSession(Uri server, string token, Guid deviceId, HttpClient? http = null)
     {
         http ??= CreateHttpClient(server);
-        var api = new PrivatePasteApi(http) { Token = token };
+        var api = new PrivatePasteApi(http, _time) { Token = token };
         var coordinator = new ClipboardCoordinator(
             Platform.Clipboard, api, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused);
         var wsUri = WebSocketUri(http.BaseAddress!);
@@ -332,7 +331,8 @@ public sealed class DesktopHost : IAsyncDisposable
     {
         var text = server.AbsoluteUri;
         if (!text.EndsWith('/')) text += "/";
-        return new HttpClient(_transport.CreateHandler()) { BaseAddress = new Uri(text), Timeout = HttpTimeout };
+        // No client-wide timeout: PrivatePasteApi times each call itself (uploads scale with their size).
+        return new HttpClient(_transport.CreateHandler()) { BaseAddress = new Uri(text), Timeout = Timeout.InfiniteTimeSpan };
     }
 
     /// <summary>{base}ws with ws/wss matching http/https.</summary>

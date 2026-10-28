@@ -307,6 +307,25 @@ public class SyncEngineTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_transient_failure_while_connected_is_retried_by_the_periodic_flush()
+    {
+        var engine = await StartConnectedAsync();
+        _handlerA.Statuses.Enqueue(503);
+        await CopyLocallyAsync("retry me");
+        Assert.Equal(1, _queue.Count);
+
+        _time.Advance(TimeSpan.FromSeconds(29));
+        await Task.Delay(50);
+        Assert.Equal(1, _queue.Count);   // not due yet
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => _queue.Count == 0);
+
+        Assert.Contains("retry me", (await _apiB.ListAsync(null, null)).Items.Select(c => c.Text));
+        Assert.Equal(1, Volatile.Read(ref _connects));
+        Assert.Equal(SyncState.Connected, engine.State);
+    }
+
+    [Fact]
     public async Task First_catch_up_with_fresh_cache_is_history_only()
     {
         await UploadXyzWhileStoppedAsync();

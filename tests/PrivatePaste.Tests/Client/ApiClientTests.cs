@@ -208,4 +208,37 @@ public class ApiClientTests
         var page = await api.ListAsync("a&b #c+d", null);
         Assert.Equal("a&b #c+d", Assert.Single(page.Items).Text);
     }
+
+    [Fact]
+    public async Task Per_call_timeouts_use_the_time_provider_and_scale_uploads_with_size()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var http = new HttpClient(new StubHandler(async (_, ct) => { await Task.Delay(Timeout.Infinite, ct); return new HttpResponseMessage(); }))
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        var api = new PrivatePasteApi(http, time) { Token = "t" };
+
+        var list = api.ListAsync(null, null);
+        var upload = api.UploadTextAsync(new string('x', 1024 * 1024), null, false);   // 1 MB: 30 s + 4 s
+        time.Advance(TimeSpan.FromSeconds(30));
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => list.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.IsType<TimeoutException>(ex.InnerException);
+        await Task.Delay(50);
+        Assert.False(upload.IsCompleted);
+        time.Advance(TimeSpan.FromSeconds(4));
+        ex = await Assert.ThrowsAsync<HttpRequestException>(() => upload.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.IsType<TimeoutException>(ex.InnerException);
+    }
+
+    [Theory]
+    [InlineData(0, 30)]
+    [InlineData(1, 31)]
+    [InlineData(256 * 1024, 31)]
+    [InlineData(1024 * 1024, 34)]
+    [InlineData(20 * 1024 * 1024, 110)]
+    [InlineData(1024L * 1024 * 1024, 300)]
+    public void Upload_timeout_is_30_s_plus_1_s_per_256_KB_capped_at_5_min(long bytes, int seconds) =>
+        Assert.Equal(TimeSpan.FromSeconds(seconds), PrivatePasteApi.UploadTimeout(bytes));
 }

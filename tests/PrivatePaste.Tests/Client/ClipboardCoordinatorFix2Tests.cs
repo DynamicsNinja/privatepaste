@@ -116,4 +116,65 @@ public partial class ClipboardCoordinatorTests
         await _c.OnClipboardChangedAsync(default);
         Assert.Equal("retry", Assert.Single(await ServerClipsAsync()).Text);
     }
+
+    /// <summary>Queues the given texts while offline, then goes back online with "poison" uploads failing transiently.</summary>
+    private async Task QueueWithPoisonAsync(params string[] texts)
+    {
+        _handler.Offline = true;
+        foreach (var t in texts)
+        {
+            _clip.Current = new ClipboardContent.Text(t);
+            await _c.OnClipboardChangedAsync(default);
+        }
+        Assert.Equal(texts.Length, _queue.Count);
+        _handler.Offline = false;
+        _handler.FailTextUpload = body => body.Contains("poison");
+    }
+
+    [Fact]
+    public async Task A_poison_item_rotates_to_the_back_and_later_items_still_upload()
+    {
+        await StartAsync();
+        await QueueWithPoisonAsync("poison", "good");
+
+        for (var i = 0; i < 4; i++) await _c.FlushQueueAsync(default);
+        Assert.Equal(2, _queue.Count);   // four failures: still at the head, the flush stops there
+        Assert.DoesNotContain("good", (await ServerClipsAsync()).Select(c => c.Text));
+
+        await _c.FlushQueueAsync(default);   // fifth failure: moved to the back, "good" goes next
+        Assert.Contains("good", (await ServerClipsAsync()).Select(c => c.Text));
+        Assert.Equal(1, _queue.Count);
+        Assert.True(_queue.TryPeek(out var head));
+        Assert.Equal(new ClipboardContent.Text("poison"), head.Content);
+        Assert.Empty(_notes.Messages);
+    }
+
+    [Fact]
+    public async Task A_poison_item_is_dropped_after_ten_tries_with_exactly_one_toast()
+    {
+        await StartAsync();
+        await QueueWithPoisonAsync("poison");
+
+        for (var i = 0; i < 9; i++) await _c.FlushQueueAsync(default);
+        Assert.Equal(1, _queue.Count);
+        Assert.Empty(_notes.Messages);
+
+        await _c.FlushQueueAsync(default);
+        Assert.Equal(0, _queue.Count);
+        for (var i = 0; i < 3; i++) await _c.FlushQueueAsync(default);
+        Assert.Equal(["Couldn't sync a clip after several tries."], _notes.Messages);
+        Assert.Equal(0, OutboundQueue.Load(Path.Combine(_dir, "q.enc"), _key).Count);   // the drop was persisted
+    }
+
+    [Fact]
+    public void Attempts_survive_a_restart()
+    {
+        var path = Path.Combine(_dir, "attempts.enc");
+        var q = new OutboundQueue(path, _key);
+        q.Enqueue(new ClipboardContent.Text("a"), DateTimeOffset.UnixEpoch);
+        Assert.Equal(1, q.RecordFailure());
+        Assert.Equal(2, q.RecordFailure());
+        Assert.True(OutboundQueue.Load(path, _key).TryPeek(out var item));
+        Assert.Equal(2, item.Attempts);
+    }
 }
