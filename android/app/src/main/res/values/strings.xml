@@ -1,4 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PrivatePaste</string>
+
+    <!-- Sign in -->
+    <string name="signin_server">Server address</string>
+    <string name="signin_password">Password</string>
+    <string name="signin_device_name">Device name</string>
+    <string name="signin_button">Sign in</string>
+    <string name="signin_show_password">Show password</string>
+    <string name="signin_hide_password">Hide password</string>
+    <string name="signin_wrong_password">Wrong password.</string>
+    <string name="signin_rate_limited">Too many attempts. Wait a minute and try again.</string>
+    <string name="signin_unreachable">Can\'t reach the server. Check the address and your connection.</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_notifications_title">Notifications</string>
+    <string name="onboarding_notifications_body">PrivatePaste shows a quiet notification while it\'s connected</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_battery_title">Allow PrivatePaste to run in the background</string>
+    <string name="onboarding_battery_body">So clips from your computer arrive even when the screen is off.</string>
+    <string name="onboarding_allow">Allow</string>
+    <string name="onboarding_not_now">Not now</string>
+
+    <!-- History -->
+    <string name="history_search">Search history</string>
+    <string name="history_clear_search">Clear search</string>
+    <string name="history_settings">Settings</string>
+    <string name="history_empty">Nothing here yet. Copy something on your computer and it shows up here.</string>
+    <string name="history_no_matches">No matches.</string>
+    <string name="history_copied">Copied</string>
+    <string name="history_copy_failed">Couldn\'t copy the clip.</string>
+    <string name="history_image_offline">Image not available offline</string>
+    <string name="history_delete_failed">Couldn\'t delete the clip. Check your connection.</string>
+    <string name="history_delete_title">Delete this clip from all your devices?</string>
+    <string name="history_delete">Delete</string>
+    <string name="history_cancel">Cancel</string>
+    <string name="history_copy_action">Copy</string>
+    <string name="history_meta">%1$s · %2$s</string>
+    <string name="history_unknown_device">Unknown device</string>
+    <string name="history_live">Applied on this phone</string>
+    <string name="history_kind_text">Text</string>
+    <string name="history_kind_link">Link</string>
+    <string name="history_kind_image">Image</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_offline">Offline</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_server">Server</string>
+    <string name="settings_device_name">Device name</string>
+    <string name="settings_delivery">Delivery</string>
+    <string name="settings_delivery_automatic">Copy automatically</string>
+    <string name="settings_delivery_notification">Show a notification with a Copy button</string>
+    <string name="settings_background">Background</string>
+    <string name="settings_background_allowed">Allowed</string>
+    <string name="settings_background_restricted">Restricted</string>
+    <string name="settings_allow">Allow</string>
+    <string name="settings_sign_out">Sign out</string>
+    <string name="settings_sign_out_confirm">Sign out of this phone? Local history is removed.</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_version">Version %1$s</string>
 </resources>
