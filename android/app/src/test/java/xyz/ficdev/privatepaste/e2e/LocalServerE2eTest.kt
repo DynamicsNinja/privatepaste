@@ -110,30 +110,34 @@ class LocalServerE2eTest {
         val pcLogin = PrivatePasteApi(baseUrl, null, client).login(password, "e2e-pc")
         val pc = PrivatePasteApi(baseUrl, pcLogin.token, client)
 
-        // 3. The PC uploads text; the phone applies it.
-        val fromPc = "e2e from pc ${UUID.randomUUID()}"
-        pc.uploadText(fromPc, null, backfill = false)
-        waitFor("phone applies the pc clip") { applied.any { it.text == fromPc } }
+        try {
+            // 3. The PC uploads text; the phone applies it.
+            val fromPc = "e2e from pc ${UUID.randomUUID()}"
+            pc.uploadText(fromPc, null, backfill = false)
+            waitFor("phone applies the pc clip") { applied.any { it.text == fromPc } }
 
-        // 4. The phone sends text; the PC sees it in the history.
-        val fromPhone = "e2e from phone ${UUID.randomUUID()}"
-        assertEquals(SendResult.Sent, sender.sendText(fromPhone))
-        val phoneClip = pc.clips(null, null).items.first { it.text == fromPhone }
-        assertEquals(phoneDeviceId, phoneClip.sourceDeviceId)
+            // 4. The phone sends text; the PC sees it in the history.
+            val fromPhone = "e2e from phone ${UUID.randomUUID()}"
+            assertEquals(SendResult.Sent, sender.sendText(fromPhone))
+            val phoneClip = pc.clips(null, null).items.first { it.text == fromPhone }
+            assertEquals(phoneDeviceId, phoneClip.sourceDeviceId)
 
-        // 5. A delete on the PC reaches the phone's cache.
-        assertTrue(pc.delete(phoneClip.id))
-        waitFor("delete reaches the phone") { cache.items.value.none { it.id == phoneClip.id } }
-        assertTrue(pc.clips(null, null).items.none { it.id == phoneClip.id })
+            // 5. A delete on the PC reaches the phone's cache.
+            assertTrue(pc.delete(phoneClip.id))
+            waitFor("delete reaches the phone") { cache.items.value.none { it.id == phoneClip.id } }
+            assertTrue(pc.clips(null, null).items.none { it.id == phoneClip.id })
 
-        // 6. Revoking the phone from the PC emits `revoked`.
-        val revoke = Request.Builder().url(baseUrl.newBuilder().addPathSegments("api/devices/$phoneDeviceId").build())
-            .header("Authorization", "Bearer ${pcLogin.token}").delete().build()
-        client.newCall(revoke).execute().use { assertEquals(204, it.code) }
-        withTimeout(TIMEOUT_MS) { engine.revoked.first() }
-        assertEquals(SyncState.SIGNED_OUT, engine.state.value)
-
-        pc.logout()
+            // 6. Revoking the phone from the PC emits `revoked`.
+            val revoke = Request.Builder().url(baseUrl.newBuilder().addPathSegments("api/devices/$phoneDeviceId").build())
+                .header("Authorization", "Bearer ${pcLogin.token}").delete().build()
+            client.newCall(revoke).execute().use { assertEquals(204, it.code) }
+            withTimeout(TIMEOUT_MS) { engine.revoked.first() }
+            assertEquals(SyncState.SIGNED_OUT, engine.state.value)
+        } finally {
+            // Best-effort cleanup of the pc device and its clips.
+            runCatching { pc.clips(null, null).items.filter { it.text?.startsWith("e2e from ") == true }.forEach { pc.delete(it.id) } }
+            runCatching { pc.logout() }
+        }
     }
 
     private suspend fun waitFor(what: String, condition: () -> Boolean) {

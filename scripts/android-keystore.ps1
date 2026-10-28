@@ -34,11 +34,16 @@ $password = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Rep
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Output) | Out-Null
 
+$env:PP_KS_PASS = $password
+try {
 & $keytool -genkeypair -v `
     -keystore $Output -storetype PKCS12 `
     -alias $alias -keyalg RSA -keysize 4096 -validity 10000 `
-    -storepass $password -keypass $password `
+    -storepass:env PP_KS_PASS -keypass:env PP_KS_PASS `
     -dname 'CN=PrivatePaste, O=ficdev, C=HR'
+} finally {
+    Remove-Item Env:PP_KS_PASS -ErrorAction SilentlyContinue
+}
 if ($LASTEXITCODE -ne 0) {
     if (Test-Path -LiteralPath $Output) { Remove-Item -LiteralPath $Output -Force }
     throw "keytool failed with exit code $LASTEXITCODE."
