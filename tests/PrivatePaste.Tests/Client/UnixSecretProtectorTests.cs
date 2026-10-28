@@ -190,35 +190,57 @@ public class UnixSecretProtectorTests : IDisposable
     }
 
     [Fact]
-    public void SecretTool_lookup_error_falls_back_to_key_file_without_storing()
+    public void SecretTool_lookup_error_throws_without_key_file_or_store()
     {
         var runner = new FakeRunner { Handler = (_, _, _) => new CommandResult(1, "", "Cannot autolaunch D-Bus") };
         var file = Path.Combine(_dir, "key");
         var notifier = new FakeNotifier();
-        new SecretToolProtector(runner, file, notifier).Protect([1]);
+        var p = new SecretToolProtector(runner, file, notifier);
+        Assert.Throws<InvalidOperationException>(() => p.Protect([1]));
+        var calls = runner.Calls.Count;
+        Assert.Throws<InvalidOperationException>(() => p.Protect([1]));
+        Assert.Equal(calls, runner.Calls.Count);
         Assert.DoesNotContain(runner.Calls, c => c.Args[0] == "store");
-        Assert.True(File.Exists(file));
-        Assert.Single(notifier.Messages);
+        Assert.False(File.Exists(file));
+        Assert.Empty(notifier.Messages);
     }
 
     [Fact]
-    public void SecretTool_other_exit_code_falls_back_without_storing()
+    public void SecretTool_other_exit_code_throws_without_key_file_or_store()
     {
         var runner = new FakeRunner { Handler = (_, _, _) => new CommandResult(2, "") };
-        new SecretToolProtector(runner, Path.Combine(_dir, "key"), new FakeNotifier()).Protect([1]);
+        var file = Path.Combine(_dir, "key");
+        Assert.Throws<InvalidOperationException>(() => new SecretToolProtector(runner, file, new FakeNotifier()).Protect([1]));
         Assert.DoesNotContain(runner.Calls, c => c.Args[0] == "store");
+        Assert.False(File.Exists(file));
     }
 
     [Fact]
-    public void SecretTool_timeout_falls_back_and_later_calls_do_not_touch_the_runner()
+    public void SecretTool_timeout_throws_without_key_file_and_later_calls_do_not_touch_the_runner()
     {
         var runner = new FakeRunner { Handler = (_, _, _) => throw new TimeoutException("hung") };
-        var p = new SecretToolProtector(runner, Path.Combine(_dir, "key"), new FakeNotifier());
-        var boxed = p.Protect([1, 2]);
+        var file = Path.Combine(_dir, "key");
+        var p = new SecretToolProtector(runner, file, new FakeNotifier());
+        Assert.Throws<InvalidOperationException>(() => p.Protect([1, 2]));
         var calls = runner.Calls.Count;
-        Assert.Equal([1, 2], p.Unprotect(boxed));
-        p.Protect([3]);
+        Assert.Throws<InvalidOperationException>(() => p.Protect([3]));
+        Assert.Throws<InvalidOperationException>(() => p.Unprotect([1, .. new byte[63]]));
         Assert.Equal(calls, runner.Calls.Count);
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
+    public void SecretTool_not_found_then_store_failure_falls_back_to_key_file()
+    {
+        var runner = new FakeRunner
+        {
+            Handler = (_, args, _) => args[0] == "lookup" ? new CommandResult(1, "") : new CommandResult(1, "", "no keyring"),
+        };
+        var file = Path.Combine(_dir, "key");
+        var notifier = new FakeNotifier();
+        new SecretToolProtector(runner, file, notifier).Protect([1]);
+        Assert.True(File.Exists(file));
+        Assert.Single(notifier.Messages);
     }
 
     [Fact]
