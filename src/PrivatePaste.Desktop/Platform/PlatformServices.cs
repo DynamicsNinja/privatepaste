@@ -26,7 +26,7 @@ public sealed class PlatformServices
         {
             return new PlatformServices
             {
-                Clipboard = new NullClipboard(),   // Task 8: WindowsClipboard
+                Clipboard = new WindowsClipboard(msg => App.Log?.Info(msg)),
                 Autostart = isolated ? new NullAutostart() : new WindowsAutostart(exePath),
                 SecretProtector = new DpapiSecretProtector(),
                 PlatformName = "windows",
