@@ -46,18 +46,20 @@ class ScreenshotTest {
     private val now = Instant.parse("2026-10-28T10:00:00Z")
     private val time = RelativeTime(Clock.fixed(now, ZoneId.of("UTC")), ZoneId.of("UTC"), Locale.ENGLISH)
 
-    private fun clip(id: String, kind: ClipKind, text: String?, minutesAgo: Long, device: String) = ClipDto(
+    private fun clip(id: String, kind: ClipKind, text: String?, minutesAgo: Long, device: String, platform: String?) = ClipDto(
         id = id, seq = 100 - minutesAgo, kind = kind, text = text, hash = "h-$id", sizeBytes = 10,
-        sourceDeviceId = device, sourceDeviceName = device, lastCopiedAt = now.minusSeconds(minutesAgo * 60),
+        sourceDeviceId = device, sourceDeviceName = device, sourceDevicePlatform = platform,
+        lastCopiedAt = now.minusSeconds(minutesAgo * 60),
     )
 
     private val history = HistoryState(
         items = listOf(
-            clip("1", ClipKind.TEXT, "ssh deploy@build-01 'systemctl restart privatepaste'", 0, "Workstation"),
-            clip("2", ClipKind.LINK, "https://github.com/ficdev/privatepaste/releases", 12, "MacBook"),
-            clip("3", ClipKind.IMAGE, null, 95, "Workstation"),
-            clip("4", ClipKind.TEXT, "Meeting notes:\nship the Android client", 60 * 26, "Pixel 9"),
-            clip("5", ClipKind.TEXT, "4111 1111 1111 1111", 60 * 24 * 5, "MacBook"),
+            clip("1", ClipKind.TEXT, "ssh deploy@build-01 'systemctl restart privatepaste'", 0, "Workstation", "windows"),
+            clip("2", ClipKind.LINK, "https://github.com/ficdev/privatepaste/releases", 12, "MacBook", "macos"),
+            clip("3", ClipKind.IMAGE, null, 95, "ThinkPad", "linux"),
+            clip("4", ClipKind.TEXT, "Meeting notes:\nship the Android client", 60 * 26, "Pixel 9", "android"),
+            clip("5", ClipKind.TEXT, "Grocery list: oat milk, eggs, basil", 60 * 30, "Web", "web"),
+            clip("6", ClipKind.TEXT, "4111 1111 1111 1111", 60 * 24 * 5, "Old phone", null),
         ),
         liveClipId = "1",
         syncState = SyncState.CONNECTED,

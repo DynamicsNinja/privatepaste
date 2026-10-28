@@ -63,6 +63,21 @@ class HistoryScreenTest {
     }
 
     @Test
+    fun rowShowsThePlatformIconBeforeTheDevice() {
+        show(
+            HistoryState(
+                items = listOf(
+                    clip.copy(sourceDevicePlatform = "android"),
+                    clip.copy(id = "b", seq = 2, hash = "h-b", text = "from nowhere", sourceDevicePlatform = null),
+                ),
+                syncState = SyncState.CONNECTED,
+            ),
+        )
+        compose.onNodeWithContentDescription("Android", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Unknown device", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
     fun rowShowsPreviewDeviceAndTime() {
         show(HistoryState(items = listOf(clip), liveClipId = "a", syncState = SyncState.OFFLINE))
         compose.onNodeWithText("hello from the desk").assertIsDisplayed()

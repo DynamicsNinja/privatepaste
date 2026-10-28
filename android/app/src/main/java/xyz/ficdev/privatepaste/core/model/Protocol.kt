@@ -42,6 +42,8 @@ data class ClipDto(
     val sizeBytes: Long,
     val sourceDeviceId: String,
     val sourceDeviceName: String? = null,
+    /** Lowercase platform of the source device ("windows", "macos", "linux", "android", "web", ...); null if unknown. */
+    val sourceDevicePlatform: String? = null,
     @Serializable(InstantSerializer::class) val lastCopiedAt: Instant,
 )
 

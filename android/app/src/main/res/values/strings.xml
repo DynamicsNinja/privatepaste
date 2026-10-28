@@ -46,6 +46,12 @@
     <string name="history_kind_text">Text</string>
     <string name="history_kind_link">Link</string>
     <string name="history_kind_image">Image</string>
+    <string name="platform_windows">Windows</string>
+    <string name="platform_macos">macOS</string>
+    <string name="platform_linux">Linux</string>
+    <string name="platform_android">Android</string>
+    <string name="platform_web">Web</string>
+    <string name="platform_unknown">Unknown device</string>
     <string name="status_connected">Connected</string>
     <string name="status_connecting">Connecting…</string>
     <string name="status_offline">Offline</string>

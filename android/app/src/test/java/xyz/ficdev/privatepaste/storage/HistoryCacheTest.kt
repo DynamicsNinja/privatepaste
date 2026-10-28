@@ -58,6 +58,28 @@ class HistoryCacheTest {
     }
 
     @Test
+    fun keepsSourceDevicePlatformAndLoadsCachesWithoutIt() {
+        cache().apply {
+            upsert(clip("a", 1).copy(sourceDevicePlatform = "android"), fromSync = true)
+            upsert(clip("b", 2), fromSync = true)
+            save()
+        }
+        assertEquals(
+            mapOf("a" to "android", "b" to null),
+            cache().items.value.associate { it.id to it.sourceDevicePlatform },
+        )
+
+        // A snapshot as older versions wrote it, without the field.
+        cryptoFile().write(
+            """{"highestSeq":3,"items":[{"id":"old","seq":3,"kind":"text","text":"x","hash":"h","sizeBytes":1,
+               "sourceDeviceId":"d1","sourceDeviceName":"PC","lastCopiedAt":"2026-10-28T10:00:00Z"}]}""".toByteArray(),
+        )
+        val old = cache().items.value.single()
+        assertEquals("old", old.id)
+        assertNull(old.sourceDevicePlatform)
+    }
+
+    @Test
     fun itemsAreNewestFirst() {
         val c = cache()
         c.upsert(clip("a", 1, minute = 5), fromSync = true)

@@ -94,13 +94,19 @@ fun ClipRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Text(
-                    text = stringResource(R.string.history_meta, device, time),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    PlatformBadge(clip.sourceDevicePlatform)
+                    Text(
+                        text = stringResource(R.string.history_meta, device, time),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (isLive) {
                 val live = stringResource(R.string.history_live)
@@ -137,6 +143,18 @@ private fun KindTile(kind: ClipKind) {
             modifier = Modifier.size(18.dp),
         )
     }
+}
+
+/** The source device's platform icon, muted and about the cap height of the meta text. */
+@Composable
+private fun PlatformBadge(platform: String?) {
+    val icon = PlatformIcon.forPlatform(platform)
+    Icon(
+        painter = painterResource(icon.drawable),
+        contentDescription = stringResource(icon.label),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(13.dp),
+    )
 }
 
 @Composable

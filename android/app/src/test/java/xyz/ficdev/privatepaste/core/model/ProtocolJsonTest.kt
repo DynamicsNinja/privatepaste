@@ -52,6 +52,27 @@ class ProtocolJsonTest {
     }
 
     @Test
+    fun sourceDevicePlatformIsOptional() {
+        // Older servers (and older caches) have no sourceDevicePlatform: it decodes as null.
+        val without = json.decodeFromString<ClipDto>(linkClipJson)
+        assertNull(without.sourceDevicePlatform)
+        assertEquals(without, json.decodeFromString<ClipDto>(json.encodeToString(ClipDto.serializer(), without)))
+
+        val withPlatform = json.decodeFromString<ClipDto>(
+            linkClipJson.replace("\"sourceDeviceName\":\"Desk\",", "\"sourceDeviceName\":\"Desk\",\"sourceDevicePlatform\":\"windows\","),
+        )
+        assertEquals("windows", withPlatform.sourceDevicePlatform)
+        val encoded = json.encodeToString(ClipDto.serializer(), withPlatform)
+        assertTrue(encoded.contains("\"sourceDevicePlatform\":\"windows\""))
+        assertEquals(withPlatform, json.decodeFromString<ClipDto>(encoded))
+
+        val explicitNull = json.decodeFromString<ClipDto>(
+            linkClipJson.replace("\"sourceDeviceName\":\"Desk\",", "\"sourceDeviceName\":\"Desk\",\"sourceDevicePlatform\":null,"),
+        )
+        assertNull(explicitNull.sourceDevicePlatform)
+    }
+
+    @Test
     fun ignoresUnknownFields() {
         val withExtra = linkClipJson.replaceFirst("{", """{"futureField":{"nested":[1,2]},"other":true,""")
         val clip = json.decodeFromString<ClipDto>(withExtra)
