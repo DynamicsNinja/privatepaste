@@ -22,7 +22,7 @@
 
     <!-- Same-version upgrades are allowed so the final x.y.z replaces x.y.z-rc (both map to MSI x.y.z). -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
-                  Schedule="afterInstallInitialize"
+                  Schedule="afterInstallValidate"
                   DowngradeErrorMessage="A newer version of PrivatePaste is already installed. To go back to this version, uninstall PrivatePaste in Settings &gt; Apps first." />
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
@@ -75,10 +75,11 @@
     <util:CloseApplication Id="ClosePrivatePaste" Target="PrivatePaste.exe" CloseMessage="no"
                            TerminateProcess="1" RebootPrompt="no" />
 
-    <!-- Kill the running app at the start of the script, before RemoveExistingProducts and RemoveFiles
-         (the extension's default, before InstallFiles, comes after an uninstall has already tried to remove the exe). -->
+    <!-- Kill the running app at the start of the script, before RemoveFiles (the extension's default, before
+         InstallFiles, comes after an uninstall has already tried to remove the exe). It must not sit between
+         InstallInitialize and RemoveExistingProducts (error 2613), so the upgrade removal runs after InstallValidate. -->
     <InstallExecuteSequence>
-      <Custom Action="override Wix4CloseApplications_X64" Before="RemoveExistingProducts" />
+      <Custom Action="override Wix4CloseApplications_X64" After="InstallInitialize" />
     </InstallExecuteSequence>
 
     <!-- On a real uninstall (not the uninstall half of an upgrade) remove the "Start with Windows" value the
