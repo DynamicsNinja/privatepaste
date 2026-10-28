@@ -89,6 +89,21 @@ class ProtocolJsonTest {
     }
 
     @Test
+    fun parseWsInvalidLiveIsNotLive() {
+        for (live in listOf("null", "\"yes\"", "\"true\"", "1", "{}")) {
+            val event = ProtocolJson.parseWs("""{"type":"clip.created","clip":$linkClipJson,"live":$live}""")
+            assertEquals(live, WsEvent.ClipCreated(json.decodeFromString<ClipDto>(linkClipJson), false), event)
+        }
+    }
+
+    @Test
+    fun parseWsNonObjectClipIsUnknown() {
+        for (clip in listOf("null", "\"c1\"", "42", "[]")) {
+            assertEquals(clip, WsEvent.Unknown, ProtocolJson.parseWs("""{"type":"clip.created","clip":$clip,"live":true}"""))
+        }
+    }
+
+    @Test
     fun parseWsClipDeleted() {
         assertEquals(
             WsEvent.ClipDeleted("c9", 123L),

@@ -12,13 +12,14 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.format.DateTimeParseException
+import kotlin.coroutines.cancellation.CancellationException
 
 // Wire models for the server API (README.md "API" section). JSON is camelCase and enums are lowercase.
 
@@ -95,7 +96,8 @@ object ProtocolJson {
         when (obj.string("type")) {
             "clip.created" -> WsEvent.ClipCreated(
                 clip = json.decodeFromJsonElement(ClipDto.serializer(), obj.getValue("clip")),
-                live = obj["live"]?.jsonPrimitive?.boolean ?: false,
+                // Only a real JSON boolean `true` is live; null, strings or other shapes mean history only.
+                live = (obj["live"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: false,
             )
             "clip.deleted" -> WsEvent.ClipDeleted(
                 id = obj.string("id") ?: return WsEvent.Unknown,
@@ -104,12 +106,11 @@ object ProtocolJson {
             "pong" -> WsEvent.Pong
             else -> WsEvent.Unknown
         }
-    } catch (_: IllegalArgumentException) {
-        // Malformed JSON, a non-object frame, wrong field types and failed clip decoding all
-        // surface as IllegalArgumentException (SerializationException is a subclass).
-        WsEvent.Unknown
-    } catch (_: NoSuchElementException) {
-        // A required field ("clip", "seq") is missing.
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // Malformed JSON, a non-object frame, missing or mistyped fields and failed clip decoding
+        // (IllegalArgumentException, IllegalStateException, NoSuchElementException, ...).
         WsEvent.Unknown
     }
 
