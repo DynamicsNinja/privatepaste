@@ -128,6 +128,19 @@ PP_DB_KEY=0123456789abcdef0123 PP_PASSWORD=dev PP_DATA_DIR=./data dotnet run --p
 
 Run the tests with `dotnet test`.
 
+## Desktop app
+
+A tray app that keeps your clipboard in sync with the server (Windows; see [macOS and Linux](#macos-and-linux) for the other platforms).
+
+- **Download** `PrivatePaste-<version>-win-x64.zip` from the latest GitHub Release and unzip it anywhere. It is a single self-contained `PrivatePaste.exe`; no installer or .NET runtime is needed.
+- **SmartScreen**: the build is not code-signed, so Windows shows "Windows protected your PC". Click "More info", then "Run anyway".
+- **First sign-in**: start the app, enter the server URL (`https://` only; plain `http://` is accepted for localhost), the server password and a device name. After that it stays signed in and starts minimized in the tray.
+- **Hotkey**: Ctrl+Shift+V opens the history popup. Pick an item to re-sync it, put it on the clipboard and paste it. The hotkey can be changed in Settings.
+- **Pause**: the tray menu has Pause sync. While paused nothing is sent or received, and clips copied during the pause are never uploaded, not even after Resume.
+- **Where data lives**: `%APPDATA%\PrivatePaste` holds the settings, the encrypted clip cache (latest 500 items), the DPAPI-protected sign-in token and `logs\`.
+- **Uninstall**: quit the app from the tray, untick "Start with Windows" in Settings, then delete `PrivatePaste.exe` and the `%APPDATA%\PrivatePaste` folder.
+- **Build it yourself**: `powershell -File scripts/publish-windows.ps1` writes `artifacts/win-x64/PrivatePaste.exe` and `artifacts/PrivatePaste-win-x64.zip`. Pushing a `desktop-v*` tag runs `.github/workflows/desktop.yml`, which tests, builds all platforms and attaches them to a GitHub Release.
+
 ## macOS and Linux
 
 The desktop app also runs on macOS and Linux. These ports are best-effort: they are built in CI but have had less real-world testing than Windows.

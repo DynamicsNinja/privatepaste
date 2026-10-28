@@ -1,0 +1,87 @@
+name: desktop
+
+on:
+  push:
+    tags: ['desktop-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet test -c Release
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}' -replace '^desktop-v', ''
+          ./scripts/publish-windows.ps1 -Version $version
+          Move-Item artifacts/PrivatePaste-win-x64.zip "artifacts/PrivatePaste-$version-win-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: artifacts/PrivatePaste-*-win-x64.zip
+          if-no-files-found: error
+
+  macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish
+        run: |
+          VERSION="${GITHUB_REF_NAME#desktop-v}" ./scripts/publish-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: artifacts/macos/PrivatePaste-*.zip
+          if-no-files-found: error
+
+  linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish
+        run: |
+          VERSION="${GITHUB_REF_NAME#desktop-v}" ./scripts/publish-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: artifacts/linux/PrivatePaste-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
