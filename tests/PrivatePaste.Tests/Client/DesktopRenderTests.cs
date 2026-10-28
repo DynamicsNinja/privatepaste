@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 using Avalonia.Media;
 using Avalonia.Styling;
 using PrivatePaste.Desktop;
@@ -66,6 +68,107 @@ public class DesktopRenderTests
     public Task Toast_window_renders() => Session.Value.Dispatch(() =>
     {
         Render(new ToastWindow { Message = "Clip too large to sync (text over 1 MB)." }, "dark", "toast");
+    }, CancellationToken.None);
+
+
+    private static SignInWindow NewSignIn() => new()
+    {
+        DataContext = new SignInViewModel((_, _, _) => Task.FromResult(new SignInOutcome(SignInResult.Ok, null))),
+    };
+
+    private static T Find<T>(Window w, string name) where T : Control =>
+        w.GetVisualDescendants().OfType<T>().First(c => c.Name == name);
+
+    private static void Click(Button b) => b.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+    [Fact]
+    public Task Title_bar_shows_title_and_buttons_with_tooltips() => Session.Value.Dispatch(() =>
+    {
+        var w = NewSignIn();
+        w.Show();
+        try
+        {
+            var bar = w.GetVisualDescendants().OfType<TitleBar>().Single();
+            Assert.Equal("Sign in to PrivatePaste", Find<TextBlock>(w, "TitleText").Text);
+            Assert.Equal("Minimize", ToolTip.GetTip(Find<Button>(w, "MinimizeButton")));
+            Assert.Equal("Maximize", ToolTip.GetTip(Find<Button>(w, "MaximizeButton")));
+            Assert.Equal("Close", ToolTip.GetTip(Find<Button>(w, "CloseButton")));
+            Assert.Equal("Close", Avalonia.Automation.AutomationProperties.GetName(Find<Button>(w, "CloseButton")));
+            Assert.True(Find<Button>(w, "CloseButton").Focusable);
+            Assert.Equal(36, bar.Height);
+            Assert.True(w.CanResize);
+        }
+        finally { w.Close(); }
+    }, CancellationToken.None);
+
+    [Fact]
+    public Task Title_bar_minimize_sets_minimized() => Session.Value.Dispatch(() =>
+    {
+        var w = NewSignIn();
+        w.Show();
+        try
+        {
+            Click(Find<Button>(w, "MinimizeButton"));
+            Assert.Equal(WindowState.Minimized, w.WindowState);
+        }
+        finally { w.Close(); }
+    }, CancellationToken.None);
+
+    [Fact]
+    public Task Title_bar_maximize_toggles_state_icon_and_tooltip() => Session.Value.Dispatch(() =>
+    {
+        var w = NewSignIn();
+        w.Show();
+        try
+        {
+            var max = Find<Button>(w, "MaximizeButton");
+            var icon = Find<Avalonia.Controls.Shapes.Path>(w, "MaximizeIcon");
+            var before = icon.Data;
+            Assert.DoesNotContain("restored", icon.Classes);
+
+            Click(max);
+            Assert.Equal(WindowState.Maximized, w.WindowState);
+            Assert.Equal("Restore", ToolTip.GetTip(max));
+            Assert.Equal("Restore", Avalonia.Automation.AutomationProperties.GetName(max));
+            Assert.NotSame(before, icon.Data);
+            Assert.Contains("restored", icon.Classes);
+
+            Click(max);
+            Assert.Equal(WindowState.Normal, w.WindowState);
+            Assert.Equal("Maximize", ToolTip.GetTip(max));
+            Assert.DoesNotContain("restored", icon.Classes);
+        }
+        finally { w.Close(); }
+    }, CancellationToken.None);
+
+    [Fact]
+    public Task Title_bar_close_closes_window() => Session.Value.Dispatch(() =>
+    {
+        var w = NewSignIn();
+        var closed = false;
+        w.Closed += (_, _) => closed = true;
+        w.Show();
+        Click(Find<Button>(w, "CloseButton"));
+        Assert.True(closed);
+    }, CancellationToken.None);
+
+    [Fact]
+    public Task Settings_window_has_title_bar_and_is_resizable() => Session.Value.Dispatch(() =>
+    {
+        var w = new SettingsWindow
+        {
+            DataContext = new SettingsViewModel("http://localhost:5299", "PC-work", "Ctrl+Shift+V", true, "Start with Windows",
+                _ => { }, _ => { }, () => Task.CompletedTask),
+        };
+        w.Show();
+        try
+        {
+            Assert.Equal("PrivatePaste settings", Find<TextBlock>(w, "TitleText").Text);
+            Assert.True(w.CanResize);
+            Click(Find<Button>(w, "MaximizeButton"));
+            Assert.Equal(WindowState.Maximized, w.WindowState);
+        }
+        finally { w.Close(); }
     }, CancellationToken.None);
 
     private static void Render(Window window, string theme, string name)

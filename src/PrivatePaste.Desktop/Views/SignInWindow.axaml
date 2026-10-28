@@ -6,37 +6,44 @@
         x:DataType="vm:SignInViewModel"
         Title="Sign in to PrivatePaste"
         Icon="avares://PrivatePaste/Assets/app.ico"
-        Width="420" SizeToContent="Height" CanResize="False"
+        Width="420" MinWidth="380" MinHeight="460" SizeToContent="Height" CanResize="True"
+        ExtendClientAreaToDecorationsHint="True" WindowDecorations="BorderOnly"
+        ExtendClientAreaTitleBarHeightHint="36"
         WindowStartupLocation="CenterScreen">
-  <StackPanel Margin="28,28,28,28" Spacing="20">
-    <views:Wordmark HorizontalAlignment="Left" />
+  <DockPanel>
+    <views:TitleBar DockPanel.Dock="Top" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="28,28,28,28" Spacing="20" MaxWidth="420">
+        <views:Wordmark HorizontalAlignment="Left" />
 
-    <StackPanel Spacing="4">
-      <TextBlock Classes="heading" Text="Sign in" />
-      <TextBlock Foreground="{DynamicResource PpMuted}" TextWrapping="Wrap"
-                 Text="Connect this computer to your PrivatePaste server." />
-    </StackPanel>
+        <StackPanel Spacing="4">
+          <TextBlock Classes="heading" Text="Sign in" />
+          <TextBlock Foreground="{DynamicResource PpMuted}" TextWrapping="Wrap"
+                     Text="Connect this computer to your PrivatePaste server." />
+        </StackPanel>
 
-    <Border Classes="panel">
-      <StackPanel Spacing="14">
-        <StackPanel>
-          <TextBlock Classes="label" Text="Server URL" />
-          <TextBox x:Name="ServerBox" Text="{Binding ServerUrl}" />
-        </StackPanel>
-        <StackPanel>
-          <TextBlock Classes="label" Text="Password" />
-          <TextBox x:Name="PasswordBox" Text="{Binding Password}" PasswordChar="•" />
-        </StackPanel>
-        <StackPanel>
-          <TextBlock Classes="label" Text="Device name" />
-          <TextBox Text="{Binding DeviceName}" MaxLength="50" />
-        </StackPanel>
+        <Border Classes="panel">
+          <StackPanel Spacing="14">
+            <StackPanel>
+              <TextBlock Classes="label" Text="Server URL" />
+              <TextBox x:Name="ServerBox" Text="{Binding ServerUrl}" />
+            </StackPanel>
+            <StackPanel>
+              <TextBlock Classes="label" Text="Password" />
+              <TextBox x:Name="PasswordBox" Text="{Binding Password}" PasswordChar="•" />
+            </StackPanel>
+            <StackPanel>
+              <TextBlock Classes="label" Text="Device name" />
+              <TextBox Text="{Binding DeviceName}" MaxLength="50" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+        <Button Classes="primary" Content="Sign in" IsDefault="True" HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Center" Command="{Binding SignInCommand}" />
       </StackPanel>
-    </Border>
-
-    <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
-
-    <Button Classes="primary" Content="Sign in" IsDefault="True" HorizontalAlignment="Stretch"
-            HorizontalContentAlignment="Center" Command="{Binding SignInCommand}" />
-  </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
 </Window>

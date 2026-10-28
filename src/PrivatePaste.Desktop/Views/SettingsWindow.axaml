@@ -6,37 +6,44 @@
         x:DataType="vm:SettingsViewModel"
         Title="PrivatePaste settings"
         Icon="avares://PrivatePaste/Assets/app.ico"
-        Width="460" SizeToContent="Height" CanResize="False"
+        Width="460" MinWidth="400" MinHeight="460" SizeToContent="Height" CanResize="True"
+        ExtendClientAreaToDecorationsHint="True" WindowDecorations="BorderOnly"
+        ExtendClientAreaTitleBarHeightHint="36"
         WindowStartupLocation="CenterScreen">
-  <StackPanel Margin="28" Spacing="20">
-    <views:Wordmark HorizontalAlignment="Left" />
+  <DockPanel>
+    <views:TitleBar DockPanel.Dock="Top" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="28" Spacing="20" MaxWidth="460">
+        <views:Wordmark HorizontalAlignment="Left" />
 
-    <TextBlock Classes="heading" Text="Settings" />
+        <TextBlock Classes="heading" Text="Settings" />
 
-    <Border Classes="panel">
-      <StackPanel Spacing="16">
-        <StackPanel>
-          <TextBlock Classes="label" Text="Server" />
-          <TextBox Text="{Binding Server, Mode=OneWay}" IsReadOnly="True" />
-          <TextBlock Margin="2,6,0,0" FontSize="12" Foreground="{DynamicResource PpMuted}">
-            <Run Text="Signed in as " /><Run Text="{Binding DeviceName, Mode=OneWay}" Foreground="{DynamicResource PpText}" />
-          </TextBlock>
-        </StackPanel>
+        <Border Classes="panel">
+          <StackPanel Spacing="16">
+            <StackPanel>
+              <TextBlock Classes="label" Text="Server" />
+              <TextBox Text="{Binding Server, Mode=OneWay}" IsReadOnly="True" />
+              <TextBlock Margin="2,6,0,0" FontSize="12" Foreground="{DynamicResource PpMuted}">
+                <Run Text="Signed in as " /><Run Text="{Binding DeviceName, Mode=OneWay}" Foreground="{DynamicResource PpText}" />
+              </TextBlock>
+            </StackPanel>
 
-        <StackPanel>
-          <TextBlock Classes="label" Text="History hotkey" />
-          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <TextBox x:Name="HotkeyBox" Text="{Binding Hotkey}" />
-            <Button Grid.Column="1" Content="Apply" Command="{Binding ApplyHotkeyCommand}" />
-          </Grid>
-          <TextBlock Classes="error" Margin="2,6,0,0" FontSize="12" Text="{Binding HotkeyError}"
-                     IsVisible="{Binding HotkeyError, Converter={x:Static ObjectConverters.IsNotNull}}" />
-        </StackPanel>
+            <StackPanel>
+              <TextBlock Classes="label" Text="History hotkey" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox x:Name="HotkeyBox" Text="{Binding Hotkey}" />
+                <Button Grid.Column="1" Content="Apply" Command="{Binding ApplyHotkeyCommand}" />
+              </Grid>
+              <TextBlock Classes="error" Margin="2,6,0,0" FontSize="12" Text="{Binding HotkeyError}"
+                         IsVisible="{Binding HotkeyError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            </StackPanel>
 
-        <CheckBox IsChecked="{Binding StartWithOs}" Content="{Binding AutostartLabel}" />
+            <CheckBox IsChecked="{Binding StartWithOs}" Content="{Binding AutostartLabel}" />
+          </StackPanel>
+        </Border>
+
+        <Button Classes="danger" Content="Sign out" HorizontalAlignment="Left" Command="{Binding SignOutCommand}" />
       </StackPanel>
-    </Border>
-
-    <Button Classes="danger" Content="Sign out" HorizontalAlignment="Left" Command="{Binding SignOutCommand}" />
-  </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
 </Window>
