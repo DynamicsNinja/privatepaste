@@ -213,4 +213,24 @@ public class HistoryCacheTests : IDisposable
         c.MarkApplied(Clip(1, "a", 2));
         Assert.Equal(T0.AddMinutes(5), c.LastAppliedAt);
     }
+
+    [Fact]
+    public void Changed_is_raised_for_real_changes_only()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        var changes = 0;
+        c.Changed += (_, _) => changes++;
+        var id = Guid.NewGuid();
+
+        c.Upsert(Clip(2, "a", 1, id));
+        Assert.Equal(1, changes);
+        c.Upsert(Clip(1, "a", 1, id));   // stale: ignored
+        Assert.Equal(1, changes);
+        c.Remove(id, 3);
+        Assert.Equal(2, changes);
+        c.Upsert(Clip(3, "a", 1, id));   // tombstoned: ignored
+        Assert.Equal(2, changes);
+        c.Clear();
+        Assert.Equal(3, changes);
+    }
 }

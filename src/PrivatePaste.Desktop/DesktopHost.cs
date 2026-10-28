@@ -82,6 +82,7 @@ public sealed class DesktopHost : IAsyncDisposable
             _notifier.Notify("Local history is unavailable this session.");
         }
         Cache = HistoryCache.Load(_cachePath, _cacheKey);
+        Cache.Changed += OnCacheChanged;
         _queue = OutboundQueue.Load(_queuePath, _cacheKey);
 
         // ---- Clipboard ----
@@ -115,6 +116,7 @@ public sealed class DesktopHost : IAsyncDisposable
         set => _ = SetPausedAsync(value);
     }
 
+    /// <summary>The local history changed (coalesced; raised on the thread pool). See <see cref="OnCacheChanged"/>.</summary>
     public event EventHandler? HistoryChanged;
     public event EventHandler<SyncState>? StateChanged;
     public event EventHandler? PausedChanged;
@@ -226,6 +228,7 @@ public sealed class DesktopHost : IAsyncDisposable
     {
         var session = _session!;
         _session = null;
+        await session.CloseAsync();   // cancel and drain clipboard work first: nothing may write the cache/queue after the clear
         await session.Engine.StopAsync();
         if (logout)
         {
@@ -255,7 +258,48 @@ public sealed class DesktopHost : IAsyncDisposable
 
     // ======================================================================== Session (HTTP, API, coordinator, engine)
 
-    private sealed record Session(HttpClient Http, PrivatePasteApi Api, ClipboardCoordinator Coordinator, SyncEngine Engine);
+    /// <summary>One signed-in session. Clipboard work runs through <see cref="TryRun"/> so it can be cancelled and drained.</summary>
+    private sealed class Session(HttpClient http, PrivatePasteApi api, ClipboardCoordinator coordinator, SyncEngine engine)
+    {
+        private readonly object _gate = new();
+        private readonly HashSet<Task> _inFlight = [];
+        private readonly CancellationTokenSource _closing = new();
+        private bool _closed;
+
+        public HttpClient Http => http;
+        public PrivatePasteApi Api => api;
+        public ClipboardCoordinator Coordinator => coordinator;
+        public SyncEngine Engine => engine;
+
+        /// <summary>Starts tracked work (which must not throw); false once the session is closing.</summary>
+        public bool TryRun(Func<CancellationToken, Task> work)
+        {
+            lock (_gate)
+            {
+                if (_closed) return false;
+                var task = Task.Run(() => work(_closing.Token));
+                _inFlight.Add(task);
+                task.ContinueWith(t => { lock (_gate) _inFlight.Remove(t); }, TaskScheduler.Default);
+                return true;
+            }
+        }
+
+        /// <summary>Refuses new work, cancels the running work and waits for it to finish.</summary>
+        public async Task CloseAsync()
+        {
+            Task[] pending;
+            lock (_gate)
+            {
+                if (_closed) return;
+                _closed = true;
+                pending = [.. _inFlight];
+            }
+            await _closing.CancelAsync();
+            try { await Task.WhenAll(pending); }
+            catch (Exception) { }   // the work logs its own failures
+            _closing.Dispose();
+        }
+    }
 
     // Caller holds _lifecycle.
     private void StartSession(Uri server, string token, Guid deviceId, HttpClient? http = null)
@@ -275,7 +319,6 @@ public sealed class DesktopHost : IAsyncDisposable
             if (state is SyncState.Connected or SyncState.Offline or SyncState.Paused) _log.Info($"Sync state: {state}.");
             if (_session == session) StateChanged?.Invoke(this, state);
         };
-        engine.HistoryChanged += (_, _) => HistoryChanged?.Invoke(this, EventArgs.Empty);
         engine.Error += (_, error) => _log.Error(error.Message, error.Exception);
         // Never block the engine loop: sign out on another task.
         engine.Revoked += (_, _) => _ = Task.Run(() => OnRevokedAsync(session));
@@ -303,6 +346,25 @@ public sealed class DesktopHost : IAsyncDisposable
     }
 
 
+    // ======================================================================== History notifications
+
+    private int _historyPending;
+
+    /// <summary>
+    /// Every cache change (sync, local uploads, queue flushes, clears) becomes <see cref="HistoryChanged"/>, coalesced
+    /// and raised on the thread pool so a catch-up of hundreds of clips does not mean hundreds of UI refreshes.
+    /// </summary>
+    private void OnCacheChanged(object? sender, EventArgs e)
+    {
+        if (Interlocked.Exchange(ref _historyPending, 1) == 1) return;
+        _ = Task.Run(() =>
+        {
+            Volatile.Write(ref _historyPending, 0);
+            try { HistoryChanged?.Invoke(this, EventArgs.Empty); }
+            catch (Exception ex) { _log.Error("A history listener failed.", ex); }
+        });
+    }
+
     // ======================================================================== Clipboard
 
     // Each change goes straight to the coordinator: it reads first and orders captures itself (see its docs).
@@ -310,12 +372,12 @@ public sealed class DesktopHost : IAsyncDisposable
     private void OnClipboardChanged(object? sender, EventArgs e)
     {
         var session = _session;
-        if (session is null) return;
-        _ = Task.Run(async () =>
+        session?.TryRun(async ct =>
         {
-            try { await session.Coordinator.OnClipboardChangedAsync(_shutdown.Token); }
-            catch (UnauthorizedApiException) { await OnRevokedAsync(session); }
-            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+            try { await session.Coordinator.OnClipboardChangedAsync(ct); }
+            // Not awaited: sign-out drains this very task while holding the lifecycle lock.
+            catch (UnauthorizedApiException) { _ = Task.Run(() => OnRevokedAsync(session)); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
             catch (Exception ex) { _log.Error("Could not process a clipboard change.", ex); }
         });
     }
@@ -439,6 +501,13 @@ public sealed class DesktopHost : IAsyncDisposable
 
     // ======================================================================== Shutdown
 
+    /// <summary>
+    /// Blocking dispose for synchronous exit paths such as the UI thread at OS logoff. Runs on the thread pool: awaited
+    /// directly, continuations would be posted to the blocked UI thread's context and never run (deadlock until timeout,
+    /// skipping the final cache save). True if it finished within <paramref name="timeout"/>.
+    /// </summary>
+    public bool DisposeWithin(TimeSpan timeout) => Task.Run(() => DisposeAsync().AsTask()).Wait(timeout);
+
     public async ValueTask DisposeAsync()
     {
         Platform.Clipboard.Changed -= OnClipboardChanged;
@@ -449,6 +518,7 @@ public sealed class DesktopHost : IAsyncDisposable
             if (_session is { } session)
             {
                 _session = null;
+                await session.CloseAsync();
                 await session.Engine.StopAsync();   // saves the cache
                 session.Http.Dispose();
             }

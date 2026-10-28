@@ -281,6 +281,101 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.True(fromEnv.Isolated);
     }
 
+    [Fact]
+    public async Task Blocking_dispose_on_a_ui_thread_completes_and_saves_the_cache()
+    {
+        var host = await SignedInHostAsync();
+        var other = await _server.LoginAsync("Phone");
+        foreach (var text in new[] { "first", "last change" })
+        {
+            (await other.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options))
+                .EnsureSuccessStatusCode();
+            await WaitUntilAsync(() => host.Cache.Items.Any(i => i.Clip.Text == text));
+        }
+        _hosts.Remove(host);
+
+        // A UI thread blocked in Wait never runs posted continuations: simulate it with a context that drops them.
+        var finished = false;
+        var elapsed = TimeSpan.Zero;
+        var thread = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new BlockedUiContext());
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            finished = host.DisposeWithin(TimeSpan.FromSeconds(5));
+            elapsed = sw.Elapsed;
+        });
+        thread.Start();
+        thread.Join();
+
+        Assert.True(finished, $"dispose did not finish (took {elapsed})");
+        Assert.True(elapsed < TimeSpan.FromSeconds(3), $"took {elapsed}");
+        var key = Convert.FromBase64String(new SecretFile(Path.Combine(_dir, "cache.key"), new XorProtector()).Read()!);
+        var saved = global::PrivatePaste.Client.Core.Cache.HistoryCache.Load(Path.Combine(_dir, "cache.dat"), key);
+        Assert.Contains(saved.Items, i => i.Clip.Text == "last change");
+    }
+
+    [Fact]
+    public async Task Sign_out_during_an_upload_leaves_cache_and_queue_empty()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = NewHost(handler: () => new HoldUploads(_server.Server.CreateHandler(), entered, release.Task));
+        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.Password, "PC-host")).Result);
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+
+        _clipboard.Current = new ClipboardContent.Text("in flight");
+        _clipboard.RaiseChanged();
+        await entered.Task.WaitAsync(WaitTimeout);
+        await host.SignOutAsync();
+        release.SetResult();
+        await Task.Delay(500);
+
+        Assert.Empty(host.Cache.Items);
+        Assert.False(File.Exists(Path.Combine(_dir, "queue.dat")));
+        Assert.False(File.Exists(Path.Combine(_dir, "cache.dat")));
+    }
+
+    [Fact]
+    public async Task History_changed_is_raised_for_local_uploads_and_sign_out()
+    {
+        var host = await SignedInHostAsync();
+        var changes = 0;
+        host.HistoryChanged += (_, _) => Interlocked.Increment(ref changes);
+
+        _clipboard.Current = new ClipboardContent.Text("copied here");
+        _clipboard.RaiseChanged();
+        await WaitUntilAsync(() => host.Cache.Items.Any(i => i.Clip.Text == "copied here") && Volatile.Read(ref changes) > 0);
+
+        var before = Volatile.Read(ref changes);
+        await host.SignOutAsync();
+        await WaitUntilAsync(() => Volatile.Read(ref changes) > before);
+    }
+
+    private sealed class BlockedUiContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) { }   // never pumped while the thread is blocked
+        public override void Send(SendOrPostCallback d, object? state) => throw new InvalidOperationException();
+    }
+
+    /// <summary>Holds text uploads until released (honouring cancellation late), after signalling that one arrived.</summary>
+    private sealed class HoldUploads(HttpMessageHandler inner, TaskCompletionSource entered, Task release) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/api/clips/text"))
+            {
+                entered.TrySetResult();
+                try { await release.WaitAsync(ct); }
+                catch (OperationCanceledException)
+                {
+                    await Task.Delay(300, CancellationToken.None);   // a transport that notices cancellation late
+                    throw;
+                }
+            }
+            return await base.SendAsync(request, ct);
+        }
+    }
+
     private global::PrivatePaste.Client.Core.Settings.SettingsStore NewSettingsStore() => new(_dir);
 
     private sealed record DeviceDto(Guid Id, string Name);

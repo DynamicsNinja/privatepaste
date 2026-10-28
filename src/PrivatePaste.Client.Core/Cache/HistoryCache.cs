@@ -22,6 +22,12 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     private long _highestSeq;
     private DateTimeOffset? _lastAppliedAt;
 
+    /// <summary>
+    /// The visible items changed (upsert, removal of a held item, clear). Raised synchronously on the mutating thread,
+    /// outside the lock, once per call: handlers must be quick, must not throw, and should coalesce/marshal themselves.
+    /// </summary>
+    public event EventHandler? Changed;
+
     public long HighestSeq { get { lock (_gate) return _highestSeq; } }
 
     public DateTimeOffset? LastAppliedAt { get { lock (_gate) return _lastAppliedAt; } }
@@ -31,13 +37,18 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
 
     public void Upsert(ClipDto clip, byte[]? thumbnailPng = null)
     {
+        if (UpsertLocked(clip, thumbnailPng)) Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private bool UpsertLocked(ClipDto clip, byte[]? thumbnailPng)
+    {
         lock (_gate)
         {
             if (clip.Seq > _highestSeq) _highestSeq = clip.Seq;
             // Broadcasts can arrive out of order: ignore anything older than what we hold or already deleted.
-            if (_tombstones.TryGetValue(clip.Id, out var dead) && dead >= clip.Seq) return;
+            if (_tombstones.TryGetValue(clip.Id, out var dead) && dead >= clip.Seq) return false;
             var existing = _items.Find(i => i.Clip.Id == clip.Id);
-            if (existing is not null && clip.Seq <= existing.Clip.Seq) return;
+            if (existing is not null && clip.Seq <= existing.Clip.Seq) return false;
             if (thumbnailPng is null && existing is not null && existing.Clip.Hash == clip.Hash)
                 thumbnailPng = existing.ThumbnailPng;
             _tombstones.Remove(clip.Id);
@@ -45,18 +56,21 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             _items.Add(new CachedClip(clip, thumbnailPng));
             _items.Sort(Compare);
             if (_items.Count > capacity) _items.RemoveRange(capacity, _items.Count - capacity);
+            return true;
         }
     }
 
     public void Remove(Guid id, long seq)
     {
+        bool removed;
         lock (_gate)
         {
-            _items.RemoveAll(i => i.Clip.Id == id);
+            removed = _items.RemoveAll(i => i.Clip.Id == id) > 0;
             if (seq > _highestSeq) _highestSeq = seq;
             if (!_tombstones.TryGetValue(id, out var prev) || seq > prev) _tombstones[id] = seq;
             TrimTombstones(_tombstones);
         }
+        if (removed) Changed?.Invoke(this, EventArgs.Empty);
     }
 
     public void MarkApplied(ClipDto clip)
@@ -145,6 +159,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         }
         try { File.Delete(path); } catch (IOException) { }
         try { File.Delete(path + ".tmp"); } catch (IOException) { }
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     private static int Compare(CachedClip a, CachedClip b)
