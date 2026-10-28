@@ -12,10 +12,12 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -58,6 +60,7 @@ import xyz.ficdev.privatepaste.ui.UiDeps
 import java.io.File
 import java.io.IOException
 import java.time.Clock
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The app's object graph: singletons for the process (stores, clipboard, one OkHttpClient, the session manager)
@@ -89,6 +92,10 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     )
 
     private val lifecycle = Mutex()
+    private val signedOutAlertCount = AtomicInteger()
+
+    /** How many times a revoke was handled (and its alert posted). Test hook for "exactly once". */
+    internal val signedOutAlerts: Int get() = signedOutAlertCount.get()
     private val _current = MutableStateFlow<SessionGraph?>(null)
 
     /** The current session's graph; null while signed out. */
@@ -96,10 +103,14 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
 
     val isSignedIn: Boolean get() = sessions.session.value != null
 
-    /** The current engine's state; SIGNED_OUT without a session. */
-    val syncState: StateFlow<SyncState> = _current
-        .flatMapLatest { it?.engine?.state ?: flowOf(SyncState.SIGNED_OUT) }
-        .stateIn(appScope, SharingStarted.Eagerly, SyncState.SIGNED_OUT)
+    /** The current session's [SessionGraph.displayState]; SIGNED_OUT without a session. For the notification. */
+    val connectionStates: Flow<SyncState> = _current.flatMapLatest { it?.displayState ?: flowOf(SyncState.SIGNED_OUT) }
+
+    /** [connectionStates] as a StateFlow, for the UI. */
+    val syncState: StateFlow<SyncState> = connectionStates.stateIn(appScope, SharingStarted.Eagerly, SyncState.SIGNED_OUT)
+
+    /** The state to show right now, read synchronously (the first foreground notification). */
+    fun connectionStateNow(): SyncState = _current.value?.displayStateNow() ?: SyncState.SIGNED_OUT
 
     init {
         sessions.session.value?.let { _current.value = SessionGraph(it) }   // process start while signed in
@@ -134,7 +145,23 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         /** Set once sign-out or revoke begins: the engine must not be started again. */
         @Volatile var ending = false
 
+        /**
+         * A new engine reports OFFLINE until its loop runs. Until it has tried once (left OFFLINE), that reads as
+         * CONNECTING, so a fresh start never shows "Offline, retrying".
+         */
+        private val attempted = MutableStateFlow(false)
+
+        val displayState: Flow<SyncState> = combine(engine.state, attempted) { s, tried -> display(s, tried) }
+
+        fun displayStateNow(): SyncState = display(engine.state.value, attempted.value)
+
+        private fun display(s: SyncState, tried: Boolean) = if (s == SyncState.OFFLINE && !tried) SyncState.CONNECTING else s
+
         init {
+            scope.launch {
+                engine.state.first { it != SyncState.OFFLINE }
+                attempted.value = true
+            }
             scope.launch {
                 engine.revoked.first()
                 appScope.launch { onRevoked(this@SessionGraph) }   // not in [scope]: the teardown cancels it
@@ -181,8 +208,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                 g.engine.stop()
             }
             sessions.signOut()
-            if (g != null) end(g)
-            SyncService.stop(app)
+            if (g != null) end(g)   // the service sees the session gone and stops itself (by start id)
         }
     }
 
@@ -193,8 +219,8 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             g.engine.stop()   // already stopped by the revoke; waits for its final save
             sessions.onRevoked()
             Notifications.postSignedOut(app)
+            signedOutAlertCount.incrementAndGet()
             end(g)
-            SyncService.stop(app)
             Log.i(TAG, "This device was signed out by the server")
         }
     }
@@ -203,19 +229,21 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     private suspend fun end(g: SessionGraph) {
         g.ending = true
         g.engine.stop()
+        withContext(Dispatchers.IO) { imageFiles.clear() }   // plaintext copies of clips: gone with the session
         if (_current.value === g) _current.value = null
         g.close()
     }
 
     /** The Copy action: puts a cached clip on the clipboard. False when unknown or the write failed. */
     suspend fun copyClip(id: String): Boolean {
+        val g = _current.value
         val clip = cache.items.value.firstOrNull { it.id == id } ?: return false
         return try {
             when (clip.kind) {
                 ClipKind.TEXT, ClipKind.LINK -> clipboard.writeText(clip.text ?: return false)
                 ClipKind.IMAGE -> {
                     val png = withContext(Dispatchers.IO) { imageFiles.find(id)?.readBytes() }
-                        ?: _current.value?.api?.image(id)
+                        ?: g?.api?.image(id)
                         ?: return false
                     withContext(Dispatchers.IO) { clipboard.writeImage(id, png) }
                 }
@@ -223,6 +251,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             true
         } catch (e: CancellationException) {
             throw e
+        } catch (e: ApiException.Unauthorized) {
+            if (g != null) appScope.launch { onRevoked(g) }   // the device was revoked: same path as the engine's
+            false
         } catch (e: ApiException) {
             Log.w(TAG, "Cannot fetch the image to copy (${e.javaClass.simpleName})")
             false

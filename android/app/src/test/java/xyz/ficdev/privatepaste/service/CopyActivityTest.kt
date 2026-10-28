@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.ClipboardManager
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
+import okhttp3.mockwebserver.MockResponse
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -87,5 +88,17 @@ class CopyActivityTest {
         assertEquals("Couldn't copy the clip.", runCopy("gone"))
         assertNull(shadowOf(nm).getNotification(Notifications.ID_CLIP))
         assertEquals("Couldn't copy the clip.", runCopy(null))
+    }
+
+    @Test
+    fun unauthorizedImageFetchRevokesAndStillFinishes() {
+        server.other = { r -> if (r.path == "/api/clips/i9/image") MockResponse().setResponseCode(401) else null }
+        app.graph.cache.upsert(clip("i9", ClipKind.IMAGE, text = null), fromSync = true)
+        Notifications.postClip(app, clip("i9", ClipKind.IMAGE, text = null))
+
+        assertEquals("Couldn't copy the clip.", runCopy("i9"))
+        assertNull(shadowOf(nm).getNotification(Notifications.ID_CLIP))
+        awaitUntil("the 401 signs the device out") { app.uiDeps.session.value == null }
+        awaitUntil("alert") { app.graph.signedOutAlerts == 1 }
     }
 }

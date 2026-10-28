@@ -1,9 +1,11 @@
 package xyz.ficdev.privatepaste.service
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import xyz.ficdev.privatepaste.PrivatePasteApp
 
@@ -20,14 +22,26 @@ class CopyActivity : ComponentActivity() {
         val id = intent.getStringExtra(EXTRA_CLIP_ID)
         val graph = (application as? PrivatePasteApp)?.graph
         lifecycleScope.launch {
-            val ok = id != null && graph != null && graph.copyClip(id)
-            Toast.makeText(applicationContext, if (ok) COPIED else FAILED, Toast.LENGTH_SHORT).show()
-            finish()
+            try {
+                val ok = try {
+                    id != null && graph != null && graph.copyClip(id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Copy failed (${e.javaClass.simpleName})")
+                    false
+                }
+                Toast.makeText(applicationContext, if (ok) COPIED else FAILED, Toast.LENGTH_SHORT).show()
+            } finally {
+                Notifications.cancelClip(applicationContext)
+                finish()
+            }
         }
     }
 
     companion object {
         const val EXTRA_CLIP_ID = "xyz.ficdev.privatepaste.extra.CLIP_ID"
+        private const val TAG = "CopyActivity"
         private const val COPIED = "Copied"
         private const val FAILED = "Couldn't copy the clip."
     }

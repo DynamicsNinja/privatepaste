@@ -40,6 +40,11 @@ class ClipImageFiles(private val dir: File) {
             .maxByOrNull { order(it) }
     }
 
+    /** Deletes every stored file (sign-out, revoke): they are plaintext copies of clips. */
+    fun clear(): Unit = synchronized(lock) {
+        dir.listFiles().orEmpty().forEach { it.delete() }
+    }
+
     private fun order(f: File): Long = f.name.substringBefore('_').toLongOrNull() ?: -1L
 
     private companion object {

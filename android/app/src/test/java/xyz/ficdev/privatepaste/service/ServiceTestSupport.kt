@@ -58,6 +58,9 @@ class FakeServer {
     val url: String get() = "http://127.0.0.1:${server.port}/"
     val wsRequests = AtomicInteger()
 
+    /** Answers any other request first when it returns non-null (e.g. an image endpoint). */
+    @Volatile var other: (RecordedRequest) -> MockResponse? = { null }
+
     /** The answer to the next `/ws` upgrade. */
     @Volatile var ws: () -> MockResponse = { MockResponse().withWebSocketUpgrade(PongListener(sockets)) }
 
@@ -66,7 +69,7 @@ class FakeServer {
 
     init {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path?.substringBefore('?')) {
+            override fun dispatch(request: RecordedRequest): MockResponse = other(request) ?: when (request.path?.substringBefore('?')) {
                 "/api/auth/login" -> json("""{"deviceId":"dev-phone","token":"tok-1"}""")
                 "/api/auth/logout" -> MockResponse().setResponseCode(204)
                 "/api/sync" -> json("""{"clips":[],"deletedIds":[],"latestSeq":0,"hasMore":false}""")
@@ -95,6 +98,13 @@ class FakeServer {
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (text == """{"type":"ping"}""") webSocket.send("""{"type":"pong"}""")
+        }
+    }
+
+    /** Accepts the upgrade, then closes with [code] (1008: this device was revoked). */
+    class CloseListener(private val code: Int) : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            webSocket.close(code, "revoked")
         }
     }
 
