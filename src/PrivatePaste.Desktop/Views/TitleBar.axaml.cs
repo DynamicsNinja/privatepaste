@@ -23,16 +23,43 @@ public partial class TitleBar : UserControl
         Bar.PointerPressed += OnBarPointerPressed;
     }
 
+    /// <summary>
+    /// Call from the window constructor, before the native window exists. Windows keeps the border-only
+    /// frame (our bar draws the caption); macOS/Linux keep native decorations.
+    /// </summary>
+    public static void Prepare(Window window)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            window.WindowDecorations = WindowDecorations.Full;
+            window.ExtendClientAreaToDecorationsHint = true;
+            window.ExtendClientAreaTitleBarHeightHint = 36;
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            window.WindowDecorations = WindowDecorations.Full;
+            window.ExtendClientAreaToDecorationsHint = false;
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            window.Opened += (_, _) => WindowsFrame.EnsureSystemMenu(window);
+        }
+    }
+
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
         _window = TopLevel.GetTopLevel(this) as Window;
         if (_window is null) return;
 
-        if (OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsLinux())
         {
-            // Keep the native traffic lights; leave room for them and hide our own buttons.
-            _window.WindowDecorations = WindowDecorations.Full;
+            // Native title bar stays on Linux (resize grips, snap); ours would only duplicate it.
+            IsVisible = false;
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            // Native traffic lights stay; hide our buttons and leave room for them.
             Buttons.IsVisible = false;
             TitlePanel.Margin = new Thickness(80, 0, 0, 0);
         }
@@ -67,7 +94,7 @@ public partial class TitleBar : UserControl
         // Clicks on the caption buttons are theirs.
         if (e.Source is Visual v && v.FindAncestorOfType<Button>(true) is not null) return;
 
-        if (e.ClickCount == 2) ToggleMaximize();
+        if (e.ClickCount >= 2) ToggleMaximize();
         else _window.BeginMoveDrag(e);
     }
 
