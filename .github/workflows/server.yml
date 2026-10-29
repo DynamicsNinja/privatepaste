@@ -1,0 +1,109 @@
+name: server
+
+# A server-v* tag tests and publishes the server image to ghcr.io/dynamicsninja/privatepaste (linux/amd64 and
+# linux/arm64) as X.Y.Z and, for a release that isn't a prerelease, latest. Every run first builds both platforms,
+# smoke-tests them (scripts/smoke-image.sh) and starts the Dokploy template's compose file, so branch pushes that
+# touch the server catch a broken image before it reaches main (which Dokploy deploys) and nothing is published.
+on:
+  push:
+    tags: ['server-v*']
+    branches: ['**']
+    paths:
+      - 'src/PrivatePaste.Server/**'
+      - 'src/PrivatePaste.Protocol/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Directory.Build.props'
+      - '.github/workflows/server.yml'
+      - 'scripts/smoke-image.sh'
+      - 'deploy/dokploy/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet test -c Release --filter "FullyQualifiedName!~PrivatePaste.Tests.Client"
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Build each platform into the local Docker daemon and run it before anything is published.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: privatepaste:smoke-amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: privatepaste:smoke-arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test (amd64)
+        run: bash scripts/smoke-image.sh privatepaste:smoke-amd64 linux/amd64
+      - name: Smoke test (arm64, emulated)
+        run: bash scripts/smoke-image.sh privatepaste:smoke-arm64 linux/arm64
+      - name: Dokploy template starts
+        run: |
+          # The template's compose file with the image just built, and the env Dokploy would generate from template.toml.
+          sed 's#image: .*#image: privatepaste:smoke-amd64#' deploy/dokploy/privatepaste/docker-compose.yml > "$RUNNER_TEMP/compose.yml"
+          export PP_DB_KEY="$(openssl rand -base64 32)" PP_PASSWORD=template PP_MAX_IMAGE_MB=20 PP_MAX_TEXT_KB=1024 PP_TRUST_CLOUDFLARE=false
+          docker compose -f "$RUNNER_TEMP/compose.yml" -p tpl up -d
+          for i in $(seq 60); do
+            docker run --rm --network tpl_default curlimages/curl:8.11.1 -fs http://privatepaste:8080/health && ok=1 && break
+            sleep 1
+          done
+          docker compose -f "$RUNNER_TEMP/compose.yml" -p tpl logs
+          docker compose -f "$RUNNER_TEMP/compose.yml" -p tpl down -v
+          test "${ok:-}" = 1
+
+      - name: Image tags
+        id: meta
+        shell: bash
+        run: |
+          image=ghcr.io/dynamicsninja/privatepaste
+          if [[ "$GITHUB_REF" == refs/tags/server-v* ]]; then
+            version="${GITHUB_REF_NAME#server-v}"
+            tags="$image:$version"
+            case "$version" in *-*) ;; *) tags="$tags,$image:latest" ;; esac
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            tags="$image:ci"
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - if: steps.meta.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.meta.outputs.push == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
