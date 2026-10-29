@@ -29,7 +29,7 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` c
 | `POST` | `/api/clips/{id}/pin` | bearer | Pins a clip: it survives clearing and auto-delete. Doesn't change `lastCopiedAt`. Returns the clip, or 404. Pinning a pinned clip changes nothing. |
 | `DELETE` | `/api/clips/{id}/pin` | bearer | Unpins a clip. Returns the clip, or 404. |
 | `DELETE` | `/api/clips/{id}` | bearer | Deletes a clip (and its image), pinned or not. 204, or 404. |
-| `POST` | `/api/history/clear` | bearer | Deletes every unpinned clip (and their images) and remembers the time. Returns `{deleted}`, the count. |
+| `POST` | `/api/history/clear` | bearer | Deletes every unpinned clip copied (or unpinned) before now, with their images, and remembers that time. Returns `{deleted}`, the count. |
 | `GET` | `/api/settings` | bearer | Returns `{autoDeleteDays}`: `null` (keep everything), `7`, `30` or `90`. |
 | `PUT` | `/api/settings` | bearer | Body `{autoDeleteDays}` as above. Returns the saved settings; 400 for any other value. |
 | `GET` | `/api/sync?afterSeq=&limit=` | bearer | Changes after a sequence number, in `seq` order: `{clips, deletedIds, latestSeq, hasMore}`. `limit` defaults to 200 (max 500). |

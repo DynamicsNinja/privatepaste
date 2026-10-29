@@ -31,10 +31,10 @@ public sealed record SyncResponse(IReadOnlyList<ClipDto> Clips, IReadOnlyList<Gu
 
 public sealed record DeviceDto(Guid Id, string Name, string Platform, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool IsCurrent);
 
-/// <summary>WebSocket envelope. <see cref="Type"/> is one of <see cref="WsTypes"/>.</summary>
 /// <summary>Server settings. <see cref="AutoDeleteDays"/> is null (off), 7, 30 or 90.</summary>
 public sealed record SettingsDto(int? AutoDeleteDays);
 
+/// <summary>WebSocket envelope. <see cref="Type"/> is one of <see cref="WsTypes"/>.</summary>
 public sealed record WsMessage(string Type, ClipDto? Clip = null, Guid? Id = null, long? Seq = null, bool? Live = null);
 
 public static class WsTypes

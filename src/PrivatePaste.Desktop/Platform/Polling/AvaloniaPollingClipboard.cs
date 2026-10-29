@@ -73,29 +73,33 @@ internal sealed class AvaloniaClipboardBackend(Action<string>? log = null) : ICl
     /// <summary>
     /// Marker formats through Avalonia's public format list. Unverified on real machines: if a platform does not list the
     /// marker, the copy is simply not seen as private there. If listing the formats itself fails, the copy is treated as not
-    /// private and that is logged once.
+    /// private and that is logged once; a listed Linux hint that can't be read fails closed (private).
     /// </summary>
     private async Task<bool> IsPrivateAsync(IAsyncDataTransfer data)
     {
+        List<string> names;
         try
         {
-            var names = data.Formats.Select(f => f.Identifier).ToList();
-            if (OperatingSystem.IsMacOS()) return PrivateCopyMarkers.IsPrivateMac(names);
-            if (!OperatingSystem.IsLinux() || !names.Contains(PrivateCopyMarkers.LinuxPasswordHint)) return false;
-
-            string? hint = null;
-            var format = DataFormat.CreateBytesPlatformFormat(PrivateCopyMarkers.LinuxPasswordHint);
-            foreach (var item in data.Items)
-            {
-                if (await item.TryGetRawAsync(format) is byte[] bytes) { hint = System.Text.Encoding.UTF8.GetString(bytes); break; }
-            }
-            return PrivateCopyMarkers.IsPrivateLinux(names, _ => hint);
+            names = data.Formats.Select(f => f.Identifier).ToList();
         }
         catch (Exception)
         {
             LogDetectionUnavailable();
             return false;
         }
+        if (OperatingSystem.IsMacOS()) return PrivateCopyMarkers.IsPrivateMac(names);
+        if (!OperatingSystem.IsLinux()) return false;
+        return await PrivateCopyMarkers.IsPrivateLinuxAsync(names, _ => ReadHintAsync(data));
+    }
+
+    private static async Task<string?> ReadHintAsync(IAsyncDataTransfer data)
+    {
+        var format = DataFormat.CreateBytesPlatformFormat(PrivateCopyMarkers.LinuxPasswordHint);
+        foreach (var item in data.Items)
+        {
+            if (await item.TryGetRawAsync(format) is byte[] bytes) return System.Text.Encoding.UTF8.GetString(bytes);
+        }
+        return null;
     }
 
     private void LogDetectionUnavailable()

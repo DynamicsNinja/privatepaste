@@ -32,7 +32,7 @@ What is checked, by platform:
 
 | Platform | Marker | Status |
 |---|---|---|
-| Windows | The clipboard formats `ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore`, and `CanIncludeInClipboardHistory` / `CanUploadToCloudClipboard` holding 0 | Covered by automated tests |
+| Windows | The clipboard formats `ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore`, and `CanIncludeInClipboardHistory` / `CanUploadToCloudClipboard` holding 0 | The marker rules are covered by unit tests; reading them from the real clipboard has no automated test |
 | macOS | The pasteboard types `org.nspasteboard.ConcealedType` and `org.nspasteboard.TransientType` | Best effort, not verified on a real Mac |
 | Linux | The `x-kde-passwordManagerHint` target with the value `secret` | Best effort, not verified on a real machine |
 

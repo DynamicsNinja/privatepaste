@@ -127,14 +127,16 @@ public sealed class ClipService(
     }
 
     /// <summary>
-    /// Deletes every unpinned clip and remembers when, so a device that was offline can't bring older clips back
-    /// with a backfill upload. Returns how many clips were deleted.
+    /// Deletes every unpinned clip copied (or unpinned) before now and remembers when, so a device that was offline can't
+    /// bring older clips back with a backfill upload. Returns how many clips were deleted.
     /// </summary>
     public async Task<int> ClearAsync()
     {
-        // Recorded first so a backfill racing with the delete is already refused.
-        await settings.SetHistoryClearedAtAsync(time.GetUtcNow());
-        return await DeleteUnpinnedAsync(null);
+        // Recorded first so a backfill racing with the delete is already refused; the same time is the delete's cutoff,
+        // so a live upload landing between the two is kept.
+        var at = time.GetUtcNow();
+        await settings.SetHistoryClearedAtAsync(at);
+        return await DeleteUnpinnedAsync(at);
     }
 
     /// <summary>Deletes unpinned clips last copied before <paramref name="cutoff"/> (the auto-delete sweep).</summary>
@@ -169,7 +171,9 @@ public sealed class ClipService(
         var clearedAt = await settings.GetHistoryClearedAtAsync();
         var days = await settings.GetAutoDeleteDaysAsync();
         if ((clearedAt is { } c && copiedAt < c) || (days is { } d && copiedAt < time.GetUtcNow().AddDays(-d)))
-            throw new ClipRejectedException(StatusCodes.Status410Gone, "Cleared", "Cleared");
+            // Android 0.1.2 shows the detail as its notification text.
+            throw new ClipRejectedException(StatusCodes.Status410Gone,
+                "History was cleared after this clip was copied, so it wasn't added.", "Cleared");
     }
 
     public async Task<bool> DeleteAsync(Guid id)

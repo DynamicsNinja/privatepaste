@@ -23,6 +23,7 @@ public class HistoryEndpointsTests
         await PinEndpointsTests.PostText(c, "drop one");
         await PinEndpointsTests.PostText(c, "drop two");
         await c.PostAsync($"/api/clips/{keep.Id}/pin", null);
+        f.Clock.Advance(TimeSpan.FromSeconds(1));   // a clear only deletes clips copied before it
 
         var r = await c.PostAsync("/api/history/clear", null);
         Assert.Equal(HttpStatusCode.OK, r.StatusCode);
@@ -31,6 +32,24 @@ public class HistoryEndpointsTests
 
         var page = (await c.GetFromJsonAsync<ClipPage>("/api/clips", ProtocolJson.Options))!;
         Assert.Equal(keep.Id, Assert.Single(page.Items).Id);
+    }
+
+    [Fact]
+    public async Task Clear_keeps_a_clip_copied_at_or_after_the_clear_time()
+    {
+        // A live upload that lands while the clear runs has a copy time at or after the clear: it must not vanish.
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        await PinEndpointsTests.PostText(c, "before");
+        f.Clock.Advance(TimeSpan.FromMinutes(1));
+        var racing = await PinEndpointsTests.PostText(c, "racing");
+
+        var r = await c.PostAsync("/api/history/clear", null);
+        using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
+        Assert.Equal(1, doc.RootElement.GetProperty("deleted").GetInt32());
+
+        var page = (await c.GetFromJsonAsync<ClipPage>("/api/clips", ProtocolJson.Options))!;
+        Assert.Equal(racing.Id, Assert.Single(page.Items).Id);
     }
 
     [Fact]
@@ -45,6 +64,7 @@ public class HistoryEndpointsTests
         var form = new MultipartFormDataContent { { new ByteArrayContent(TestImages.MakePng(4, 4).ToArray()), "file", "x.png" } };
         var img = (await (await client.PostAsync("/api/clips/image", form)).Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/clips/{img.Id}/image")).StatusCode);
+        f.Clock.Advance(TimeSpan.FromSeconds(1));
 
         await client.PostAsync("/api/history/clear", null);
 
@@ -66,6 +86,9 @@ public class HistoryEndpointsTests
         Assert.Equal(HttpStatusCode.Gone, r.StatusCode);
         using var problem = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
         Assert.Equal("Cleared", problem.RootElement.GetProperty("title").GetString());
+        // Android 0.1.2 shows the detail as its notification text.
+        Assert.Equal("History was cleared after this clip was copied, so it wasn't added.",
+            problem.RootElement.GetProperty("detail").GetString());
 
         var form = new MultipartFormDataContent
         {

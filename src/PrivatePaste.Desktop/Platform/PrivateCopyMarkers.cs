@@ -42,9 +42,19 @@ public static class PrivateCopyMarkers
     public static bool IsPrivateLinux(IEnumerable<string> targets, Func<string, string?> readText)
     {
         if (!targets.Contains(LinuxPasswordHint)) return false;
-        try { return readText(LinuxPasswordHint) is not { } value || value.Trim() == "secret"; }
+        try { return IsSecret(readText(LinuxPasswordHint)); }
         catch (Exception) { return true; }
     }
+
+    /// <inheritdoc cref="IsPrivateLinux"/>
+    public static async Task<bool> IsPrivateLinuxAsync(IEnumerable<string> targets, Func<string, Task<string?>> readTextAsync)
+    {
+        if (!targets.Contains(LinuxPasswordHint)) return false;
+        try { return IsSecret(await readTextAsync(LinuxPasswordHint)); }
+        catch (Exception) { return true; }
+    }
+
+    private static bool IsSecret(string? hint) => hint is null || hint.Trim() == "secret";
 
     private static bool BlocksDword(IReadOnlyDictionary<string, byte[]?> formats, string name) =>
         formats.TryGetValue(name, out var bytes) && !(bytes is { Length: >= 4 } && BitConverter.ToUInt32(bytes, 0) != 0);   // little-endian on every supported host

@@ -99,4 +99,32 @@ public class PrivateCopyMarkersTests
     [Fact]
     public void Linux_reader_that_throws_fails_closed() =>
         Assert.True(PrivateCopyMarkers.IsPrivateLinux(["x-kde-passwordManagerHint"], _ => throw new IOException()));
+
+    // The async form is what the Linux clipboard uses: the hint is read through Avalonia's async data API.
+
+    [Fact]
+    public async Task Linux_async_reader_that_throws_fails_closed()
+    {
+        Assert.True(await PrivateCopyMarkers.IsPrivateLinuxAsync(["x-kde-passwordManagerHint"],
+            async _ => { await Task.Yield(); throw new InvalidOperationException(); }));
+        Assert.True(await PrivateCopyMarkers.IsPrivateLinuxAsync(["x-kde-passwordManagerHint"],
+            _ => throw new InvalidOperationException()));
+    }
+
+    [Fact]
+    public async Task Linux_async_reader_reads_the_hint_value()
+    {
+        Assert.True(await PrivateCopyMarkers.IsPrivateLinuxAsync(["x-kde-passwordManagerHint"], _ => Task.FromResult<string?>("secret")));
+        Assert.True(await PrivateCopyMarkers.IsPrivateLinuxAsync(["x-kde-passwordManagerHint"], _ => Task.FromResult<string?>(null)));
+        Assert.False(await PrivateCopyMarkers.IsPrivateLinuxAsync(["x-kde-passwordManagerHint"], _ => Task.FromResult<string?>("normal")));
+    }
+
+    [Fact]
+    public async Task Linux_async_without_the_hint_reads_nothing()
+    {
+        var read = false;
+        Assert.False(await PrivateCopyMarkers.IsPrivateLinuxAsync(["UTF8_STRING"],
+            _ => { read = true; return Task.FromResult<string?>("secret"); }));
+        Assert.False(read);
+    }
 }

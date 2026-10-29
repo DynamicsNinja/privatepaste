@@ -292,6 +292,35 @@ class SyncEngineTest {
         assertTrue(applied.isEmpty())
     }
 
+    @Test
+    fun catchUpAfterAPinAppliesNothing() = runTest {
+        // x is held and the top of the history but was never applied here (e.g. the WebSocket was down).
+        cache.markApplied(base, "previous")
+        cache.upsert(clip("x", 1, minute = 5), fromSync = true)
+        // A pin brings x back with a new seq and the same copy time: not a copy, so not for the clipboard.
+        val pinned = clip("x", 2, minute = 5).copy(pinnedAt = base.plusSeconds(600).toString())
+        api.pages += page(pinned, latest = 2)
+
+        engine().start()
+        runCurrent()
+
+        assertTrue(applied.isEmpty())
+        assertEquals(base, cache.lastAppliedAt)
+        assertEquals(pinned.pinnedAt, cache.items.value.single().pinnedAt)
+    }
+
+    @Test
+    fun catchUpAppliesAHeldClipCopiedAgain() = runTest {
+        cache.markApplied(base, "previous")
+        cache.upsert(clip("x", 1, minute = 5), fromSync = true)
+        api.pages += page(clip("x", 2, minute = 7), latest = 2)
+
+        engine().start()
+        runCurrent()
+
+        assertEquals(listOf("x"), applied.map { it.id })
+    }
+
     // ---------------------------------------------------------------- live events
 
     @Test
