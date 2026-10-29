@@ -7,6 +7,12 @@ namespace PrivatePaste.Desktop.Platform.Polling;
 public interface IClipboardBackend
 {
     Task<ClipboardContent?> ReadAsync(CancellationToken ct);
+
+    /// <summary>
+    /// The cheap read behind the change fingerprint, run every tick: content only, with no private-copy or source-app detection
+    /// (that can be slow and is only needed for the read the coordinator consumes via <see cref="ReadAsync"/>).
+    /// </summary>
+    Task<ClipboardContent?> PeekAsync(CancellationToken ct) => ReadAsync(ct);
     Task WriteAsync(ClipboardContent content, CancellationToken ct);
 }
 
@@ -55,7 +61,7 @@ public sealed class PollingClipboard(IClipboardBackend backend, TimeSpan? interv
 
     private async Task PollOnceAsync()
     {
-        var content = await backend.ReadAsync(_cts.Token);
+        var content = await backend.PeekAsync(_cts.Token);
         if (content is null) return;
         var fingerprint = Fingerprint(content);
         bool changed;
@@ -81,5 +87,6 @@ public sealed class PollingClipboard(IClipboardBackend backend, TimeSpan? interv
     {
         _cts.Cancel();
         _cts.Dispose();
+        (backend as IDisposable)?.Dispose();
     }
 }

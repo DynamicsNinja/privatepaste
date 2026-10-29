@@ -53,7 +53,7 @@ public sealed class PlatformServices
         {
             return new PlatformServices
             {
-                Clipboard = AvaloniaPollingClipboard.Create(),
+                Clipboard = AvaloniaPollingClipboard.Create(msg => App.Log?.Info(msg)),
                 Autostart = isolated ? new NullAutostart() : new MacAutostart(exePath),
                 SecretProtector = new KeychainSecretProtector(),
                 PlatformName = "macos",
@@ -69,7 +69,7 @@ public sealed class PlatformServices
             notifier ??= new SilentNotifier();
             var services = new PlatformServices
             {
-                Clipboard = AvaloniaPollingClipboard.Create(),
+                Clipboard = AvaloniaPollingClipboard.Create(msg => App.Log?.Info(msg)),
                 Autostart = isolated ? new NullAutostart() : new XdgAutostart(exePath),
                 SecretProtector = new SecretToolProtector(Path.Combine(dir, "data-key.bin"), notifier),
                 PlatformName = "linux",

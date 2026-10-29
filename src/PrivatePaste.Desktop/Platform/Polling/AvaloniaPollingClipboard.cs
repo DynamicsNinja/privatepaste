@@ -17,45 +17,68 @@ namespace PrivatePaste.Desktop.Platform.Polling;
 /// </summary>
 public static class AvaloniaPollingClipboard
 {
-    public static PollingClipboard Create()
+    public static PollingClipboard Create(Action<string>? log = null)
     {
-        var clipboard = new PollingClipboard(new AvaloniaClipboardBackend());
+        var clipboard = new PollingClipboard(new AvaloniaClipboardBackend(log));
         clipboard.Start();
         return clipboard;
     }
 }
 
-internal sealed class AvaloniaClipboardBackend : IClipboardBackend
+internal sealed class AvaloniaClipboardBackend(Action<string>? log = null) : IClipboardBackend, IDisposable
 {
     private static readonly DataFormat<byte[]> Png = DataFormat.CreateBytesPlatformFormat("image/png");
 
-    private Window? _hidden;
+    private static readonly TimeSpan SourceAppTimeout = TimeSpan.FromSeconds(1);
 
-    public Task<ClipboardContent?> ReadAsync(CancellationToken ct) =>
+    private Window? _hidden;
+    private int _detectionFailureLogged;
+
+    /// <summary>The fingerprint read of every tick: text or PNG only, no detection work.</summary>
+    public Task<ClipboardContent?> PeekAsync(CancellationToken ct) =>
         Dispatcher.UIThread.InvokeAsync<ClipboardContent?>(async () =>
         {
             if (GetClipboard() is not { } clipboard) return null;
             var text = await clipboard.TryGetTextAsync();
             // Text first (office apps put text plus a bitmap); the PNG is only fetched when there is no usable text.
             var png = string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(clipboard) : null;
-            var content = ClipboardSelection.Choose(text, () => png);
-            return content is null ? null : content with
-            {
-                IsPrivate = await IsPrivateAsync(clipboard),
-                SourceApp = SourceApp(),
-            };
+            return ClipboardSelection.Choose(text, () => png);
         });
 
     /// <summary>
-    /// Marker formats through Avalonia's public format list. Unverified on real machines: if a platform does not list the
-    /// marker, the copy is simply not seen as private there. If listing the formats itself fails, the copy is treated as not private.
+    /// The read the coordinator consumes: content plus private-copy markers, taken from one clipboard query so the markers
+    /// belong to the content. The source app is looked up off the UI thread afterwards.
     /// </summary>
-    private static async Task<bool> IsPrivateAsync(IClipboard clipboard)
+    public async Task<ClipboardContent?> ReadAsync(CancellationToken ct)
+    {
+        var (content, isPrivate) = await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            if (GetClipboard() is not { } clipboard) return ((ClipboardContent?)null, false);
+            IAsyncDataTransfer? data = null;
+            try { data = await clipboard.TryGetDataAsync(); }
+            catch (Exception) { LogDetectionUnavailable(); }
+            using (data)
+            {
+                if (data is null) return (null, false);
+                var text = await data.TryGetTextAsync();
+                var png = string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(data) : null;
+                var chosen = ClipboardSelection.Choose(text, () => png);
+                return (chosen, chosen is not null && await IsPrivateAsync(data));
+            }
+        });
+        if (content is null) return null;
+        return content with { IsPrivate = isPrivate, SourceApp = await SourceAppAsync() };
+    }
+
+    /// <summary>
+    /// Marker formats through Avalonia's public format list. Unverified on real machines: if a platform does not list the
+    /// marker, the copy is simply not seen as private there. If listing the formats itself fails, the copy is treated as not
+    /// private and that is logged once.
+    /// </summary>
+    private async Task<bool> IsPrivateAsync(IAsyncDataTransfer data)
     {
         try
         {
-            using var data = await clipboard.TryGetDataAsync();
-            if (data is null) return false;
             var names = data.Formats.Select(f => f.Identifier).ToList();
             if (OperatingSystem.IsMacOS()) return PrivateCopyMarkers.IsPrivateMac(names);
             if (!OperatingSystem.IsLinux() || !names.Contains(PrivateCopyMarkers.LinuxPasswordHint)) return false;
@@ -68,7 +91,26 @@ internal sealed class AvaloniaClipboardBackend : IClipboardBackend
             }
             return PrivateCopyMarkers.IsPrivateLinux(names, _ => hint);
         }
-        catch (Exception) { return false; }
+        catch (Exception)
+        {
+            LogDetectionUnavailable();
+            return false;
+        }
+    }
+
+    private void LogDetectionUnavailable()
+    {
+        if (Interlocked.Exchange(ref _detectionFailureLogged, 1) == 0) log?.Invoke("Private-copy detection is unavailable on this system.");
+    }
+
+    /// <summary>The native lookups run on the thread pool and are abandoned after a second: a wedged X server must not stall a read.</summary>
+    private static async Task<string?> SourceAppAsync()
+    {
+        try
+        {
+            return await Task.Run(SourceApp).WaitAsync(SourceAppTimeout);
+        }
+        catch (Exception) { return null; }
     }
 
     private static string? SourceApp()
@@ -76,6 +118,11 @@ internal sealed class AvaloniaClipboardBackend : IClipboardBackend
         if (OperatingSystem.IsMacOS()) return FrontmostApp.BundleId();
         if (OperatingSystem.IsLinux()) return X11SelectionOwner.ProcessName();
         return null;
+    }
+
+    public void Dispose()
+    {
+        if (OperatingSystem.IsLinux()) X11SelectionOwner.Close();
     }
 
     public Task WriteAsync(ClipboardContent content, CancellationToken ct) =>
@@ -95,7 +142,12 @@ internal sealed class AvaloniaClipboardBackend : IClipboardBackend
     private static async Task<byte[]?> TryReadPngAsync(IClipboard clipboard)
     {
         using var data = await clipboard.TryGetDataAsync();
-        if (data is null || !data.Formats.Contains(Png)) return null;
+        return data is null ? null : await TryReadPngAsync(data);
+    }
+
+    private static async Task<byte[]?> TryReadPngAsync(IAsyncDataTransfer data)
+    {
+        if (!data.Formats.Contains(Png)) return null;
         foreach (var item in data.Items)
         {
             if (await item.TryGetRawAsync(Png) is byte[] { Length: > 0 } bytes) return bytes;

@@ -21,10 +21,15 @@ internal static class X11SelectionOwner
         bool delete, nint reqType, out nint actualType, out int actualFormat, out nint nitems, out nint bytesAfter, out nint prop);
     [DllImport(X11)] private static extern int XFree(nint data);
     [DllImport(X11)] private static extern int XSync(nint display, bool discard);
-    [DllImport(X11)] private static extern nint XSetErrorHandler(XErrorHandler? handler);
+    [DllImport(X11)] private static extern nint XSetErrorHandler(nint handler);
 
     // Xlib's default error handler exits the process; the owner window can vanish between two calls (BadWindow).
     private static readonly XErrorHandler Ignore = (_, _) => 0;
+    private static readonly nint IgnorePointer = Marshal.GetFunctionPointerForDelegate(Ignore);   // Ignore is static, so it stays alive
+
+    // One connection, opened on first use and closed by Close(); a busy gate (a wedged server) means "unknown", never a wait.
+    private static readonly object Gate = new();
+    private static nint _display;
 
     private static readonly Lazy<bool> Available = new(Probe);
 
@@ -51,16 +56,31 @@ internal static class X11SelectionOwner
     /// <summary>Lowercase process name of the clipboard owner, or null when unknown.</summary>
     public static string? ProcessName()
     {
-        if (!CanIdentify) return null;
+        if (!CanIdentify || !Monitor.TryEnter(Gate)) return null;
         try { return NameOf(OwnerPid()); }
         catch (Exception) { return null; }
+        finally { Monitor.Exit(Gate); }
+    }
+
+    /// <summary>Closes the shared connection, if one was opened.</summary>
+    public static void Close()
+    {
+        if (!Monitor.TryEnter(Gate, TimeSpan.FromSeconds(1))) return;
+        try
+        {
+            if (_display != 0) XCloseDisplay(_display);
+            _display = 0;
+        }
+        catch (Exception) { }
+        finally { Monitor.Exit(Gate); }
     }
 
     private static int OwnerPid()
     {
-        var display = XOpenDisplay(0);
+        if (_display == 0) _display = XOpenDisplay(0);
+        var display = _display;
         if (display == 0) return 0;
-        var previous = XSetErrorHandler(Ignore);
+        var previous = XSetErrorHandler(IgnorePointer);
         try
         {
             var owner = XGetSelectionOwner(display, XInternAtom(display, "CLIPBOARD", false));
@@ -77,9 +97,8 @@ internal static class X11SelectionOwner
         }
         finally
         {
-            XSync(display, false);
-            XSetErrorHandler(previous == 0 ? null : Marshal.GetDelegateForFunctionPointer<XErrorHandler>(previous));
-            XCloseDisplay(display);
+            XSync(display, false);   // deliver any BadWindow while the ignoring handler is still installed
+            XSetErrorHandler(previous);
         }
     }
 
@@ -87,10 +106,10 @@ internal static class X11SelectionOwner
     {
         if (pid <= 0) return null;
         string? name = null;
-        try { name = Path.GetFileName(new FileInfo($"/proc/{pid}/exe").LinkTarget); } catch (IOException) { }
+        try { name = Path.GetFileName(new FileInfo($"/proc/{pid}/exe").LinkTarget); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         if (string.IsNullOrEmpty(name))
         {
-            try { name = File.ReadAllText($"/proc/{pid}/comm").Trim(); } catch (IOException) { }
+            try { name = File.ReadAllText($"/proc/{pid}/comm").Trim(); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
         return string.IsNullOrEmpty(name) ? null : name.ToLowerInvariant();
     }
