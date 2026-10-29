@@ -1,0 +1,9 @@
+{
+  "name": "privatepaste-readme-images",
+  "private": true,
+  "type": "module",
+  "description": "Rebuilds the README hero images; see README.md in this folder.",
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}

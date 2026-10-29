@@ -1,0 +1,12 @@
+{
+  "comment": "The demo history shown in the README hero, newest first. Used by scripts/readme/build.ps1 (web), DesktopRenderTests.Readme_popup and ReadmeScreenshotTest (Android). Image clips use scripts/readme/photo.html; Android leaves them out.",
+  "clips": [
+    { "device": "Work laptop", "platform": "windows", "kind": "text", "text": "docker compose pull && docker compose up -d", "minutesAgo": 1 },
+    { "device": "Pixel 9", "platform": "android", "kind": "text", "text": "Parcel 1Z 999 AA1 01 2345 6784 arrives Thursday", "minutesAgo": 12 },
+    { "device": "MacBook Air", "platform": "macos", "kind": "link", "text": "https://github.com/DynamicsNinja/privatepaste/releases", "minutesAgo": 40 },
+    { "device": "Pixel 9", "platform": "android", "kind": "image", "width": 1600, "height": 900, "minutesAgo": 95 },
+    { "device": "Work laptop", "platform": "windows", "kind": "text", "text": "Meeting moved to 15:30, room 4B", "minutesAgo": 180 },
+    { "device": "Pixel 9", "platform": "android", "kind": "text", "text": "Table for 4 at 19:30, Konoba Bracera", "minutesAgo": 300 },
+    { "device": "ThinkPad", "platform": "linux", "kind": "text", "text": "sudo systemctl restart nginx", "minutesAgo": 1500 }
+  ]
+}
