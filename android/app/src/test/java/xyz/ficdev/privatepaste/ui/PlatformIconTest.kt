@@ -21,7 +21,7 @@ class PlatformIconTest {
         assertEquals(PlatformIcon.UNKNOWN, PlatformIcon.forPlatform(null))
     }
 
-    /** The VectorDrawables must carry the same path data as branding/platform-icons. */
+    /** The VectorDrawables must carry the same path data as branding/platform-icons (and ui-icons/pin.svg). */
     @Test
     fun drawablesMatchTheBrandingSvgs() {
         val repo = generateSequence(File("").absoluteFile) { it.parentFile }
@@ -34,5 +34,8 @@ class PlatformIconTest {
             val svg = File(repo, "branding/platform-icons/$key.svg").readText()
             assertEquals(key, svgPath.find(svg)!!.groupValues[1], pathData.find(vector)!!.groupValues[1])
         }
+        val pinVector = File(repo, "android/app/src/main/res/drawable/ic_pin.xml").readText()
+        val pinSvg = File(repo, "branding/ui-icons/pin.svg").readText()
+        assertEquals("pin", svgPath.find(pinSvg)!!.groupValues[1], pathData.find(pinVector)!!.groupValues[1])
     }
 }

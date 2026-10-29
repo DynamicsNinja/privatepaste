@@ -153,6 +153,17 @@ public class PinnedWebTests
     }
 
     [Fact]
+    public async Task Settings_page_renders_Off_with_an_empty_value_and_selects_it_when_auto_delete_is_off()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = await WebLoginAsync(factory);
+
+        var html = await web.GetStringAsync("/settings");
+        Assert.Matches("<option value=\"\" selected[^>]*>Off</option>", html);
+        Assert.DoesNotMatch("<option value=\"[0-9]+\" selected", html);
+    }
+
+    [Fact]
     public async Task Settings_page_asks_before_deleting_the_unpinned_count()
     {
         using var factory = new PrivatePasteFactory();
@@ -196,7 +207,11 @@ public class PinnedWebTests
         Assert.Equal(HttpStatusCode.Redirect, (await PostFormAsync(web, "/settings?handler=AutoDelete", token, ("days", "7"))).StatusCode);
         Assert.Equal(7, (await api.GetFromJsonAsync<SettingsDto>("/api/settings", ProtocolJson.Options))!.AutoDeleteDays);
 
-        await PostFormAsync(web, "/settings?handler=AutoDelete", token, ("days", ""));
+        // Post the value the page's own "Off" option carries, not a hand-written one.
+        var off = Regex.Match(await web.GetStringAsync("/settings"), "<option value=\"([^\"]*)\"[^>]*>Off</option>");
+        Assert.True(off.Success);
+        Assert.Equal("", off.Groups[1].Value);
+        await PostFormAsync(web, "/settings?handler=AutoDelete", token, ("days", off.Groups[1].Value));
         Assert.Null((await api.GetFromJsonAsync<SettingsDto>("/api/settings", ProtocolJson.Options))!.AutoDeleteDays);
     }
 

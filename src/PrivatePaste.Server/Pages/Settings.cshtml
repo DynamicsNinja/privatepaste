@@ -14,7 +14,7 @@
             <select id="auto-delete" name="days">
                 @foreach (var option in days)
                 {
-                    <option value="@option.Value" selected="@(option.Value == Model.AutoDeleteDays)">@option.Label</option>
+                    <option value="@(option.Value?.ToString() ?? "")" selected="@(option.Value == Model.AutoDeleteDays)">@option.Label</option>
                 }
             </select>
             <noscript><button type="submit">Save</button></noscript>

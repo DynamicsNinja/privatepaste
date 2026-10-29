@@ -81,7 +81,7 @@ main { max-width: 46rem; margin: 0 auto; padding: 1.5rem 16px 3rem; }
 .wordmark span { font-weight: 300; color: var(--accent); }
 nav { display: flex; align-items: center; gap: .25rem; }
 nav a, nav button.link {
-    color: var(--muted); text-decoration: none; font-size: .9rem; padding: .4rem .7rem; border-radius: 99px;
+    color: var(--muted); text-decoration: none; font-size: .9rem; padding: .4rem .7rem; border-radius: 99px; white-space: nowrap;
 }
 nav a:hover, nav button.link:hover { color: var(--text); background: var(--raised); }
 nav a[aria-current="page"] { color: var(--text); background: var(--raised); }
@@ -193,6 +193,8 @@ td form { margin: 0; }
     .clip { flex-wrap: wrap; }
     .actions { width: 100%; justify-content: flex-end; }
     .bar .wordmark { display: none; }
+    nav { gap: 0; }
+    nav a, nav button.link { padding: .4rem .55rem; }
 
     /* Devices: one stacked block per device so Revoke stays on screen. */
     .table-wrap { overflow: visible; }
