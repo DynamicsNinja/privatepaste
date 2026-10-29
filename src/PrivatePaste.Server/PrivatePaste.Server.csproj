@@ -19,4 +19,8 @@
     <EmbeddedResource Include="Storage/Schema.sql" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PrivatePaste.Tests" />
+  </ItemGroup>
+
 </Project>
