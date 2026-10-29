@@ -28,6 +28,7 @@ import xyz.ficdev.privatepaste.core.model.ClipPage
 import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.history.ClipCopier
 import xyz.ficdev.privatepaste.ui.history.ClipRemote
+import xyz.ficdev.privatepaste.ui.history.HistoryTab
 import xyz.ficdev.privatepaste.ui.history.HistoryViewModel
 import java.io.IOException
 import java.time.Instant
@@ -116,6 +117,90 @@ class HistoryViewModelTest {
         cache.value = listOf(clip("c", 3)) + cache.value   // a newer clip from another device: no dot
         advanceUntilIdle()
         assertNull(vm.state.value.liveClipId)
+    }
+
+    private fun pinned(clip: ClipDto, pinnedMinute: Long) =
+        clip.copy(pinnedAt = base.plusSeconds(pinnedMinute * 60).toString())
+
+    @Test
+    fun pinnedTabShowsOnlyPinsNewestPinnedFirstAndMergesTheServersList() = runTest(dispatcher) {
+        cache.value = listOf(clip("c", 30), pinned(clip("b", 20), 5), clip("x", 10), pinned(clip("a", 1), 9))
+        remote.pages["P:|"] = ClipPage(listOf(pinned(clip("old", 0), 2), pinned(clip("a", 1), 9)), null)
+        val vm = collecting(vm())
+        advanceUntilIdle()
+        assertEquals(HistoryTab.HISTORY, vm.state.value.tab)
+        assertEquals(listOf("c", "b", "x", "a"), vm.ids())
+
+        vm.onTab(HistoryTab.PINNED)
+        advanceUntilIdle()
+        assertEquals(HistoryTab.PINNED, vm.state.value.tab)
+        assertEquals(listOf("a", "b", "old"), vm.ids())
+        assertEquals(listOf("clips:P:|"), events)
+
+        vm.onTab(HistoryTab.HISTORY)
+        advanceUntilIdle()
+        assertEquals(listOf("c", "b", "x", "a"), vm.ids())
+    }
+
+    @Test
+    fun searchFiltersThePinnedTab() = runTest(dispatcher) {
+        cache.value = listOf(pinned(clip("a", 2, "alpha"), 3), pinned(clip("b", 1, "beta"), 4), clip("c", 5, "alpha too"))
+        val vm = collecting(vm(online = false))
+        vm.onTab(HistoryTab.PINNED)
+        vm.onQueryChange("alp")
+        advanceUntilIdle()
+        assertEquals(listOf("a"), vm.ids())
+    }
+
+    @Test
+    fun pinningUpdatesTheRowAtOnceAndUnpinningLeavesThePinnedTab() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 2), pinned(clip("b", 1), 4))
+        val vm = collecting(vm())
+        advanceUntilIdle()
+
+        vm.togglePin(cache.value[0])
+        advanceUntilIdle()
+        assertEquals(listOf("pin:a:true"), events)
+        assertTrue(vm.state.value.items.first { it.id == "a" }.pinnedAt != null)
+
+        vm.onTab(HistoryTab.PINNED)
+        advanceUntilIdle()
+        assertEquals(listOf("a", "b"), vm.ids())
+
+        events.clear()
+        vm.togglePin(vm.state.value.items.first { it.id == "b" })
+        advanceUntilIdle()
+        assertTrue("pin:b:false" in events)
+        assertEquals(listOf("a"), vm.ids())
+    }
+
+    @Test
+    fun pinFailureToastsAndChangesNothing() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 1))
+        remote.failPin = true
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.togglePin(cache.value[0])
+        advanceUntilIdle()
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_pin_failed)), messages)
+        assertNull(vm.state.value.items.single().pinnedAt)
+
+        // Offline: no call at all.
+        val offline = collecting(vm(online = false))
+        val offlineMessages = messagesOf(offline)
+        offline.togglePin(cache.value[0])
+        advanceUntilIdle()
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_pin_failed)), offlineMessages)
+    }
+
+    @Test
+    fun pinningAClipDeletedElsewhereDropsTheRow() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 1))
+        remote.pinNotFound = true
+        val vm = collecting(vm())
+        vm.togglePin(cache.value[0])
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), vm.ids())
     }
 
     @Test
@@ -372,8 +457,20 @@ class HistoryViewModelTest {
         /** Every call throws 401: this device was revoked. */
         var revoked = false
 
-        override suspend fun clips(q: String?, cursor: String?, limit: Int): ClipPage {
-            val key = "${q.orEmpty()}|${cursor.orEmpty()}"
+        var failPin = false
+        var pinNotFound = false
+
+        override suspend fun pin(id: String, pinned: Boolean): ClipDto {
+            events += "pin:$id:$pinned"
+            if (revoked) throw ApiException.Unauthorized()
+            if (pinNotFound) throw ApiException.Rejected(404, "none")
+            if (failPin) throw ApiException.Transient("down")
+            val held = cache.value.first { it.id == id }
+            return held.copy(seq = held.seq + 100, pinnedAt = if (pinned) base.plusSeconds(3600).toString() else null)
+        }
+
+        override suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean): ClipPage {
+            val key = (if (pinned) "P:" else "") + "${q.orEmpty()}|${cursor.orEmpty()}"
             events += "clips:$key"
             gates[key]?.await()
             return pages[key] ?: ClipPage(emptyList(), null)

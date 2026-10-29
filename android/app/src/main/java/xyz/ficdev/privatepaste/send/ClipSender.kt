@@ -173,7 +173,7 @@ class ClipSender(
     /**
      * Uploads queued clips in order as backfill with their original copy time, each at most once per call. A transient
      * failure counts an attempt: below 5 the flush stops here (the next one retries), from 5 the item moves to the back,
-     * at 10 it is dropped with one notification. A rejection drops the item with the server's message.
+     * at 10 it is dropped with one notification. A rejection drops the item with the server's message, except 410 (cleared), which drops it silently.
      * [ApiException.Unauthorized] and cancellation propagate (the item stays queued, no attempt is counted).
      */
     suspend fun flushQueue(): Unit = flushLock.withLock { withContext(Dispatchers.IO) { flushLocked() } }
@@ -200,7 +200,9 @@ class ClipSender(
             } catch (e: ApiException.Unauthorized) {
                 throw e
             } catch (e: ApiException.Rejected) {
-                notifier(e.message ?: "The server refused a queued clip")
+                // 410: history was cleared (or the clip is too old) since it was copied. That is expected after a
+                // clear, so the item goes quietly.
+                if (e.status != GONE) notifier(e.message ?: "The server refused a queued clip")
                 queue.removeHead()
                 continue
             } catch (e: ApiException) {
@@ -253,6 +255,7 @@ class ClipSender(
         const val MAX_HASH_PIXELS = 24L * 1000 * 1000
         const val ROTATE_AFTER_ATTEMPTS = 5
         const val DROP_AFTER_ATTEMPTS = 10
+        const val GONE = 410
         const val TEXT_TOO_LARGE = "Clip too large to sync (text over 1 MB)."
         const val IMAGE_TOO_LARGE = "Clip too large to sync (image over 20 MB)."
         const val GAVE_UP = "Couldn't sync a clip after several tries."

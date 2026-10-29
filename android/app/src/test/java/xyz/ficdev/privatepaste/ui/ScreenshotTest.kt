@@ -21,6 +21,7 @@ import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.history.HISTORY_TOP_BAR_TAG
 import xyz.ficdev.privatepaste.ui.history.HistoryContent
 import xyz.ficdev.privatepaste.ui.history.HistoryState
+import xyz.ficdev.privatepaste.ui.history.HistoryTab
 import xyz.ficdev.privatepaste.ui.settings.SettingsContent
 import xyz.ficdev.privatepaste.ui.settings.SettingsState
 import xyz.ficdev.privatepaste.ui.signin.SignInContent
@@ -57,7 +58,8 @@ class ScreenshotTest {
     private val history = HistoryState(
         items = listOf(
             clip("1", ClipKind.TEXT, "ssh deploy@build-01 'systemctl restart privatepaste'", 0, "Workstation", "windows"),
-            clip("2", ClipKind.LINK, "https://github.com/ficdev/privatepaste/releases", 12, "MacBook", "macos"),
+            clip("2", ClipKind.LINK, "https://github.com/ficdev/privatepaste/releases", 12, "MacBook", "macos")
+                .copy(pinnedAt = now.toString()),
             clip("3", ClipKind.IMAGE, null, 95, "ThinkPad", "linux"),
             clip("4", ClipKind.TEXT, "Meeting notes:\nship the Android client", 60 * 26, "Pixel 9", "android"),
             clip("5", ClipKind.TEXT, "Grocery list: oat milk, eggs, basil", 60 * 30, "Web", "web"),
@@ -67,12 +69,21 @@ class ScreenshotTest {
         syncState = SyncState.CONNECTED,
     )
 
+    private val pinnedTab = HistoryState(
+        tab = HistoryTab.PINNED,
+        items = history.items.filter { it.id in setOf("2", "4", "5") }
+            .map { it.copy(pinnedAt = now.toString()) },
+        syncState = SyncState.CONNECTED,
+    )
+
     // createComposeRule allows one setContent per test, so each screen/theme pair is its own test.
     @Test fun signInDark() = shootOne("signin", dark = true) { SignInSample() }
     @Test fun signInLight() = shootOne("signin", dark = false) { SignInSample() }
     @Test fun historyDark() = shootOne("history", dark = true) { HistorySample() }
     @Test fun historyLight() = shootOne("history", dark = false) { HistorySample() }
     // Close-ups of the history top bar (brand mark, connection chip, settings button).
+    @Test fun historyPinnedDark() = shootOne("history-pinned", dark = true) { HistorySample(pinnedTab) }
+    @Test fun historyPinnedLight() = shootOne("history-pinned", dark = false) { HistorySample(pinnedTab) }
     @Test fun historyHeaderDark() = shootOne("history-header", dark = true, tag = HISTORY_TOP_BAR_TAG) { HistorySample() }
     @Test fun historyHeaderLight() = shootOne("history-header", dark = false, tag = HISTORY_TOP_BAR_TAG) { HistorySample() }
     @Test fun settingsDark() = shootOne("settings", dark = true) { SettingsSample() }
@@ -97,8 +108,8 @@ class ScreenshotTest {
     )
 
     @Composable
-    private fun HistorySample() = HistoryContent(
-        state = history, relativeTime = time,
+    private fun HistorySample(state: HistoryState = history) = HistoryContent(
+        state = state, relativeTime = time,
         onQueryChange = {}, onCopy = {}, onDelete = {}, onNearEnd = {}, onOpenSettings = {},
     )
 
