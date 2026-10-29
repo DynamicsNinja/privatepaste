@@ -29,6 +29,7 @@
         <nav>
             <a href="/" aria-current="@(path == "/" ? "page" : null)">History</a>
             <a href="/devices" aria-current="@(path.StartsWith("/devices", StringComparison.OrdinalIgnoreCase) ? "page" : null)">Devices</a>
+            <a href="/settings" aria-current="@(path.StartsWith("/settings", StringComparison.OrdinalIgnoreCase) ? "page" : null)">Settings</a>
             <form method="post" asp-page="/Devices" asp-page-handler="SignOut" class="inline">
                 <button type="submit" class="link">Sign out</button>
             </form>

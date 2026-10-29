@@ -17,11 +17,23 @@ public class IndexModel(ClipRepository clips, ClipService service, TimeProvider 
     [BindProperty(SupportsGet = true)]
     public string? Q { get; set; }
 
+    /// <summary>"pinned" shows the Pinned tab; anything else is History.</summary>
+    [BindProperty(SupportsGet = true)]
+    public string? Tab { get; set; }
+
+    public bool PinnedTab => string.Equals(Tab, "pinned", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The tab query value to carry through links and redirects (null for History, the default).</summary>
+    public string? TabRoute => PinnedTab ? "pinned" : null;
+
     public async Task<IActionResult> OnGetAsync(string? cursor)
     {
         try
         {
-            var page = await clips.ListAsync(string.IsNullOrWhiteSpace(Q) ? null : Q.Trim(), cursor, PageSize);
+            var query = string.IsNullOrWhiteSpace(Q) ? null : Q.Trim();
+            var page = PinnedTab
+                ? await clips.ListPinnedAsync(query, cursor, PageSize)
+                : await clips.ListAsync(query, cursor, PageSize);
             Items = page.Items;
             NextCursor = page.NextCursor;
         }
@@ -35,8 +47,23 @@ public class IndexModel(ClipRepository clips, ClipService service, TimeProvider 
     public async Task<IActionResult> OnPostDeleteAsync(Guid id)
     {
         await service.DeleteAsync(id);
-        return RedirectToPage(new { q = string.IsNullOrWhiteSpace(Q) ? null : Q });
+        return Back();
     }
+
+    public async Task<IActionResult> OnPostPinAsync(Guid id)
+    {
+        await service.SetPinnedAsync(id, true);
+        return Back();
+    }
+
+    public async Task<IActionResult> OnPostUnpinAsync(Guid id)
+    {
+        await service.SetPinnedAsync(id, false);
+        return Back();
+    }
+
+    private IActionResult Back() =>
+        RedirectToPage(new { q = string.IsNullOrWhiteSpace(Q) ? null : Q, tab = TabRoute });
 
     public static string Preview(string? text) =>
         text is null ? "" : text.Length <= PreviewLength ? text : text[..PreviewLength] + "...";

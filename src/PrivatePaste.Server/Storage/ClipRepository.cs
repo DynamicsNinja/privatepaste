@@ -149,6 +149,13 @@ public sealed class ClipRepository(PrivatePasteDb db)
         return new ClipPage(items, next);
     }
 
+    /// <summary>How many clips "Clear history" would delete right now.</summary>
+    public async Task<long> CountUnpinnedAsync()
+    {
+        await using var conn = db.Open();
+        return await ScalarAsync<long>(conn, null!, "SELECT COUNT(*) FROM clips WHERE pinned_at IS NULL");
+    }
+
     public async Task<long?> DeleteAsync(Guid id)
     {
         await _writeLock.WaitAsync();
