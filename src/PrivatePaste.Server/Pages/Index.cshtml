@@ -6,20 +6,29 @@
     var highlightFirst = string.IsNullOrEmpty(Model.Q) && !Request.Query.ContainsKey("cursor");
     var first = true;
 }
+<div class="tabs" role="navigation" aria-label="History views">
+    <a asp-page="/Index" asp-route-q="@Model.Q" aria-current="@(Model.PinnedTab ? null : "page")">History</a>
+    <a asp-page="/Index" asp-route-tab="pinned" asp-route-q="@Model.Q" aria-current="@(Model.PinnedTab ? "page" : null)">Pinned</a>
+</div>
 <form method="get" class="search" role="search">
-    <input type="search" name="q" value="@Model.Q" placeholder="Search history" aria-label="Search history">
+    @if (Model.PinnedTab)
+    {
+        <input type="hidden" name="tab" value="pinned">
+    }
+    <input type="search" name="q" value="@Model.Q" placeholder="@(Model.PinnedTab ? "Search pinned clips" : "Search history")" aria-label="@(Model.PinnedTab ? "Search pinned clips" : "Search history")">
     <button type="submit">Search</button>
 </form>
 
 @if (Model.Items.Count == 0)
 {
-    <p class="muted empty">@(string.IsNullOrEmpty(Model.Q) ? "Nothing here yet. Copy something on a signed-in device and it shows up here." : "No clips match that search.")</p>
+    <p class="muted empty">@(!string.IsNullOrEmpty(Model.Q) ? "No clips match that search." : Model.PinnedTab ? "No pinned clips. Pin a clip to keep it through Clear history and auto-delete." : "Nothing here yet. Copy something on a signed-in device and it shows up here.")</p>
 }
 
 <ul class="clips">
 @foreach (var clip in Model.Items)
 {
     var kind = clip.Kind.ToString().ToLowerInvariant();
+    var isPinned = clip.PinnedAt is not null;
     <li class="clip@(first && highlightFirst ? " newest" : "")" data-id="@clip.Id" data-kind="@kind">
         <span class="kind" title="@clip.Kind">
             @switch (clip.Kind)
@@ -48,11 +57,15 @@
             {
                 <pre class="text">@IndexModel.Preview(clip.Text)</pre>
             }
-            <div class="meta">@PlatformIcons.Svg(clip.SourceDevicePlatform)@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
+            <div class="meta">@if (isPinned && !Model.PinnedTab) {<span class="pin-marker" title="Pinned">@UiIcons.Pin("pin-icon")<span class="sr-only">Pinned</span></span>}@PlatformIcons.Svg(clip.SourceDevicePlatform)@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
         </div>
         <div class="actions">
             <button type="button" class="copy">Copy</button>
-            <form method="post" asp-page-handler="Delete" asp-route-q="@Model.Q">
+            <form method="post" asp-page-handler="@(isPinned ? "Unpin" : "Pin")" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute">
+                <input type="hidden" name="id" value="@clip.Id">
+                <button type="submit" class="ghost pin-toggle" aria-pressed="@(isPinned ? "true" : "false")">@UiIcons.Pin("pin-icon")<span class="sr-only">@(isPinned ? "Unpin" : "Pin")</span></button>
+            </form>
+            <form method="post" asp-page-handler="Delete" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute">
                 <input type="hidden" name="id" value="@clip.Id">
                 <button type="submit" class="ghost">Delete</button>
             </form>
@@ -64,5 +77,5 @@
 
 @if (Model.NextCursor is not null)
 {
-    <p><a class="more" asp-page="/Index" asp-route-q="@Model.Q" asp-route-cursor="@Model.NextCursor">Load more</a></p>
+    <p><a class="more" asp-page="/Index" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute" asp-route-cursor="@Model.NextCursor">Load more</a></p>
 }

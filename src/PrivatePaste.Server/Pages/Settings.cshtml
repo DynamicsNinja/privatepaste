@@ -1,0 +1,32 @@
+@page
+@model SettingsModel
+@{
+    ViewData["Title"] = "Settings";
+    var days = new (int? Value, string Label)[] { (null, "Off"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days") };
+}
+<h1>Settings</h1>
+
+<section class="panel">
+    <form method="post" asp-page-handler="AutoDelete" id="auto-delete-form">
+        <label for="auto-delete">Auto-delete history</label>
+        <p class="muted hint">Deletes clips from every device once they are this old. Pinned clips stay.</p>
+        <div class="field">
+            <select id="auto-delete" name="days">
+                @foreach (var option in days)
+                {
+                    <option value="@option.Value" selected="@(option.Value == Model.AutoDeleteDays)">@option.Label</option>
+                }
+            </select>
+            <noscript><button type="submit">Save</button></noscript>
+            <span class="saved" id="auto-delete-status" role="status" aria-live="polite"></span>
+        </div>
+    </form>
+</section>
+
+<section class="panel">
+    <h2>Clear history</h2>
+    <p class="muted hint">Deletes every clip that is not pinned, on every device.</p>
+    <form method="post" asp-page-handler="Clear" data-confirm="@Model.ConfirmClear">
+        <button type="submit" class="danger">Clear history</button>
+    </form>
+</section>
