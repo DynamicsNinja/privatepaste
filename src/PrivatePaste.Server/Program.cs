@@ -147,6 +147,7 @@ app.MapHealthChecks("/health");
 app.MapAuthEndpoints();
 app.MapDeviceEndpoints();
 app.MapClipEndpoints();
+app.MapSettingsEndpoints();
 app.MapWebSocketEndpoint();
 app.MapRazorPages();
 
