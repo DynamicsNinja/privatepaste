@@ -63,6 +63,10 @@ for (const clip of [...demo].reverse()) {
     });
   }
   if (!res.ok) throw new Error(`upload "${clip.text ?? clip.kind}": HTTP ${res.status}`);
+  if (clip.pinned) {
+    const pin = await fetch(`${url}/api/clips/${(await res.json()).id}/pin`, { method: 'POST', headers: auth });
+    if (!pin.ok) throw new Error(`pin "${clip.text ?? clip.kind}": HTTP ${pin.status}`);
+  }
 }
 
 // 3. The web history, dark and light, at 2x.

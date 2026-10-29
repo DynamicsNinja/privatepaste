@@ -44,6 +44,9 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 
 - Web assets sit behind Cloudflare: reference CSS/JS with `asp-append-version`, and bump the `?v=N` on font URLs in `site.css` when a font file changes.
 - The server allows 5 sign-ins per minute per IP; scripts that create several devices must stay under that.
+- Private-copy markers (`Platform/PrivateCopyMarkers.cs`): Windows `ExcludeClipboardContentFromMonitorProcessing` and `Clipboard Viewer Ignore` mark a copy by existing, `CanIncludeInClipboardHistory` / `CanUploadToCloudClipboard` by a DWORD 0; macOS `org.nspasteboard.ConcealedType` / `TransientType`; Linux the `x-kde-passwordManagerHint` target holding `secret`. A marker that is present but unreadable fails closed (the copy is skipped). macOS and Linux detection is best effort and unverified on real machines.
+- A backfilled upload copied before the last history clear, or older than the auto-delete age, gets 410 "Cleared"; clients drop such queued clips quietly instead of retrying (`docs/api.md`).
+- Pinning never changes `lastCopiedAt`: catch-up and the "apply only the newest live clip to the clipboard" rules depend on it, so a pin arrives as a `live: false` change with a new `seq` and must not be mistaken for a copy.
 - Desktop title-bar tests run on Windows only (Linux and macOS keep native decorations).
 - Android Robolectric tests use the FileProvider stand-in on every host (androidx FileProvider can't map Robolectric's cache dir).
 - `SyncEngineTests` has a known rare flake on the Linux runner: the server registers a new WebSocket just after the client sees the upgrade, so a clip sent in that instant misses the live push. Rerun; a real fix belongs in the hub/connect handshake.
