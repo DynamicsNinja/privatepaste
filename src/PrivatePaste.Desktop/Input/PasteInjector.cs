@@ -38,15 +38,19 @@ public sealed class PasteInjector : IPasteInjector
         var hwnd = NativeWindows.GetForegroundWindow();
         // Nothing usable, one of our own windows, or the taskbar/tray (a tray-menu launch): forget the old one so we never refocus a stale window.
         _previous = hwnd == 0 || NativeWindows.IsOwnWindow(hwnd) || NativeWindows.IsShell(hwnd) ? 0 : hwnd;
+        PopupTrace.Write($"captured {NativeWindows.Describe(hwnd)}{(_previous == 0 ? " (not usable)" : "")}");
     }
 
     public bool RefocusPrevious()
     {
         if (!OperatingSystem.IsWindows()) return true;   // the OS returns focus to the previous app by itself
         var hwnd = _previous;
+        var foreground = NativeWindows.GetForegroundWindow();
+        PopupTrace.Write($"refocus: previous {NativeWindows.Describe(hwnd)}, foreground {NativeWindows.Describe(foreground)}");
         if (hwnd != 0 && !NativeWindows.IsWindow(hwnd)) return false;
-        if (!CanRefocus(hwnd, NativeWindows.GetForegroundWindow())) return false;
+        if (!CanRefocus(hwnd, foreground)) return false;
         NativeWindows.ForceForeground(hwnd);
+        PopupTrace.Write($"refocus: foreground now {NativeWindows.Describe(NativeWindows.GetForegroundWindow())}");
         return true;
     }
 
@@ -108,6 +112,57 @@ internal static class NativeWindows
         return name.ToString() is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "NotifyIconOverflowWindow"
             or "TopLevelWindowForOverflowXamlIsland" or "XamlExplorerHostIslandWindow";
     }
+
+    /// <summary>
+    /// "0x1A2B3C Chrome_WidgetWin_1 chrome" for the log: handle, window class and process name. Never the title, which
+    /// can hold document names.
+    /// </summary>
+    public static string Describe(nint hwnd)
+    {
+        if (hwnd == 0) return "none";
+        var name = new StringBuilder(64);
+        GetClassName(hwnd, name, name.Capacity);
+        GetWindowThreadProcessId(hwnd, out var pid);
+        string process;
+        try { process = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; }
+        catch (Exception) { process = $"pid {pid}"; }
+        return $"0x{hwnd:X} {name} {process}";
+    }
+
+    private const int GwlExStyle = -20;
+    private const long WsExNoActivate = 0x08000000;
+    private static readonly nint HwndTopmost = -1;
+    private const uint SwpNoSize = 0x0001, SwpNoMove = 0x0002, SwpNoActivate = 0x0010, SwpShowWindow = 0x0040;
+    private const int VkLButton = 0x01, VkRButton = 0x02, VkMButton = 0x04;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint hWnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] private static extern nint SetWindowLongPtr(nint hWnd, int index, nint value);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(nint hWnd, nint insertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int virtualKey);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(nint hWnd, out Rect rect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect { public int Left, Top, Right, Bottom; }
+
+    /// <summary>
+    /// Makes a shown window one that is never activated, by clicks either (WS_EX_NOACTIVATE), and puts it on top of
+    /// every other window without taking the focus.
+    /// </summary>
+    public static void MakeNonActivatingTopmost(nint hwnd)
+    {
+        SetWindowLongPtr(hwnd, GwlExStyle, (nint)((long)GetWindowLongPtr(hwnd, GwlExStyle) | WsExNoActivate));
+        SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate | SwpShowWindow);
+    }
+
+    /// <summary>True while any mouse button is held down.</summary>
+    public static bool IsMouseButtonDown() =>
+        (GetAsyncKeyState(VkLButton) & 0x8000) != 0 || (GetAsyncKeyState(VkRButton) & 0x8000) != 0
+        || (GetAsyncKeyState(VkMButton) & 0x8000) != 0;
+
+    /// <summary>True when the cursor is over the window (false when either call fails).</summary>
+    public static bool IsCursorOver(nint hwnd) =>
+        GetCursorPos(out var p) && GetWindowRect(hwnd, out var r) && p.X >= r.Left && p.X < r.Right && p.Y >= r.Top && p.Y < r.Bottom;
 
     /// <summary>Physical-pixel cursor position, or null if the call fails.</summary>
     public static (int X, int Y)? CursorPosition() => GetCursorPos(out var p) ? (p.X, p.Y) : null;

@@ -49,6 +49,8 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 - `SyncEngineTests` has a known rare flake on the Linux runner: the server registers a new WebSocket just after the client sees the upgrade, so a clip sent in that instant misses the live push. Rerun; a real fix belongs in the hub/connect handshake.
 - MSI: never change the `UpgradeCode`. `RemoveExistingProducts` runs after `InstallValidate` and the close-app action after `InstallInitialize`; reordering brings back error 2613. Test installer changes with a real install, a repair and an upgrade over the running app.
 - Managed Windows PCs may block the unsigned exe via a Defender ASR rule; the fix is an exception the owner adds, not a code change.
+- The Windows popup never takes the focus (`PopupWindow.KeepsFocusBelow`): it is WS_EX_NOACTIVATE and the keyboard hook hands it the keys (`HotkeyService.Capture`, `PopupKeyRouter`). Taking the focus ends editing in Explorer's address bar, rename boxes and inline editors, so the paste lands nowhere; don't bring back `Activate()` there. Nothing in it may be focusable.
+- Focus behaviour can't be scripted: Windows doesn't hand keys injected by another process to the hook. Test by hand with an isolated build (`--data-dir`) against a local server, with the installed app quit so only one hook runs. The `popup +Nms:` lines in that run's log trace each step. **Never log key presses or typed text**: the hook sees everything the user types.
 
 ## Releases
 

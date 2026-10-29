@@ -121,7 +121,8 @@
     <Setter Property="Background" Value="{DynamicResource PpRaised}" />
     <Setter Property="BorderBrush" Value="{DynamicResource PpMuted}" />
   </Style>
-  <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+  <!-- .typing: the Windows popup's search box, which takes keys from the hook and never has the focus; looks focused. -->
+  <Style Selector="TextBox:focus /template/ Border#PART_BorderElement, TextBox.typing /template/ Border#PART_BorderElement">
     <Setter Property="Background" Value="{DynamicResource PpRaised}" />
     <Setter Property="BorderBrush" Value="{DynamicResource PpAccent}" />
     <Setter Property="BorderThickness" Value="1" />

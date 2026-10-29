@@ -60,8 +60,12 @@ try {
         $env:JAVA_HOME = $jdk
     }
     Push-Location (Join-Path $root 'android')
-    try { Invoke-Native 'Android render' { .\gradlew.bat -q testDebugUnitTest --tests '*ReadmeScreenshotTest*' } }
+    # --rerun: the environment variables are not task inputs, so Gradle would otherwise call it up to date and skip it.
+    try { Invoke-Native 'Android render' { .\gradlew.bat -q testDebugUnitTest --tests '*ReadmeScreenshotTest*' --rerun } }
     finally { Pop-Location }
+    foreach ($shot in 'readme-popup-dark.png', 'readme-popup-light.png', 'readme-history-dark.png', 'readme-history-light.png') {
+        if (-not (Test-Path (Join-Path $out $shot))) { throw "The render step wrote no $shot" }
+    }
 
     # 4. Seed the server, shoot the web UI, compose the hero -> docs/images/hero-{dark,light}.png
     Write-Host 'Capturing the web UI and composing the hero...'

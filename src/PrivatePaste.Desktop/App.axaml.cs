@@ -53,7 +53,12 @@ public partial class App : Application
         _tray.SignInRequested += (_, _) => ShowSignIn();
         _tray.SettingsRequested += (_, _) => ShowSettings();
         _tray.SignOutRequested += (_, _) => _ = _host.SignOutAsync();
-        _tray.OpenHistoryRequested += (_, _) => { if (_popup is null) _injector?.CapturePrevious(); ShowPopup(CursorPoint()); };
+        _tray.OpenHistoryRequested += (_, _) =>
+        {
+            PopupTrace.Start("tray menu");
+            if (_popup is null) _injector?.CapturePrevious();
+            ShowPopup(CursorPoint());
+        };
         _tray.QuitRequested += (_, _) => _ = QuitAsync();
 
         SetUpPopup(notifier);
@@ -154,8 +159,10 @@ public partial class App : Application
 
         _hotkeys = new HotkeyService();
         // Hook thread: capture the window you are in and the cursor now, then hand over to the UI thread.
+        PopupTrace.Sink = message => Log?.Info(message);
         _hotkeys.Pressed += (_, _) =>
         {
+            PopupTrace.Start(_popup is null ? "hotkey" : "hotkey (popup already open)");
             if (_popup is null) _injector.CapturePrevious();   // while the popup is up the hotkey only closes it
             var cursor = CursorPoint();
             Dispatcher.UIThread.Post(() => ShowPopup(cursor));
@@ -186,6 +193,7 @@ public partial class App : Application
         if (_host is null || _quitting) return;
         if (_popup is not null)
         {
+            PopupTrace.Write($"toggle: closing the open popup (visible {_popup.IsVisible}, active {_popup.IsActive})");
             _popup.Close();
             return;
         }
@@ -205,6 +213,21 @@ public partial class App : Application
             host.HistoryChanged -= onHistory;
             if (_popup == window) _popup = null;
         };
+        if (window.KeepsFocusBelow && _hotkeys is { } hotkeys)
+        {
+            // The popup leaves the focus in the app below, so the hook hands it the keys (on the hook thread: decide fast,
+            // act on the UI thread). Closing gives the keyboard back.
+            KeyCapture capture = (key, rawCode, mask) =>
+            {
+                var routed = PopupKeyRouter.Route(key, mask, KeyText.Translate(rawCode, mask));
+                if (routed.Action == PopupKeyAction.Pass) return false;
+                if (routed.Action != PopupKeyAction.Swallow)
+                    Dispatcher.UIThread.Post(() => { if (_popup == window) window.HandleKey(routed); });
+                return true;
+            };
+            hotkeys.Capture = capture;
+            window.Closed += (_, _) => { if (hotkeys.Capture == capture) hotkeys.Capture = null; };
+        }
         _popup = window;
         window.ShowAt(cursor);
     }
@@ -218,6 +241,7 @@ public partial class App : Application
 
     private Task ActivateFromPopupAsync(ClipDto clip)
     {
+        PopupTrace.Write($"picked a {clip.Kind} clip");
         _popup?.Close();   // hide first: the restore/paste must not happen with the popup holding the focus
         return _activation!.ActivateAsync(clip);
     }

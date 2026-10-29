@@ -90,13 +90,17 @@ public sealed class PopupActivation(
             }
 
             // Copy-only unless we are sure where the paste would land: the window we came from must be known and still in front.
+            PopupTrace.Write("clipboard written");
             if (!injector.RefocusPrevious())
             {
+                PopupTrace.Write("copy only: the previous window is unknown or no longer in front");
                 toast(CopiedToast);
                 return;
             }
             await Task.Delay(PasteDelay, time, ct);
-            if (!injector.SendPaste() && isMacOs && !_accessibilityToastShown)
+            var sent = injector.SendPaste();
+            PopupTrace.Write($"paste keystroke {(sent ? "sent" : "refused by the OS")}");
+            if (!sent && isMacOs && !_accessibilityToastShown)
             {
                 _accessibilityToastShown = true;
                 toast(AccessibilityToast);

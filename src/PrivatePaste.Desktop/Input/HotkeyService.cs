@@ -33,6 +33,19 @@ public sealed class HotkeyService : IDisposable
     /// <summary>Raised on the hook thread when the gesture is pressed.</summary>
     public event EventHandler? Pressed;
 
+    private KeyCapture? _capture;
+
+    /// <summary>
+    /// While set, every other key press (key repeats too) is offered to it on the hook thread; returning true swallows the
+    /// key so the focused app never sees it. The Windows popup uses this to take the keyboard without taking the focus.
+    /// Key releases always pass through. Must return quickly.
+    /// </summary>
+    public KeyCapture? Capture
+    {
+        get => Volatile.Read(ref _capture);
+        set => Volatile.Write(ref _capture, value);
+    }
+
     /// <summary>The hook could not start (macOS Input Monitoring permission, Wayland, ...) or stopped unexpectedly.</summary>
     public event EventHandler<Exception>? Failed;
 
@@ -75,6 +88,9 @@ public sealed class HotkeyService : IDisposable
             case HotkeyDecision.Swallow:
                 e.SuppressEvent = true;
                 break;
+            case HotkeyDecision.Ignore when Capture is { } capture && !e.IsEventSimulated:
+                if (capture(e.Data.KeyCode, e.Data.RawCode, e.RawEvent.Mask)) e.SuppressEvent = true;
+                break;
         }
     }
 
@@ -92,6 +108,9 @@ public sealed class HotkeyService : IDisposable
 }
 
 public enum HotkeyDecision { Ignore, Swallow, Fire }
+
+/// <summary>A key press offered to <see cref="HotkeyService.Capture"/>: SharpHook key, OS key code (the virtual key on Windows), modifiers.</summary>
+public delegate bool KeyCapture(KeyCode key, ushort rawCode, EventMask mask);
 
 /// <summary>
 /// The pure decision logic of the hotkey, with no hook behind it: simulated events (our own Ctrl+V) are ignored, the gesture
