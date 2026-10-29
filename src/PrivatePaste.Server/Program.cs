@@ -29,6 +29,7 @@ builder.Services.AddSingleton(serverOptions);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PrivatePasteDb>();
 builder.Services.AddSingleton<ClipRepository>();
+builder.Services.AddSingleton<SettingsRepository>();
 builder.Services.AddSingleton<BlobStore>();
 builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();

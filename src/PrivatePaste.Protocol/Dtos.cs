@@ -14,6 +14,9 @@ public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, str
     /// Serialized right after <see cref="SourceDeviceName"/>.
     /// </summary>
     public string? SourceDevicePlatform { get; init; }
+
+    /// <summary>When the clip was pinned, or null when it is not pinned. Pinned clips survive history clearing.</summary>
+    public DateTimeOffset? PinnedAt { get; init; }
 }
 
 public sealed record LoginRequest(string Password, string DeviceName, string Platform);

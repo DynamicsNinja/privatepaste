@@ -15,7 +15,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
 {
     private const string Columns =
         "c.id, c.seq, c.kind, c.text, c.hash, c.width, c.height, c.size_bytes, c.source_device_id, c.source_device_name, c.last_copied_at, " +
-        "c.source_device_platform";
+        "c.source_device_platform, c.pinned_at";
 
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
@@ -86,8 +86,17 @@ public sealed class ClipRepository(PrivatePasteDb db)
         return await GetCoreAsync(conn, null, id);
     }
 
-    public async Task<ClipPage> ListAsync(string? query, string? cursor, int limit)
+    public Task<ClipPage> ListAsync(string? query, string? cursor, int limit) =>
+        ListCoreAsync(query, cursor, limit, pinnedOnly: false);
+
+    /// <summary>Pinned clips only, newest pinned first. Cursors and limits behave as in <see cref="ListAsync"/>.</summary>
+    public Task<ClipPage> ListPinnedAsync(string? query, string? cursor, int limit) =>
+        ListCoreAsync(query, cursor, limit, pinnedOnly: true);
+
+    private async Task<ClipPage> ListCoreAsync(string? query, string? cursor, int limit, bool pinnedOnly)
     {
+        // The two lists differ only in the column they sort and page by.
+        var sortColumn = pinnedOnly ? "c.pinned_at" : "c.last_copied_at";
         limit = Math.Clamp(limit, 1, 200);
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
@@ -111,17 +120,20 @@ public sealed class ClipRepository(PrivatePasteDb db)
             }
         }
 
+        if (pinnedOnly)
+            where.Add("c.pinned_at IS NOT NULL");
+
         if (cursor is not null)
         {
             var (at, seq) = DecodeCursor(cursor);
-            where.Add("(c.last_copied_at < @cAt OR (c.last_copied_at = @cAt AND c.seq < @cSeq))");
+            where.Add($"({sortColumn} < @cAt OR ({sortColumn} = @cAt AND c.seq < @cSeq))");
             cmd.Parameters.AddWithValue("@cAt", Format(at));
             cmd.Parameters.AddWithValue("@cSeq", seq);
         }
 
         if (where.Count > 0)
             sql.Append(" WHERE ").Append(string.Join(" AND ", where));
-        sql.Append(" ORDER BY c.last_copied_at DESC, c.seq DESC LIMIT @limit");
+        sql.Append($" ORDER BY {sortColumn} DESC, c.seq DESC LIMIT @limit");
         cmd.Parameters.AddWithValue("@limit", limit + 1);
         cmd.CommandText = sql.ToString();
 
@@ -131,7 +143,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
         {
             items.RemoveAt(items.Count - 1);
             var last = items[^1];
-            next = EncodeCursor(last.LastCopiedAt, last.Seq);
+            next = EncodeCursor(pinnedOnly ? last.PinnedAt!.Value : last.LastCopiedAt, last.Seq);
         }
 
         return new ClipPage(items, next);
@@ -152,6 +164,81 @@ public sealed class ClipRepository(PrivatePasteDb db)
                 ("@id", id.ToString()), ("@seq", seq));
             await tx.CommitAsync();
             return seq;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    public async Task<ClipDto?> SetPinnedAsync(Guid id, bool pinned, DateTimeOffset at)
+    {
+        await _writeLock.WaitAsync();
+        try
+        {
+            await using var conn = db.Open();
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
+            var current = await GetCoreAsync(conn, tx, id);
+            if (current is null)
+                return null;
+            if ((current.PinnedAt is not null) == pinned)
+                return current;
+
+            // Pinning is a change clients must sync, so it takes a new seq; last_copied_at stays as it was.
+            var seq = await NextSeqAsync(conn, tx);
+            await ExecAsync(conn, tx, """
+                UPDATE clips SET seq = @seq, pinned_at = @pinned,
+                                 unpinned_at = CASE WHEN @pinned IS NULL THEN @at ELSE unpinned_at END
+                WHERE id = @id
+                """,
+                ("@seq", seq), ("@pinned", pinned ? Format(at) : null), ("@at", Format(at)), ("@id", id.ToString()));
+            var dto = await GetCoreAsync(conn, tx, id);
+            await tx.CommitAsync();
+            return dto;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Deletes every unpinned clip, or only those not copied or unpinned since <paramref name="olderThan"/>, with
+    /// tombstones, in one transaction. Returns what was deleted so the caller can remove blobs and broadcast.
+    /// </summary>
+    public async Task<IReadOnlyList<(ClipDto Clip, long Seq)>> DeleteUnpinnedAsync(DateTimeOffset? olderThan)
+    {
+        await _writeLock.WaitAsync();
+        try
+        {
+            await using var conn = db.Open();
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
+
+            // Timestamps are all stored in the same fixed-width UTC format, so text comparison is time order.
+            var sql = $"SELECT {Columns} FROM clips c WHERE c.pinned_at IS NULL";
+            var args = new List<(string, object?)>();
+            if (olderThan is { } cutoff)
+            {
+                sql += " AND c.last_copied_at < @t AND (c.unpinned_at IS NULL OR c.unpinned_at < @t)";
+                args.Add(("@t", Format(cutoff)));
+            }
+
+            List<ClipDto> doomed;
+            await using (var select = Command(conn, tx, sql + " ORDER BY c.seq ASC", args.ToArray()))
+                doomed = await ReadClipsAsync(select);
+
+            var result = new List<(ClipDto, long)>(doomed.Count);
+            foreach (var clip in doomed)
+            {
+                await ExecAsync(conn, tx, "DELETE FROM clips WHERE id = @id", ("@id", clip.Id.ToString()));
+                var seq = await NextSeqAsync(conn, tx);
+                await ExecAsync(conn, tx, "INSERT OR REPLACE INTO tombstones(clip_id, seq) VALUES(@id, @seq)",
+                    ("@id", clip.Id.ToString()), ("@seq", seq));
+                result.Add((clip, seq));
+            }
+
+            await tx.CommitAsync();
+            return result;
         }
         finally
         {
@@ -246,6 +333,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
                 Parse(r.GetString(10)))
             {
                 SourceDevicePlatform = r.IsDBNull(11) ? null : r.GetString(11),
+                PinnedAt = r.IsDBNull(12) ? null : Parse(r.GetString(12)),
             });
         }
 
