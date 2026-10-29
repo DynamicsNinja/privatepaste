@@ -317,7 +317,8 @@ public sealed class DesktopHost : IAsyncDisposable
         http ??= CreateHttpClient(server);
         var api = new PrivatePasteApi(http, _time) { Token = token };
         var coordinator = new ClipboardCoordinator(
-            Platform.Clipboard, api, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused);
+            Platform.Clipboard, api, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused,
+            app => BlockedApps.Matches(_settings.BlockedApps, app));   // reads the current settings, so edits apply at once
         var wsUri = WebSocketUri(http.BaseAddress!);
         var engine = new SyncEngine(
             api, Cache, coordinator, ct => ConnectWithTimeoutAsync(t => _transport.Connect(wsUri, token, t), _time, ct), deviceId,

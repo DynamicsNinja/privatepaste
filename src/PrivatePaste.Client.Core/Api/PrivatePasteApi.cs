@@ -83,6 +83,23 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
         return GetJsonAsync<ClipPage>(url, ct);
     }
 
+    /// <summary>Pinned clips only, newest pinned first; cursors work as in <see cref="ListAsync"/>.</summary>
+    public Task<ClipPage> ListPinnedAsync(string? query, string? cursor, int limit = 50, CancellationToken ct = default)
+    {
+        var url = $"api/clips?pinned=true&limit={limit.ToString(CultureInfo.InvariantCulture)}";
+        if (!string.IsNullOrEmpty(query)) url += "&q=" + Uri.EscapeDataString(query);
+        if (!string.IsNullOrEmpty(cursor)) url += "&cursor=" + Uri.EscapeDataString(cursor);
+        return GetJsonAsync<ClipPage>(url, ct);
+    }
+
+    /// <summary>Pins or unpins a clip; returns it as it is now (a 404 for an unknown clip is an <see cref="ApiException"/>).</summary>
+    public Task<ClipDto> PinAsync(Guid id, bool pinned, CancellationToken ct = default) =>
+        WithTimeoutAsync(RequestTimeout, ct, async t =>
+        {
+            using var req = Request(pinned ? HttpMethod.Post : HttpMethod.Delete, $"api/clips/{id}/pin");
+            return await SendJsonAsync<ClipDto>(req, t).ConfigureAwait(false);
+        });
+
     public Task<ClipDto> RestoreAsync(Guid id, CancellationToken ct = default) =>
         WithTimeoutAsync(RequestTimeout, ct, async t =>
         {

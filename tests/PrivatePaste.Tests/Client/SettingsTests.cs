@@ -58,6 +58,42 @@ public class SettingsTests
     }
 
     [Fact]
+    public void Blocked_apps_roundtrip()
+    {
+        var store = new SettingsStore(TempDir());
+        store.Save(new ClientSettings(DeviceName: "Laptop") { BlockedApps = ["keepass", "com.agilebits.onepassword7"] });
+        var loaded = store.Load();
+        Assert.Equal(["keepass", "com.agilebits.onepassword7"], loaded.BlockedApps);
+        Assert.Equal("Laptop", loaded.DeviceName);
+    }
+
+    [Fact]
+    public void Old_settings_file_without_blocked_apps_loads_an_empty_list()
+    {
+        var dir = TempDir();
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "settings.json"),
+            """{"serverUrl":"https://x.io/","deviceName":"Laptop","hotkey":"Ctrl+Shift+V","autostart":true,"paused":false,"deviceId":null,"notifyOnClipArrival":false}""");
+        var s = new SettingsStore(dir).Load();
+        Assert.Empty(s.BlockedApps);
+        Assert.False(s.NotifyOnClipArrival);
+        Assert.Empty(new ClientSettings().BlockedApps);
+
+        File.WriteAllText(Path.Combine(dir, "settings.json"), """{"deviceName":"Laptop","blockedApps":null}""");
+        Assert.Empty(new SettingsStore(dir).Load().BlockedApps);
+    }
+
+    [Theory]
+    [InlineData("keepass", "keepass", true)]
+    [InlineData("KeePass.exe", "keepass", true)]
+    [InlineData(" KEEPASS ", "keepass", true)]
+    [InlineData("com.agilebits.onepassword7", "com.agilebits.onepassword7", true)]
+    [InlineData("keepass", "keepassxc", false)]
+    [InlineData("", "keepass", false)]
+    public void Blocked_apps_match_case_insensitively(string entry, string sourceApp, bool blocked) =>
+        Assert.Equal(blocked, BlockedApps.Matches([entry], sourceApp));
+
+    [Fact]
     public void Roundtrip()
     {
         var store = new SettingsStore(TempDir());

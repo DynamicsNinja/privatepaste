@@ -29,6 +29,35 @@ public class ApiClientTests
     }
 
     [Fact]
+    public async Task Pin_unpin_and_list_pinned()
+    {
+        using var server = new PrivatePasteFactory();
+        var api = await LoggedInAsync(server);
+        var a = await api.UploadTextAsync("alpha", null, false);
+        var b = await api.UploadTextAsync("beta", null, false);
+        await api.UploadTextAsync("gamma", null, false);
+
+        var pinnedA = await api.PinAsync(a.Id, true);
+        Assert.NotNull(pinnedA.PinnedAt);
+        Assert.True(pinnedA.Seq > a.Seq);
+        server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await api.PinAsync(b.Id, true);
+
+        var page = await api.ListPinnedAsync(null, null);
+        Assert.Equal(["beta", "alpha"], page.Items.Select(c => c.Text));
+        Assert.Equal(["alpha"], (await api.ListPinnedAsync("alp", null)).Items.Select(c => c.Text));
+        var first = await api.ListPinnedAsync(null, null, limit: 1);
+        Assert.Equal(["beta"], first.Items.Select(c => c.Text));
+        Assert.Equal(["alpha"], (await api.ListPinnedAsync(null, first.NextCursor, limit: 1)).Items.Select(c => c.Text));
+
+        var unpinned = await api.PinAsync(b.Id, false);
+        Assert.Null(unpinned.PinnedAt);
+        Assert.Equal(["alpha"], (await api.ListPinnedAsync(null, null)).Items.Select(c => c.Text));
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await Assert.ThrowsAsync<ApiException>(() => api.PinAsync(Guid.NewGuid(), true))).Status);
+    }
+
+    [Fact]
     public async Task Wrong_password_throws_unauthorized()
     {
         using var server = new PrivatePasteFactory();
