@@ -366,6 +366,25 @@ class SyncEngineTest {
     }
 
     @Test
+    fun pinChangeUpdatesTheCachedClipAndNeverTouchesTheClipboard() = runTest {
+        api.pages += page(clip("a", 1), latest = 1)
+        engine().start()
+        runCurrent()
+        applied.clear()
+        val appliedAtBefore = cache.lastAppliedAt
+
+        // The server re-sends the clip with a new seq and pinnedAt, live = false.
+        val pinned = clip("a", 2, minute = 1).copy(pinnedAt = base.plusSeconds(600).toString())
+        links.last.push(WsEvent.ClipCreated(pinned, live = false))
+        runCurrent()
+
+        assertEquals(pinned.pinnedAt, cache.items.value.single { it.id == "a" }.pinnedAt)
+        assertEquals(listOf("a"), cache.pinned().map { it.id })
+        assertTrue(applied.isEmpty())
+        assertEquals(appliedAtBefore, cache.lastAppliedAt)
+    }
+
+    @Test
     fun deleteRemovesFromCache() = runTest {
         val a = clip("a", 1, kind = ClipKind.IMAGE, hash = "hash-a")
         api.pages += page(a, clip("b", 2), latest = 2)

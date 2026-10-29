@@ -152,6 +152,23 @@ class ClipSenderTest {
     }
 
     @Test
+    fun flushDropsAClearedItemWithoutANotification() = runBlocking {
+        f.queue.enqueueText("old", f.now)
+        f.queue.enqueueText("fresh", f.now)
+        var calls = 0
+        f.respondWith {
+            if (calls++ == 0) f.problem(410, "History was cleared")
+            else f.json(f.clipJson("c2", "fresh"))
+        }
+
+        f.sender.flushQueue()
+
+        assertTrue(f.queue.isEmpty)
+        assertTrue("no notification for a cleared clip", f.notices.isEmpty())
+        assertEquals(listOf("c2"), f.cache.items.value.map { it.id })
+    }
+
+    @Test
     fun unauthorizedLiveIsSignedOutAndFlushRethrows() = runBlocking {
         f.respondWith { MockResponse().setResponseCode(401) }
         assertEquals(SendResult.SignedOut, f.sender.sendText("x"))

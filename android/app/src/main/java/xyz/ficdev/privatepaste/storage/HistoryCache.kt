@@ -9,9 +9,10 @@ import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.InstantSerializer
 import java.io.IOException
 import java.time.Instant
+import java.time.OffsetDateTime
 
 /**
- * Local, encrypted history of the most recent [max] clips (use the [KeyAliases.CACHE] key). Loads [file] on
+ * Local, encrypted history of the most recent [max] unpinned clips, plus every pinned clip (use the [KeyAliases.CACHE] key). Loads [file] on
  * construction: a missing, corrupt or undecryptable file starts empty. Thread-safe; call [save] after a batch of
  * changes. Thumbnails live in [ThumbnailStore], keyed by content hash, so a same-hash bump keeps its thumbnail.
  */
@@ -67,13 +68,18 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
         if (index >= 0) list.removeAt(index)
         list.add(clip)
         list.sortWith(NEWEST_FIRST)
-        while (list.size > max) list.removeAt(list.lastIndex)
+        trim()
         val kept = list.any { it === clip }
         // Not kept: the clip is older than a full cache. Unless it replaced a held version, nothing changed.
         if (!kept && index < 0) return false
         if (kept) tombstones.remove(clip.id)
         publish()
         true
+    }
+
+    /** Pinned clips, most recently pinned first. */
+    fun pinned(): List<ClipDto> = synchronized(gate) {
+        list.filter { it.pinnedAt != null }.sortedWith(PINNED_FIRST)
     }
 
     /** Removes a clip and records its tombstone (the higher seq wins). True when a held item was removed. */
@@ -133,7 +139,8 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
         try {
             val snap = StorageJson.json.decodeFromString(Snapshot.serializer(), bytes.decodeToString())
             synchronized(gate) {
-                list.addAll(snap.items.sortedWith(NEWEST_FIRST).take(max))
+                list.addAll(snap.items.sortedWith(NEWEST_FIRST))
+                trim()
                 tombstones.putAll(snap.tombstones)
                 trimTombstones(tombstones)
                 seq = snap.highestSeq
@@ -147,6 +154,19 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
                 reset()
                 publish()
             }
+        }
+    }
+
+    // Caller holds gate. Only unpinned clips count toward [max]; a pin stays however old it is.
+    private fun trim() {
+        var unpinned = list.count { it.pinnedAt == null }
+        var i = list.lastIndex
+        while (unpinned > max && i >= 0) {
+            if (list[i].pinnedAt == null) {
+                list.removeAt(i)
+                unpinned--
+            }
+            i--
         }
     }
 
@@ -187,3 +207,14 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
         }
     }
 }
+
+/** Pinned clips, most recently pinned first (an unparseable `pinnedAt` sorts last). */
+val PINNED_FIRST: Comparator<ClipDto> =
+    compareByDescending<ClipDto> { pinnedInstant(it) }.thenByDescending { it.seq }
+
+private fun pinnedInstant(clip: ClipDto): Instant =
+    try {
+        OffsetDateTime.parse(clip.pinnedAt).toInstant()
+    } catch (_: Exception) {
+        Instant.EPOCH
+    }

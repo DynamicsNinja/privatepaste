@@ -2,6 +2,14 @@ package xyz.ficdev.privatepaste.ui.history
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -88,6 +96,8 @@ fun HistoryScreen(
         onQueryChange = vm::onQueryChange,
         onCopy = vm::copy,
         onDelete = vm::delete,
+        onTab = vm::onTab,
+        onTogglePin = vm::togglePin,
         onNearEnd = vm::onNearEnd,
         onOpenSettings = onOpenSettings,
         thumbnails = thumbnails,
@@ -106,8 +116,12 @@ fun HistoryContent(
     onOpenSettings: () -> Unit,
     thumbnails: ThumbnailLoader? = null,
     minuteTick: Int = 0,
+    onTab: (HistoryTab) -> Unit = {},
+    onTogglePin: (ClipDto) -> Unit = {},
 ) {
     var pendingDelete by remember { mutableStateOf<ClipDto?>(null) }
+    // The clip whose long-press menu is open, by id so the menu survives list updates.
+    var menuFor by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(listState) {
@@ -148,6 +162,8 @@ fun HistoryContent(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
 
+            TabRow(state.tab, onTab, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
+
             if (state.items.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -159,7 +175,13 @@ fun HistoryContent(
                         CircularProgressIndicator()
                     } else {
                         Text(
-                            text = stringResource(if (state.query.isBlank()) R.string.history_empty else R.string.history_no_matches),
+                            text = stringResource(
+                                when {
+                                    state.query.isNotBlank() -> R.string.history_no_matches
+                                    state.tab == HistoryTab.PINNED -> R.string.history_pinned_empty
+                                    else -> R.string.history_empty
+                                },
+                            ),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -175,16 +197,40 @@ fun HistoryContent(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(state.items, key = { it.id }) { clip ->
-                        ClipRow(
-                            clip = clip,
-                            relativeTime = relativeTime,
-                            isNewest = state.query.isBlank() && clip.id == state.items.first().id,
-                            isLive = clip.id == state.liveClipId,
-                            thumbnails = thumbnails,
-                            onClick = { onCopy(clip) },
-                            onLongClick = { pendingDelete = clip },
-                            minuteTick = minuteTick,
-                        )
+                        Box {
+                            ClipRow(
+                                clip = clip,
+                                relativeTime = relativeTime,
+                                isNewest = state.tab == HistoryTab.HISTORY && state.query.isBlank() &&
+                                    clip.id == state.items.first().id,
+                                isLive = clip.id == state.liveClipId,
+                                thumbnails = thumbnails,
+                                onClick = { onCopy(clip) },
+                                onLongClick = { menuFor = clip.id },
+                                minuteTick = minuteTick,
+                            )
+                            DropdownMenu(expanded = menuFor == clip.id, onDismissRequest = { menuFor = null }) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(stringResource(if (clip.pinnedAt == null) R.string.history_pin else R.string.history_unpin))
+                                    },
+                                    leadingIcon = {
+                                        Icon(painterResource(R.drawable.ic_pin), contentDescription = null, modifier = Modifier.size(20.dp))
+                                    },
+                                    onClick = {
+                                        menuFor = null
+                                        onTogglePin(clip)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.history_delete), color = MaterialTheme.colorScheme.error) },
+                                    onClick = {
+                                        menuFor = null
+                                        pendingDelete = clip
+                                    },
+                                )
+                            }
+                        }
                     }
                     if (state.loadingMore) {
                         item(key = "loading") {
@@ -213,6 +259,37 @@ fun HistoryContent(
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.history_cancel)) }
             },
+        )
+    }
+}
+
+/** History / Pinned switch under the search field. */
+@Composable
+private fun TabRow(selected: HistoryTab, onSelect: (HistoryTab) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier = modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TabChip(R.string.history_tab_history, selected == HistoryTab.HISTORY) { onSelect(HistoryTab.HISTORY) }
+        TabChip(R.string.history_tab_pinned, selected == HistoryTab.PINNED) { onSelect(HistoryTab.PINNED) }
+    }
+}
+
+@Composable
+private fun TabChip(label: Int, selected: Boolean, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = Modifier
+            .heightIn(min = 40.dp)   // touch target
+            .clip(shape)
+            .background(if (selected) colors.primary.copy(alpha = 0.16f) else Color.Transparent)
+            .border(1.dp, if (selected) colors.primary else colors.outline, shape)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = stringResource(label),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) colors.primary else colors.onSurfaceVariant,
         )
     }
 }

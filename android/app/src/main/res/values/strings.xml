@@ -38,6 +38,14 @@
     <string name="history_delete_failed">Couldn\'t delete the clip. Check your connection.</string>
     <string name="history_delete_title">Delete this clip from all your devices?</string>
     <string name="history_delete">Delete</string>
+    <string name="history_menu_action">Pin or delete</string>
+    <string name="history_tab_history">History</string>
+    <string name="history_tab_pinned">Pinned</string>
+    <string name="history_pin">Pin</string>
+    <string name="history_unpin">Unpin</string>
+    <string name="history_pinned_mark">Pinned</string>
+    <string name="history_pinned_empty">Nothing pinned yet. Long-press a clip to pin it.</string>
+    <string name="history_pin_failed">Couldn\'t change the pin. Check your connection.</string>
     <string name="history_cancel">Cancel</string>
     <string name="history_copy_action">Copy</string>
     <string name="history_meta">%1$s · %2$s</string>

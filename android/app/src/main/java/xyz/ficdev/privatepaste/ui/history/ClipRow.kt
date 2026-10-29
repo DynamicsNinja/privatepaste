@@ -43,7 +43,7 @@ private val TileShape = RoundedCornerShape(10.dp)
 
 /**
  * One history row, like the desktop popup: a type tile, a one-line preview (or a 48 dp thumbnail for images), then
- * "{device} · {time}". The newest clip gets the accent border and soft glow; [isLive] adds the live dot.
+ * "{device} · {time}"; a pinned clip also shows the pin mark at the end. The newest clip gets the accent border and soft glow; [isLive] adds the live dot.
  */
 @Composable
 fun ClipRow(
@@ -73,7 +73,7 @@ fun ClipRow(
                 .border(1.dp, if (isNewest) colors.primary else colors.outline, RowShape)
                 .combinedClickable(
                     onClickLabel = stringResource(R.string.history_copy_action),
-                    onLongClickLabel = stringResource(R.string.history_delete),
+                    onLongClickLabel = stringResource(R.string.history_menu_action),
                     onLongClick = onLongClick,
                     onClick = onClick,
                 )
@@ -107,6 +107,14 @@ fun ClipRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+            if (clip.pinnedAt != null) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_pin),
+                    contentDescription = stringResource(R.string.history_pinned_mark),
+                    tint = colors.primary,
+                    modifier = Modifier.size(16.dp),
+                )
             }
             if (isLive) {
                 val live = stringResource(R.string.history_live)

@@ -37,6 +37,15 @@ class ProtocolJsonTest {
     }
 
     @Test
+    fun pinnedAtDecodesWhenPresentNullOrMissing() {
+        assertNull(json.decodeFromString<ClipDto>(linkClipJson).pinnedAt)
+        val pinned = json.decodeFromString<ClipDto>(linkClipJson.replace("\"width\"", "\"pinnedAt\":\"2026-10-29T09:00:00+00:00\",\"width\""))
+        assertEquals("2026-10-29T09:00:00+00:00", pinned.pinnedAt)
+        // The server sends an explicit null for an unpinned clip.
+        assertNull(json.decodeFromString<ClipDto>(linkClipJson.replace("\"width\"", "\"pinnedAt\":null,\"width\"")).pinnedAt)
+    }
+
+    @Test
     fun parsesImageClipWithNullTextAndAllKinds() {
         val clip = json.decodeFromString<ClipDto>(
             """{"id":"c2","seq":1,"kind":"image","text":null,"hash":"h","width":640,"height":480,

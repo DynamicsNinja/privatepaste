@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -26,13 +28,15 @@ import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ClipPage
+import xyz.ficdev.privatepaste.storage.PINNED_FIRST
 import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.UiText
 import kotlin.coroutines.CoroutineContext
 
 /** The server calls the history screen makes. Production adapts [PrivatePasteApi]; tests pass a fake. */
 interface ClipRemote {
-    suspend fun clips(q: String?, cursor: String?, limit: Int): ClipPage
+    suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean = false): ClipPage
+    suspend fun pin(id: String, pinned: Boolean): ClipDto
     suspend fun restore(id: String): ClipDto?
     suspend fun delete(id: String): Boolean
     suspend fun thumbnail(id: String): ByteArray
@@ -40,7 +44,9 @@ interface ClipRemote {
 }
 
 fun PrivatePasteApi.asClipRemote(): ClipRemote = object : ClipRemote {
-    override suspend fun clips(q: String?, cursor: String?, limit: Int) = this@asClipRemote.clips(q, cursor, limit)
+    override suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean) =
+        this@asClipRemote.clips(q, cursor, limit, pinned)
+    override suspend fun pin(id: String, pinned: Boolean) = this@asClipRemote.pin(id, pinned)
     override suspend fun restore(id: String) = this@asClipRemote.restore(id)
     override suspend fun delete(id: String) = this@asClipRemote.delete(id)
     override suspend fun thumbnail(id: String) = this@asClipRemote.thumbnail(id)
@@ -60,7 +66,10 @@ fun ClipboardWriter.asClipCopier(): ClipCopier = object : ClipCopier {
     override fun writeImage(clipId: String, png: ByteArray) = this@asClipCopier.writeImage(clipId, png)
 }
 
+enum class HistoryTab { HISTORY, PINNED }
+
 data class HistoryState(
+    val tab: HistoryTab = HistoryTab.HISTORY,
     val query: String = "",
     val items: List<ClipDto> = emptyList(),
     /** The newest clip, when this phone applied it to its clipboard: it gets the live dot. */
@@ -70,7 +79,7 @@ data class HistoryState(
 )
 
 /**
- * History list: the local cache shows at once; a query of 2+ characters also asks the server after a 300 ms
+ * History list (and its Pinned tab, which lists only pinned clips, newest pinned first): the local cache shows at once; a query of 2+ characters also asks the server after a 300 ms
  * debounce, and the server results follow the cached hits, deduped by id. Older pages load with `nextCursor` when
  * the list nears its end. Taps copy locally first, then bump the clip on the server in the background.
  */
@@ -88,18 +97,22 @@ class HistoryViewModel(
     private val onUnauthorized: () -> Unit = {},
 ) : ViewModel() {
 
-    /** Server results for one normalized query; [loaded] once the first page arrived. */
+    /** Server results for one normalized query on one tab; [loaded] once the first page arrived. */
     private data class Remote(
         val query: String,
+        val pinned: Boolean = false,
         val items: List<ClipDto> = emptyList(),
         val next: String? = null,
         val loaded: Boolean = false,
         val loading: Boolean = false,
     )
 
+    /** This phone's own changes, shown before the sync broadcast (or a search page) catches up. */
+    private data class Local(val deleted: Set<String> = emptySet(), val updated: Map<String, ClipDto> = emptyMap())
+
     private val query = MutableStateFlow("")
     private val remotePages = MutableStateFlow(Remote(""))
-    private val deleted = MutableStateFlow<Set<String>>(emptySet())
+    private val local = MutableStateFlow(Local())
     private var pageJob: Job? = null
 
     private val _messages = Channel<UiText>(Channel.BUFFERED)
@@ -108,17 +121,24 @@ class HistoryViewModel(
     val messages: Flow<UiText> = _messages.receiveAsFlow()
 
     val state: StateFlow<HistoryState> =
-        combine(cached, query, remotePages, deleted, syncState) { cache, q, page, gone, sync ->
+        combine(cached, query, remotePages, local, syncState) { cache, q, page, changes, sync ->
             val needle = q.trim()
-            val hits = if (needle.isEmpty()) cache else cache.filter { it.text?.contains(needle, ignoreCase = true) == true }
-            val fromServer = if (page.query == needle) page.items else emptyList()
+            val pinnedTab = page.pinned
+            // A change this phone made counts until the cache or a server page holds the same or a newer version.
+            fun ClipDto.fresh() = changes.updated[id]?.takeIf { it.seq >= seq } ?: this
+            val base = cache.map { it.fresh() }
+            val hits = if (needle.isEmpty()) base else base.filter { it.text?.contains(needle, ignoreCase = true) == true }
+            val fromServer = if (page.query == needle) page.items.map { it.fresh() } else emptyList()
             val ids = hits.mapTo(HashSet()) { it.id }
-            val items = (hits + fromServer.filter { ids.add(it.id) }).filter { it.id !in gone }
+            val merged = (hits + fromServer.filter { ids.add(it.id) })
+                .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) }
+            val items = if (pinnedTab) merged.sortedWith(PINNED_FIRST) else merged
             val newest = cache.firstOrNull()
             HistoryState(
+                tab = if (pinnedTab) HistoryTab.PINNED else HistoryTab.HISTORY,
                 query = q,
                 items = items,
-                liveClipId = newest?.takeIf { it.id !in gone && it.hash == lastAppliedHash() }?.id,
+                liveClipId = newest?.takeIf { it.id !in changes.deleted && it.hash == lastAppliedHash() }?.id,
                 syncState = sync,
                 loadingMore = page.query == needle && page.loading,
             )
@@ -126,11 +146,16 @@ class HistoryViewModel(
 
     init {
         viewModelScope.launch {
-            query.debounce(SEARCH_DEBOUNCE_MS).collectLatest { raw ->
-                val q = raw.trim()
-                val page = remotePages.value
-                if (q.length >= MIN_SERVER_QUERY && page.query == q && !page.loaded && !page.loading) load(q, null)
-            }
+            // The tab is part of the key, so switching tabs also loads the new tab's first page.
+            combine(query, remotePages.map { it.pinned }.distinctUntilChanged()) { raw, pinned -> raw to pinned }
+                .debounce(SEARCH_DEBOUNCE_MS)
+                .collectLatest { (raw, pinned) ->
+                    val q = raw.trim()
+                    val page = remotePages.value
+                    // The Pinned tab lists from the server even without a query: pins can be older than the cache.
+                    val wanted = q.length >= MIN_SERVER_QUERY || (pinned && q.isEmpty())
+                    if (wanted && page.query == q && page.pinned == pinned && !page.loaded && !page.loading) load(q, null)
+                }
         }
     }
 
@@ -139,8 +164,15 @@ class HistoryViewModel(
         query.value = value
         if (value.trim() != old) {
             pageJob?.cancel()
-            remotePages.value = Remote(value.trim())
+            remotePages.value = Remote(value.trim(), remotePages.value.pinned)
         }
+    }
+
+    fun onTab(tab: HistoryTab) {
+        val pinned = tab == HistoryTab.PINNED
+        if (remotePages.value.pinned == pinned) return
+        pageJob?.cancel()
+        remotePages.value = Remote(query.value.trim(), pinned)
     }
 
     /** The list is near its end: load the next server page. */
@@ -149,25 +181,29 @@ class HistoryViewModel(
         val page = remotePages.value
         if (page.query != q || page.loading) return
         if (q.isNotEmpty() && (q.length < MIN_SERVER_QUERY || !page.loaded)) return   // the debounce loads page 1
+        if (page.pinned && !page.loaded) return
         if (page.loaded && page.next == null) return
         pageJob = viewModelScope.launch { load(q, page.next) }
     }
 
     private suspend fun load(q: String, cursor: String?) {
         val api = remote() ?: return
-        remotePages.update { if (it.query == q) it.copy(loading = true) else it }
+        val pinned = remotePages.value.pinned
+        // The tab or query may change while a page is in flight; only the page that asked still wants the answer.
+        fun Remote.mine() = query == q && this.pinned == pinned
+        remotePages.update { if (it.mine()) it.copy(loading = true) else it }
         try {
-            val result = withContext(io) { api.clips(q.ifEmpty { null }, cursor, PAGE_SIZE) }
+            val result = withContext(io) { api.clips(q.ifEmpty { null }, cursor, PAGE_SIZE, pinned) }
             remotePages.update {
-                if (it.query != q) it
+                if (!it.mine()) it
                 else it.copy(items = it.items + result.items, next = result.nextCursor, loaded = true, loading = false)
             }
         } catch (e: CancellationException) {
-            remotePages.update { if (it.query == q) it.copy(loading = false) else it }
+            remotePages.update { if (it.mine()) it.copy(loading = false) else it }
             throw e
         } catch (e: Exception) {
             // Offline or a server error: the cached hits stay; a later scroll or query retries.
-            remotePages.update { if (it.query == q) it.copy(loading = false) else it }
+            remotePages.update { if (it.mine()) it.copy(loading = false) else it }
             if (e is ApiException.Unauthorized) onUnauthorized()
         }
     }
@@ -225,13 +261,40 @@ class HistoryViewModel(
             }
             try {
                 withContext(io) { api.delete(clip.id) }   // false means already gone: drop the row as well
-                deleted.update { it + clip.id }
+                local.update { it.copy(deleted = it.deleted + clip.id) }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: ApiException.Unauthorized) {
                 onUnauthorized()   // revoked: the app signs out; not a connection problem
             } catch (_: Exception) {
                 _messages.trySend(UiText.Res(R.string.history_delete_failed))
+            }
+        }
+    }
+
+    /** Long-press menu: pin an unpinned clip, unpin a pinned one. The row changes at once; the broadcast follows. */
+    fun togglePin(clip: ClipDto) {
+        viewModelScope.launch {
+            val api = remote()?.takeIf { isOnline() }
+            if (api == null) {
+                _messages.trySend(UiText.Res(R.string.history_pin_failed))
+                return@launch
+            }
+            try {
+                val changed = withContext(io) { api.pin(clip.id, pinned = clip.pinnedAt == null) }
+                local.update { it.copy(updated = it.updated + (changed.id to changed)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: ApiException.Unauthorized) {
+                onUnauthorized()
+            } catch (e: ApiException.Rejected) {
+                if (e.status == NOT_FOUND) {
+                    local.update { it.copy(deleted = it.deleted + clip.id) }   // deleted on another device
+                } else {
+                    _messages.trySend(UiText.Res(R.string.history_pin_failed))
+                }
+            } catch (_: Exception) {
+                _messages.trySend(UiText.Res(R.string.history_pin_failed))
             }
         }
     }
@@ -253,5 +316,6 @@ class HistoryViewModel(
         const val SEARCH_DEBOUNCE_MS = 300L
         const val MIN_SERVER_QUERY = 2
         const val PAGE_SIZE = 50
+        const val NOT_FOUND = 404
     }
 }
