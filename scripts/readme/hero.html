@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- README hero: composed by scripts/readme/capture.mjs from the shots in out/. 1600x1000 CSS px, rendered at 1.5x. -->
+<html><head><meta charset="utf-8"><style>
+:root{--bg:#15122B;--glow:rgba(183,165,255,.22);--frame:#1D1838;--line:#2E2756;--muted:#9A94BD;--dot:#3a3366}
+.stage.light{--bg:#F6F4FD;--glow:rgba(91,69,214,.14);--frame:#FFFFFF;--line:#E1DBF7;--muted:#625C88;--dot:#d9d2f5}
+html,body{margin:0;background:transparent}
+.stage{width:1600px;height:1000px;overflow:hidden;position:relative;border-radius:28px;font-family:system-ui,sans-serif;
+ background:radial-gradient(900px 600px at 55% 40%,var(--glow),transparent 70%),var(--bg)}
+.win{position:absolute;left:330px;top:70px;width:880px;border-radius:16px;overflow:hidden;background:var(--frame);
+ border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.bar{height:40px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--line)}
+.bar i{width:11px;height:11px;border-radius:50%;background:var(--dot);display:block}
+.bar span{margin-left:16px;font-size:13px;color:var(--muted);background:var(--bg);padding:5px 14px;border-radius:999px}
+.win img{display:block;width:898px;height:860px;object-fit:cover;object-position:top left;clip-path:inset(0 18px 0 0)}
+.pop{position:absolute;left:70px;top:440px;width:420px;border-radius:14px;overflow:hidden;
+ border:1px solid var(--line);box-shadow:0 30px 70px rgba(0,0,0,.45);transform:scale(1.1);transform-origin:top left}
+.pop img{display:block;width:420px}
+.phone{position:absolute;left:1150px;top:110px;width:372px;height:806px;border-radius:52px;padding:12px;background:#0b0a18;
+ box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 0 0 2px #2a2547}
+.phone img{width:100%;height:100%;object-fit:cover;object-position:top;border-radius:40px;display:block}
+</style></head><body><div class="stage" id="stage">
+<div class="win"><div class="bar"><i></i><i></i><i></i><span>paste.example.com</span></div><img id="web"></div>
+<div class="phone"><img id="and"></div>
+<div class="pop"><img id="pop"></div>
+</div><script>
+const t=new URLSearchParams(location.search).get('t')||'dark';
+if(t==='light')stage.classList.add('light');
+web.src=`out/web-${t}.png`; and.src=`out/readme-history-${t}.png`; pop.src=`out/readme-popup-${t}.png`;
+</script></body></html>

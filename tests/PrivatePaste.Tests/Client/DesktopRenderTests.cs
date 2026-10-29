@@ -195,6 +195,39 @@ public class DesktopRenderTests
         Assert.True(vm.Items[0].IsNewest);
     }, CancellationToken.None);
 
+    /// <summary>
+    /// The README hero's popup, from the demo history in scripts/readme/demo.json (see scripts/readme/README.md).
+    /// Runs only when PP_README_DEMO names that file; saves readme-popup-{theme}.png into PP_SCREENSHOT_DIR.
+    /// </summary>
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Readme_popup(string theme) => Session.Value.Dispatch(() =>
+    {
+        if (Environment.GetEnvironmentVariable("PP_README_DEMO") is not { Length: > 0 } demoPath) return;
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        using var demo = System.Text.Json.JsonDocument.Parse(File.ReadAllText(demoPath));
+        var clips = demo.RootElement.GetProperty("clips").EnumerateArray().ToList();
+        for (var i = 0; i < clips.Count; i++)
+        {
+            var c = clips[i];
+            var kind = Enum.Parse<PrivatePaste.Protocol.ClipKind>(c.GetProperty("kind").GetString()!, ignoreCase: true);
+            int? Size(string name) => c.TryGetProperty(name, out var v) ? v.GetInt32() : null;
+            cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), clips.Count - i, kind,
+                c.TryGetProperty("text", out var text) ? text.GetString() : null, "h" + i, Size("width"), Size("height"), 100,
+                null, c.GetProperty("device").GetString()!, now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32()))
+            {
+                SourceDevicePlatform = c.GetProperty("platform").GetString(),
+            });
+        }
+        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+            _ => Task.CompletedTask, TimeProvider.System);
+        vm.MoveSelection(1);
+        Render(new PopupWindow { DataContext = vm }, theme, "readme-popup");
+    }, CancellationToken.None);
+
     [Theory]
     [InlineData("windows", "windows", "Windows")]
     [InlineData("macos", "macos", "macOS")]

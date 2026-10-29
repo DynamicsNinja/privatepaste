@@ -12,3 +12,5 @@ android/build/
 android/app/build/
 android/local.properties
 android/keystore/
+scripts/readme/out/
+scripts/readme/node_modules/
