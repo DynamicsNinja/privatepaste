@@ -470,6 +470,8 @@ public sealed class DesktopHost : IAsyncDisposable
 
     public void SetNotifyOnClipArrival(bool enabled) => UpdateSettings(s => s with { NotifyOnClipArrival = enabled });
 
+    public void SetBlockedApps(IReadOnlyList<string> apps) => UpdateSettings(s => s with { BlockedApps = apps });
+
     public void SetAutostart(bool enabled)
     {
         UpdateSettings(s => s with { Autostart = enabled });

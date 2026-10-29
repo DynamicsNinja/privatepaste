@@ -94,4 +94,103 @@ public class SettingsViewModelTests
         await vm.SignOutCommand.ExecuteAsync(null);
         Assert.Equal(1, _signOuts);
     }
+
+    // ---- Private copies: blocked apps ----
+
+    private readonly List<IReadOnlyList<string>> _blockedSaved = [];
+
+    private SettingsViewModel CreateBlocking(string[]? blocked = null, string[]? recent = null, bool canIdentify = true) => new(
+        server: "https://paste.example.com", deviceName: "PC-work", hotkey: "Ctrl+Shift+V", autostart: true,
+        autostartLabel: "Start with Windows", applyHotkey: _ => { }, setAutostart: _ => { }, signOut: () => Task.CompletedTask,
+        blockedApps: blocked, recentSourceApps: () => recent ?? [], setBlockedApps: l => _blockedSaved.Add(l),
+        canIdentifySourceApp: canIdentify);
+
+    [Fact]
+    public void Shows_the_stored_blocklist()
+    {
+        var vm = CreateBlocking(blocked: ["keepassxc", "1password"]);
+        Assert.Equal(["keepassxc", "1password"], vm.BlockedApps);
+        Assert.Empty(_blockedSaved);   // showing the stored list is not a change
+    }
+
+    [Fact]
+    public void Adding_from_recent_apps_saves_and_leaves_the_menu_without_it()
+    {
+        var vm = CreateBlocking(blocked: ["keepassxc"], recent: ["Chrome", "keepassxc", "Notepad"]);
+        Assert.Equal(["Chrome", "Notepad"], vm.AddableApps);   // not those already listed
+        vm.AddBlockedAppCommand.Execute("Chrome");
+        Assert.Equal(["keepassxc", "chrome"], vm.BlockedApps);
+        Assert.Equal(["keepassxc", "chrome"], Assert.Single(_blockedSaved));
+        Assert.Equal(["Notepad"], vm.AddableApps);
+    }
+
+    [Theory]
+    [InlineData("  KeePassXC.EXE ", "keepassxc")]
+    [InlineData("Bitwarden", "bitwarden")]
+    [InlineData("com.agilebits.OnePassword7", "com.agilebits.onepassword7")]
+    public void A_typed_name_is_normalised(string typed, string stored)
+    {
+        var vm = CreateBlocking();
+        vm.StartTypingAppCommand.Execute(null);
+        Assert.True(vm.IsTypingApp);
+        vm.TypedApp = typed;
+        vm.ConfirmTypedAppCommand.Execute(null);
+        Assert.Equal([stored], vm.BlockedApps);
+        Assert.Equal([stored], Assert.Single(_blockedSaved));
+        Assert.False(vm.IsTypingApp);
+        Assert.Equal("", vm.TypedApp);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(".exe")]
+    public void A_blank_typed_name_is_ignored(string typed)
+    {
+        var vm = CreateBlocking();
+        vm.StartTypingAppCommand.Execute(null);
+        vm.TypedApp = typed;
+        vm.ConfirmTypedAppCommand.Execute(null);
+        Assert.Empty(vm.BlockedApps);
+        Assert.Empty(_blockedSaved);
+    }
+
+    [Fact]
+    public void A_name_already_listed_is_not_added_twice()
+    {
+        var vm = CreateBlocking(blocked: ["keepassxc"]);
+        vm.AddBlockedAppCommand.Execute("KeePassXC.exe");
+        Assert.Equal(["keepassxc"], vm.BlockedApps);
+        Assert.Empty(_blockedSaved);
+    }
+
+    [Fact]
+    public void Removing_saves_the_rest()
+    {
+        var vm = CreateBlocking(blocked: ["a", "b"]);
+        vm.RemoveBlockedAppCommand.Execute("a");
+        Assert.Equal(["b"], vm.BlockedApps);
+        Assert.Equal(["b"], Assert.Single(_blockedSaved));
+    }
+
+    [Fact]
+    public void Cancelling_the_typed_name_closes_the_box()
+    {
+        var vm = CreateBlocking();
+        vm.StartTypingAppCommand.Execute(null);
+        vm.TypedApp = "half";
+        vm.CancelTypingAppCommand.Execute(null);
+        Assert.False(vm.IsTypingApp);
+        Assert.Equal("", vm.TypedApp);
+    }
+
+    [Fact]
+    public void Where_apps_cannot_be_identified_the_section_says_so()
+    {
+        Assert.True(CreateBlocking().CanBlockApps);
+        var vm = CreateBlocking(canIdentify: false);
+        Assert.False(vm.CanBlockApps);
+        Assert.Equal("This system can't tell which app copied something, so apps can't be blocked here. "
+            + "Copies that password managers mark as private are still ignored.", SettingsViewModel.CannotBlockAppsMessage);
+    }
 }

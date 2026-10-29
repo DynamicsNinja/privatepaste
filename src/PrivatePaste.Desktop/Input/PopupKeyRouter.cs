@@ -2,7 +2,7 @@ using SharpHook.Data;
 
 namespace PrivatePaste.Desktop.Input;
 
-public enum PopupKeyAction { Pass, Swallow, Up, Down, PageUp, PageDown, Paste, Close, Backspace, Type }
+public enum PopupKeyAction { Pass, Swallow, Up, Down, PageUp, PageDown, Paste, Close, Backspace, Type, SwitchTab, TogglePin }
 
 /// <summary>What a key press does while the popup is open; <see cref="Text"/> is set for <see cref="PopupKeyAction.Type"/>.</summary>
 public readonly record struct PopupKey(PopupKeyAction Action, string? Text = null);
@@ -43,9 +43,12 @@ public static class PopupKeyRouter
             case KeyCode.VcEnter or KeyCode.VcNumPadEnter when plain: return new PopupKey(PopupKeyAction.Paste);
             case KeyCode.VcEscape when plain: return new PopupKey(PopupKeyAction.Close);
             case KeyCode.VcBackspace when plain: return new PopupKey(PopupKeyAction.Backspace);
+            case KeyCode.VcTab when plain: return new PopupKey(PopupKeyAction.SwitchTab);
+            // Ctrl+P alone: with Shift or Alt it stays swallowed like every other shortcut.
+            case KeyCode.VcP when ctrl && !alt && (mask & EventMask.Shift) == 0: return new PopupKey(PopupKeyAction.TogglePin);
         }
 
-        // Plain or shifted text, or AltGr (which Windows reports as Ctrl+Alt). Control characters (Ctrl+letter, Tab) are not text.
+        // Plain or shifted text, or AltGr (which Windows reports as Ctrl+Alt). Control characters (Ctrl+letter) are not text.
         var altGr = ctrl && alt;
         if ((plain || altGr) && text is { Length: > 0 } && !text.Any(char.IsControl))
             return new PopupKey(PopupKeyAction.Type, text);

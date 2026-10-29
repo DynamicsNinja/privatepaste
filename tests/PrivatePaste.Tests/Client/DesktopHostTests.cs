@@ -379,6 +379,16 @@ public class DesktopHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Blocked_apps_are_saved_and_applied_at_once()
+    {
+        var host = await SignedInHostAsync();
+        Assert.Empty(host.Settings.BlockedApps);
+        host.SetBlockedApps(["keepassxc", "chrome"]);
+        Assert.Equal(["keepassxc", "chrome"], host.Settings.BlockedApps);
+        Assert.Equal(["keepassxc", "chrome"], NewSettingsStore().Load().BlockedApps);   // persisted
+    }
+
+    [Fact]
     public async Task Clip_arrived_is_raised_for_a_live_clip_from_another_device_unless_turned_off()
     {
         var host = await SignedInHostAsync();
