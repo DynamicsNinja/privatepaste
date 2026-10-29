@@ -17,14 +17,15 @@ public static class PrivateCopyMarkers
 
     /// <summary>
     /// <paramref name="formatsByName"/> holds every marker format present, with its bytes (null when present but unreadable).
-    /// The first two mark a copy private by merely being there; the other two only when they hold the DWORD 0.
+    /// The first two mark a copy private by merely being there; the other two unless they hold a readable non-zero DWORD
+    /// (a present marker we cannot read fails closed: the copy must not reach the server).
     /// </summary>
     public static bool IsPrivate(IReadOnlyDictionary<string, byte[]?> formatsByName)
     {
         if (formatsByName.ContainsKey(ExcludeFromMonitor) || formatsByName.ContainsKey(ViewerIgnore)) return true;
-        return IsZeroDword(formatsByName, CanIncludeInHistory) || IsZeroDword(formatsByName, CanUploadToCloud);
+        return BlocksDword(formatsByName, CanIncludeInHistory) || BlocksDword(formatsByName, CanUploadToCloud);
     }
 
-    private static bool IsZeroDword(IReadOnlyDictionary<string, byte[]?> formats, string name) =>
-        formats.TryGetValue(name, out var bytes) && bytes is { Length: >= 4 } && BitConverter.ToUInt32(bytes, 0) == 0;   // little-endian on every supported host
+    private static bool BlocksDword(IReadOnlyDictionary<string, byte[]?> formats, string name) =>
+        formats.TryGetValue(name, out var bytes) && !(bytes is { Length: >= 4 } && BitConverter.ToUInt32(bytes, 0) != 0);   // little-endian on every supported host
 }

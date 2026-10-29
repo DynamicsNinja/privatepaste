@@ -33,13 +33,21 @@ public class PrivateCopyMarkersTests
     [Theory]
     [InlineData("CanIncludeInClipboardHistory")]
     [InlineData("CanUploadToCloudClipboard")]
-    public void Dword_marker_is_private_only_when_zero(string name)
+    public void Readable_dword_marker_is_private_only_when_zero(string name)
     {
         Assert.True(Windows((name, Zero)));
         Assert.False(Windows((name, One)));
         Assert.False(Windows((name, [0, 1, 0, 0])));   // little-endian 256
-        Assert.False(Windows((name, null)));            // present but unreadable: do not guess
-        Assert.False(Windows((name, [0, 0])));          // too short to be a DWORD
+    }
+
+    [Theory]
+    [InlineData("CanIncludeInClipboardHistory")]
+    [InlineData("CanUploadToCloudClipboard")]
+    public void Dword_marker_that_cannot_be_read_fails_closed(string name)
+    {
+        Assert.True(Windows((name, null)));        // present but unreadable
+        Assert.True(Windows((name, [])));
+        Assert.True(Windows((name, [1, 0])));      // too short to be a DWORD
     }
 
     [Fact]
