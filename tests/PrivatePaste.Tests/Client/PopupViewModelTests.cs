@@ -52,6 +52,29 @@ public class PopupViewModelTests
     }
 
     [Fact]
+    public void Typed_text_appends_to_the_query_and_filters()
+    {
+        var vm = Create(CacheWith(Text("alpha", 2, 1), Text("beta", 1, 2)));
+        vm.Type("al");
+        vm.Type("p");
+        Assert.Equal("alp", vm.Query);
+        Assert.Equal(["alpha"], vm.Items.Select(i => i.Clip.Text));
+    }
+
+    [Fact]
+    public void Backspace_removes_one_whole_character()
+    {
+        var vm = Create(CacheWith());
+        vm.Type("ač🚀");
+        vm.Backspace();
+        Assert.Equal("ač", vm.Query);   // the emoji (a surrogate pair) goes in one step
+        vm.Backspace();
+        vm.Backspace();
+        vm.Backspace();                 // on an empty query: nothing happens
+        Assert.Equal("", vm.Query);
+    }
+
+    [Fact]
     public void Server_results_merge_after_cached_without_duplicates()
     {
         var cached = Text("alpha cached", 1, 2);

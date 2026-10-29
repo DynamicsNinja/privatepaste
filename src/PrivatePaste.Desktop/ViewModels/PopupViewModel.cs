@@ -135,6 +135,17 @@ public sealed partial class PopupViewModel : ObservableObject
         SelectedIndex = Math.Clamp(SelectedIndex + delta, 0, Items.Count - 1);
     }
 
+    /// <summary>Text typed while the popup is open without the focus (Windows): appended to the search.</summary>
+    public void Type(string text) => Query += text;
+
+    /// <summary>Removes the last character of the search (a whole emoji or accented letter, not half of one).</summary>
+    public void Backspace()
+    {
+        if (Query.Length == 0) return;
+        var elements = System.Globalization.StringInfo.ParseCombiningCharacters(Query);
+        Query = Query[..elements[^1]];
+    }
+
     public Task ActivateSelectedAsync() =>
         SelectedIndex >= 0 && SelectedIndex < Items.Count ? _activate(Items[SelectedIndex].Clip) : Task.CompletedTask;
 
