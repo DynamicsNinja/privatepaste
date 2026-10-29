@@ -50,6 +50,8 @@ data class ClipDto(
     /** Lowercase platform of the source device ("windows", "macos", "linux", "android", "web", ...); null if unknown. */
     val sourceDevicePlatform: String? = null,
     @Serializable(InstantSerializer::class) val lastCopiedAt: Instant,
+    /** ISO instant the clip was pinned, null (sent explicitly) or missing when it is not. Kept a string: it only orders and flags. */
+    val pinnedAt: String? = null,
 )
 
 @Serializable

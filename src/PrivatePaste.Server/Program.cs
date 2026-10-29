@@ -29,6 +29,7 @@ builder.Services.AddSingleton(serverOptions);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PrivatePasteDb>();
 builder.Services.AddSingleton<ClipRepository>();
+builder.Services.AddSingleton<SettingsRepository>();
 builder.Services.AddSingleton<BlobStore>();
 builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();
@@ -36,6 +37,7 @@ builder.Services.AddSingleton<DeviceRepository>();
 builder.Services.AddSingleton<ConnectionHub>();
 builder.Services.AddSingleton<IClipBroadcaster>(sp => sp.GetRequiredService<ConnectionHub>());
 builder.Services.AddSingleton<ClipService>();
+builder.Services.AddHostedService<AutoDeleteService>();
 builder.Services.AddHealthChecks();
 
 // Persist the keys behind the session cookie and antiforgery tokens so a redeploy doesn't log the web UI out.
@@ -146,6 +148,7 @@ app.MapHealthChecks("/health");
 app.MapAuthEndpoints();
 app.MapDeviceEndpoints();
 app.MapClipEndpoints();
+app.MapSettingsEndpoints();
 app.MapWebSocketEndpoint();
 app.MapRazorPages();
 

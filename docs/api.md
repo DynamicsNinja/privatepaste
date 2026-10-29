@@ -21,16 +21,21 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` c
 | `DELETE` | `/api/devices/{id}` | bearer | Revokes a device and closes its WebSockets. 204, or 404. |
 | `POST` | `/api/clips/text` | bearer | Body `{text, copiedAt?, backfill}`. Returns the clip. 400 if empty, 413 if over `PP_MAX_TEXT_KB`. |
 | `POST` | `/api/clips/image` | bearer | `multipart/form-data` (see below). Returns the clip. 400 for an invalid image or body, 413 if over `PP_MAX_IMAGE_MB` or 50 megapixels. |
-| `GET` | `/api/clips?q=&cursor=&limit=` | bearer | History, newest first (`lastCopiedAt` desc). `q` searches text; `limit` defaults to 50 (max 200). Returns `{items, nextCursor}`; pass `nextCursor` back as `cursor` for the next page. |
+| `GET` | `/api/clips?q=&cursor=&limit=&pinned=` | bearer | History, newest first (`lastCopiedAt` desc). `q` searches text; `limit` defaults to 50 (max 200). With `pinned=true`, only pinned clips, most recently pinned first. Returns `{items, nextCursor}`; pass `nextCursor` back as `cursor` for the next page. |
 | `GET` | `/api/clips/{id}` | bearer | One clip, or 404. |
 | `GET` | `/api/clips/{id}/image` | bearer | The full image as `image/png`. |
 | `GET` | `/api/clips/{id}/thumbnail` | bearer | A PNG thumbnail that fits in 256x256. |
 | `POST` | `/api/clips/{id}/restore` | bearer | Treats the clip as freshly copied by the caller: bumps it to the top and pushes it live. Returns the clip, or 404. |
-| `DELETE` | `/api/clips/{id}` | bearer | Deletes a clip (and its image). 204, or 404. |
+| `POST` | `/api/clips/{id}/pin` | bearer | Pins a clip: it survives clearing and auto-delete. Doesn't change `lastCopiedAt`. Returns the clip, or 404. Pinning a pinned clip changes nothing. |
+| `DELETE` | `/api/clips/{id}/pin` | bearer | Unpins a clip. Returns the clip, or 404. |
+| `DELETE` | `/api/clips/{id}` | bearer | Deletes a clip (and its image), pinned or not. 204, or 404. |
+| `POST` | `/api/history/clear` | bearer | Deletes every unpinned clip copied (or unpinned) before now, with their images, and remembers that time. Returns `{deleted}`, the count. |
+| `GET` | `/api/settings` | bearer | Returns `{autoDeleteDays}`: `null` (keep everything), `7`, `30` or `90`. |
+| `PUT` | `/api/settings` | bearer | Body `{autoDeleteDays}` as above. Returns the saved settings; 400 for any other value. |
 | `GET` | `/api/sync?afterSeq=&limit=` | bearer | Changes after a sequence number, in `seq` order: `{clips, deletedIds, latestSeq, hasMore}`. `limit` defaults to 200 (max 500). |
 | `GET` | `/ws` | bearer | WebSocket for live updates (see below). |
 
-A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId, sourceDeviceName, sourceDevicePlatform, lastCopiedAt}`. `text` is null for images; `width`/`height` are null for text. `sourceDevice*` describe the device that last copied the clip (a new upload, a dedup bump or a restore). `sourceDevicePlatform` is that device's login `platform`, lowercased (`windows`, `macos`, `linux`, `android`, or whatever else a client sent), `web` for the web UI (which has no `sourceDeviceId`), or null when unknown. Clients show anything they do not recognize as an unknown device. Every change (new clip, dedup bump, restore, delete) gets a new, higher `seq`.
+A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId, sourceDeviceName, sourceDevicePlatform, lastCopiedAt, pinnedAt}`. `pinnedAt` is always present: the time the clip was pinned, or null when it isn't pinned. `text` is null for images; `width`/`height` are null for text. `sourceDevice*` describe the device that last copied the clip (a new upload, a dedup bump or a restore). `sourceDevicePlatform` is that device's login `platform`, lowercased (`windows`, `macos`, `linux`, `android`, or whatever else a client sent), `web` for the web UI (which has no `sourceDeviceId`), or null when unknown. Clients show anything they do not recognize as an unknown device. Every change (new clip, dedup bump, restore, delete) gets a new, higher `seq`.
 
 Uploading content that already exists (same `hash`) does not create a duplicate: the existing clip is bumped to the top and returned.
 
@@ -44,11 +49,13 @@ Uploading content that already exists (same `hash`) does not create a duplicate:
 
 Live uploads always get the server's time. Backfilled uploads keep `copiedAt`, clamped to no later than the server's time, and are never applied to other devices' clipboards. The same applies to `copiedAt`/`backfill` on text uploads.
 
+A backfilled upload (text or image) is refused with `410` (problem title `Cleared`) and nothing is stored when its `copiedAt` is before the last history clear, or older than the auto-delete age. Live uploads are never refused this way.
+
 ## WebSocket
 
 Connect to `/ws` with the bearer token in the upgrade request. Messages are JSON text frames:
 
-- `{"type":"clip.created","clip":{...},"live":true}`: a clip was added, bumped or restored. `live` is `false` for backfilled clips.
+- `{"type":"clip.created","clip":{...},"live":true}`: a clip was added, bumped or restored. `live` is `false` for backfilled clips and for pin changes (the clip arrives again with the new `pinnedAt`).
 - `{"type":"clip.deleted","id":"...","seq":123}`: a clip was deleted.
 - Send `{"type":"ping"}` and the server answers `{"type":"pong"}`. Other messages are ignored.
 
@@ -60,6 +67,8 @@ The server closes the socket with status 1008 (`revoked`) when the device is rev
 - Only apply `live: true` clips to the clipboard. Backfilled clips go into history only.
 - Order by `seq` (or `lastCopiedAt` for display), not by arrival order: broadcasts can arrive out of `seq` order.
 - On every (re)connect, catch up with `GET /api/sync?afterSeq=<highest seq you have seen>`, repeating while `hasMore` is true, then continue from `latestSeq`. Apply at most the newest caught-up clip to the clipboard, and only if it is newer than what you last applied.
+- A pin or unpin arrives as `clip.created` with `live: false` and a new `seq`; replace your copy of the clip.
+- Treat `410` on a queued (backfilled) upload as "drop it quietly": the history was cleared or the clip is past the auto-delete age.
 - Reconnect with backoff after the socket closes, except after a `revoked` close: log in again instead.
 
 ## Content hash

@@ -30,6 +30,30 @@ public class PollingClipboardTests
         public Task WriteAsync(ClipboardContent content, CancellationToken ct) => Task.CompletedTask;
     }
 
+    /// <summary>Tells the cheap per-tick read apart from the full read the coordinator consumes.</summary>
+    private sealed class SplitReadBackend : IClipboardBackend
+    {
+        public int Peeks, Reads;
+        public Task<ClipboardContent?> ReadAsync(CancellationToken ct) { Interlocked.Increment(ref Reads); return Task.FromResult<ClipboardContent?>(new ClipboardContent.Text("a")); }
+        public Task<ClipboardContent?> PeekAsync(CancellationToken ct) { Interlocked.Increment(ref Peeks); return Task.FromResult<ClipboardContent?>(new ClipboardContent.Text("a")); }
+        public Task WriteAsync(ClipboardContent content, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Poll_ticks_use_the_cheap_read_and_only_ReadAsync_does_full_detection()
+    {
+        var backend = new SplitReadBackend();
+        var (clip, _) = Create(backend);
+        await clip.TickAsync();
+        await clip.TickAsync();
+        Assert.Equal(2, backend.Peeks);
+        Assert.Equal(0, backend.Reads);
+
+        await clip.ReadAsync(CancellationToken.None);
+        Assert.Equal(1, backend.Reads);
+        Assert.Equal(2, backend.Peeks);
+    }
+
     private static async Task<bool> WaitUntil(Func<bool> cond)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);

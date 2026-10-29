@@ -23,7 +23,7 @@ public static class ClipEndpoints
             }
             catch (ClipRejectedException ex)
             {
-                return Results.Problem(statusCode: ex.StatusCode, detail: ex.Message);
+                return Results.Problem(statusCode: ex.StatusCode, detail: ex.Message, title: ex.Title);
             }
         });
 
@@ -88,11 +88,13 @@ public static class ClipEndpoints
             }
         });
 
-        group.MapGet("clips", async (ClipRepository repo, string? q, string? cursor, int? limit) =>
+        group.MapGet("clips", async (ClipRepository repo, string? q, string? cursor, int? limit, bool? pinned) =>
         {
             try
             {
-                return Results.Ok(await repo.ListAsync(q, cursor, limit ?? 50));
+                return Results.Ok(pinned == true
+                    ? await repo.ListPinnedAsync(q, cursor, limit ?? 50)
+                    : await repo.ListAsync(q, cursor, limit ?? 50));
             }
             catch (ArgumentException)
             {
@@ -111,6 +113,15 @@ public static class ClipEndpoints
 
         group.MapPost("clips/{id:guid}/restore", async (Guid id, ClaimsPrincipal user, ClipService service) =>
             await service.RestoreAsync(id, user.ToDeviceIdentity()) is { } clip ? Results.Ok(clip) : Results.NotFound());
+
+        group.MapPost("clips/{id:guid}/pin", async (Guid id, ClipService service) =>
+            await service.SetPinnedAsync(id, true) is { } clip ? Results.Ok(clip) : Results.NotFound());
+
+        group.MapDelete("clips/{id:guid}/pin", async (Guid id, ClipService service) =>
+            await service.SetPinnedAsync(id, false) is { } clip ? Results.Ok(clip) : Results.NotFound());
+
+        group.MapPost("history/clear", async (ClipService service) =>
+            Results.Ok(new { deleted = await service.ClearAsync() }));
 
         group.MapDelete("clips/{id:guid}", async (Guid id, ClipService service) =>
             await service.DeleteAsync(id) ? Results.NoContent() : Results.NotFound());

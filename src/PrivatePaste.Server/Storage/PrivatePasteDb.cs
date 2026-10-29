@@ -98,6 +98,25 @@ public sealed class PrivatePasteDb(ServerOptions options)
             cmd.ExecuteNonQuery();
             tx.Commit();
         }
+
+        if (!HasColumn(conn, "clips", "pinned_at"))
+        {
+            using var tx = conn.BeginTransaction();
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                ALTER TABLE clips ADD COLUMN pinned_at TEXT;
+                ALTER TABLE clips ADD COLUMN unpinned_at TEXT;
+                """;
+            cmd.ExecuteNonQuery();
+            tx.Commit();
+        }
+
+        // Here, not in Schema.sql: that script runs before this method, when an old database has no pinned_at yet.
+        using var index = conn.CreateCommand();
+        index.CommandText = "CREATE INDEX IF NOT EXISTS ix_clips_pinned ON clips(pinned_at DESC, seq DESC) " +
+                            "WHERE pinned_at IS NOT NULL";
+        index.ExecuteNonQuery();
     }
 
     private static bool HasColumn(SqliteConnection conn, string table, string column)

@@ -5,6 +5,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -21,6 +23,7 @@ import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.history.HistoryContent
 import xyz.ficdev.privatepaste.ui.history.HistoryState
+import xyz.ficdev.privatepaste.ui.history.HistoryTab
 import xyz.ficdev.privatepaste.ui.theme.PrivatePasteTheme
 import java.time.Clock
 import java.time.Instant
@@ -43,6 +46,9 @@ class HistoryScreenTest {
     private val copied = mutableListOf<String>()
     private val deleted = mutableListOf<String>()
 
+    private val pinnedEvents = mutableListOf<String>()
+    private val tabs = mutableListOf<HistoryTab>()
+
     private fun show(state: HistoryState) = compose.setContent {
         PrivatePasteTheme {
             HistoryContent(
@@ -53,6 +59,8 @@ class HistoryScreenTest {
                 onDelete = { deleted += it.id },
                 onNearEnd = {},
                 onOpenSettings = {},
+                onTab = { tabs += it },
+                onTogglePin = { pinnedEvents += it.id },
             )
         }
     }
@@ -117,11 +125,51 @@ class HistoryScreenTest {
     }
 
     @Test
+    fun longPressMenuOffersPinAndDelete() {
+        show(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("hello from the desk").performTouchInput { longClick() }
+        compose.onNodeWithText("Pin").assertIsDisplayed()
+        compose.onNodeWithText("Delete").assertIsDisplayed()
+        compose.onNodeWithText("Delete this clip from all your devices?").assertDoesNotExist()
+
+        compose.onNodeWithText("Pin").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("a"), pinnedEvents)
+        compose.onNodeWithText("Pin").assertDoesNotExist()
+        assertEquals(emptyList<String>(), copied)
+    }
+
+    @Test
+    fun pinnedRowShowsTheMarkAndTheMenuSaysUnpin() {
+        show(HistoryState(items = listOf(clip.copy(pinnedAt = now.toString())), syncState = SyncState.CONNECTED))
+        compose.onNodeWithContentDescription("Pinned").assertExists()
+        compose.onNodeWithText("hello from the desk").performTouchInput { longClick() }
+        compose.onNodeWithText("Unpin").assertIsDisplayed()
+    }
+
+    @Test
+    fun unpinnedRowHasNoPinMark() {
+        show(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        compose.onNodeWithContentDescription("Pinned").assertDoesNotExist()
+    }
+
+    @Test
+    fun tabsSwitchAndPinnedEmptyStateExplainsHowToPin() {
+        show(HistoryState(tab = HistoryTab.PINNED, items = emptyList(), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("History").assertIsDisplayed()
+        compose.onNodeWithText("Pinned").assertIsDisplayed()
+        compose.onNodeWithText("Nothing pinned yet. Long-press a clip to pin it.").assertIsDisplayed()
+        compose.onNodeWithText("History").performClick()
+        assertEquals(listOf(HistoryTab.HISTORY), tabs)
+    }
+
+    @Test
     fun longPressShowsTheDeleteDialog() {
         show(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTING))
         compose.onNodeWithText("Connecting…").assertIsDisplayed()
 
         compose.onNodeWithText("hello from the desk").performTouchInput { longClick() }
+        compose.onNodeWithText("Delete").performClick()
         compose.onNodeWithText("Delete this clip from all your devices?").assertIsDisplayed()
         compose.onNodeWithText("Cancel").performClick()
         compose.onNodeWithText("Delete this clip from all your devices?").assertDoesNotExist()
@@ -129,6 +177,7 @@ class HistoryScreenTest {
 
         compose.onNodeWithText("hello from the desk").performTouchInput { longClick() }
         compose.onNodeWithText("Delete").performClick()
+        compose.onAllNodesWithText("Delete").onLast().performClick()
         compose.waitForIdle()
         assertEquals(listOf("a"), deleted)
         assertEquals(emptyList<String>(), copied)

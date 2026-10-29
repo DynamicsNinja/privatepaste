@@ -14,6 +14,9 @@ public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, str
     /// Serialized right after <see cref="SourceDeviceName"/>.
     /// </summary>
     public string? SourceDevicePlatform { get; init; }
+
+    /// <summary>When the clip was pinned, or null when it is not pinned. Pinned clips survive history clearing.</summary>
+    public DateTimeOffset? PinnedAt { get; init; }
 }
 
 public sealed record LoginRequest(string Password, string DeviceName, string Platform);
@@ -27,6 +30,9 @@ public sealed record ClipPage(IReadOnlyList<ClipDto> Items, string? NextCursor);
 public sealed record SyncResponse(IReadOnlyList<ClipDto> Clips, IReadOnlyList<Guid> DeletedIds, long LatestSeq, bool HasMore);
 
 public sealed record DeviceDto(Guid Id, string Name, string Platform, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool IsCurrent);
+
+/// <summary>Server settings. <see cref="AutoDeleteDays"/> is null (off), 7, 30 or 90.</summary>
+public sealed record SettingsDto(int? AutoDeleteDays);
 
 /// <summary>WebSocket envelope. <see cref="Type"/> is one of <see cref="WsTypes"/>.</summary>
 public sealed record WsMessage(string Type, ClipDto? Clip = null, Guid? Id = null, long? Seq = null, bool? Live = null);

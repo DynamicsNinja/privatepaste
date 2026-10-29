@@ -314,6 +314,48 @@ public class HistoryCacheTests : IDisposable
         Assert.Equal(3, HistoryCache.Load(FilePath, key).HighestSeq);
     }
 
+    private static ClipDto Pinned(ClipDto clip, int minutes) => clip with { PinnedAt = T0.AddMinutes(minutes) };
+
+    [Fact]
+    public void Trimming_keeps_pinned_clips_beyond_capacity()
+    {
+        var c = new HistoryCache(FilePath, NewKey(), capacity: 3);
+        c.Upsert(Pinned(Clip(1, "old pinned", 1), 100));
+        c.Upsert(Clip(2, "old", 2));
+        for (var i = 3; i <= 6; i++) c.Upsert(Clip(i, "t" + i, i));
+        Assert.Equal(["t6", "t5", "t4", "old pinned"], c.Items.Select(i => i.Clip.Text));
+
+        // A pin that arrives for a clip older than the cache is kept as well; once unpinned it is trimmed again.
+        var older = Pinned(Clip(7, "older", 0), 101);
+        c.Upsert(older);
+        Assert.Equal(["t6", "t5", "t4", "old pinned", "older"], c.Items.Select(i => i.Clip.Text));
+        c.Upsert(older with { Seq = 8, PinnedAt = null });
+        Assert.Equal(["t6", "t5", "t4", "old pinned"], c.Items.Select(i => i.Clip.Text));
+    }
+
+    [Fact]
+    public void Loading_with_a_smaller_capacity_keeps_pinned_clips()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Pinned(Clip(1, "pinned", 1), 10));
+        for (var i = 2; i <= 5; i++) c.Upsert(Clip(i, "t" + i, i));
+        c.Save();
+        var loaded = HistoryCache.Load(FilePath, key, capacity: 2);
+        Assert.Equal(["t5", "t4", "pinned"], loaded.Items.Select(i => i.Clip.Text));
+    }
+
+    [Fact]
+    public void Pinned_is_newest_pinned_first()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        c.Upsert(Pinned(Clip(1, "pinned second", 1), 20));
+        c.Upsert(Clip(2, "not pinned", 2));
+        c.Upsert(Pinned(Clip(3, "pinned first", 3), 10));
+        c.Upsert(Pinned(Clip(4, "pinned last", 4), 30));
+        Assert.Equal(["pinned last", "pinned second", "pinned first"], c.Pinned.Select(i => i.Clip.Text));
+    }
+
     [Fact]
     public void Set_thumbnail_only_touches_a_held_clip_with_the_same_content()
     {

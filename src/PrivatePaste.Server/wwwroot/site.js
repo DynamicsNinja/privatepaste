@@ -59,3 +59,31 @@ document.addEventListener("click", (event) => {
             }, 1500);
         });
 });
+
+// Settings: save auto-delete as soon as the choice changes.
+document.getElementById("auto-delete")?.addEventListener("change", (event) => {
+    const select = event.target;
+    const status = document.getElementById("auto-delete-status");
+    const token = document.querySelector('meta[name="csrf-token"]')?.content ?? "";
+    status.textContent = "";
+    fetch("/api/settings", {
+        method: "PUT",
+        headers: { RequestVerificationToken: token, "Content-Type": "application/json" },
+        body: JSON.stringify({ autoDeleteDays: select.value === "" ? null : Number(select.value) }),
+    })
+        .then((response) => {
+            if (!response.ok) throw new Error(`Save failed (${response.status})`);
+            status.textContent = "Saved";
+            setTimeout(() => { status.textContent = ""; }, 2500);
+        })
+        .catch((error) => {
+            console.error(error);
+            status.textContent = "Could not save";
+        });
+});
+
+// Clear history: confirm with the number of clips that would go.
+document.addEventListener("submit", (event) => {
+    const message = event.target.dataset?.confirm;
+    if (message && !window.confirm(message)) event.preventDefault();
+});

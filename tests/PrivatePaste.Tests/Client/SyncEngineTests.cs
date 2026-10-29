@@ -385,6 +385,45 @@ public class SyncEngineTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_private_copy_still_counts_as_the_newest_local_copy()
+    {
+        await PrimeAppliedAsync();
+        _server.Clock.Advance(TimeSpan.FromMinutes(1));
+        await _apiB.UploadTextAsync("remote", null, false);
+        _time.Advance(TimeSpan.FromMinutes(2));   // the private copy is read after "remote" was copied
+        var engine = CreateEngine();
+        _clip.Current = new ClipboardContent.Text("password") { IsPrivate = true };
+        await _coordinator.OnClipboardChangedAsync(default);
+
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+
+        Assert.Equal(["first"], Written());   // the password stays on the clipboard
+        Assert.True(Cached("remote") && !Cached("password"));
+    }
+
+    [Fact]
+    public async Task Catch_up_after_a_pin_applies_nothing()
+    {
+        // "while paused" is the newest clip but was never applied (the catch-up after a pause is history only).
+        var engine = await PauseWhileBUploadsAsync();
+        _paused = false;
+        await WaitUntilAsync(() => engine.State == SyncState.Connected, AdvanceWhilePaused(engine));
+        await engine.StopAsync();
+        Assert.Equal(["first"], Written());
+
+        // Pinning it (and the applied "first") gives both a new seq: the next catch-up brings them, and must not paste either.
+        foreach (var text in new[] { "first", "while paused" })
+            await _apiB.PinAsync(_cache.Items.Single(i => i.Clip.Text == text).Clip.Id, true);
+        engine.Start();
+        await WaitUntilAsync(() => engine.State == SyncState.Connected);
+        await WaitUntilAsync(() => _cache.Items.All(i => i.Clip.PinnedAt is not null));
+
+        Assert.Equal(["first"], Written());
+        Assert.Equal(["first"], Notified());
+    }
+
+    [Fact]
     public async Task A_transient_failure_while_connected_is_retried_by_the_periodic_flush()
     {
         var engine = await StartConnectedAsync();

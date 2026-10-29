@@ -235,6 +235,36 @@ class PrivatePasteApiTest {
         assertEquals("/api/clips/c1", req.path)
     }
 
+    @Test fun pinAndUnpinCallTheirEndpoints() = runBlocking<Unit> {
+        server.enqueue(json(clipJson.replace("\"hash\"", "\"pinnedAt\":\"2026-10-29T09:00:00+00:00\",\"hash\"")))
+        val pinned = api().pin("c1", true)
+        assertEquals("2026-10-29T09:00:00+00:00", pinned.pinnedAt)
+        server.enqueue(json(clipJson))
+        assertNull(api().pin("c1", false).pinnedAt)
+        val pin = take()
+        assertEquals("POST", pin.method)
+        assertEquals("/api/clips/c1/pin", pin.path)
+        val unpin = take()
+        assertEquals("DELETE", unpin.method)
+        assertEquals("/api/clips/c1/pin", unpin.path)
+    }
+
+    @Test fun pinOfAMissingClipIsRejected404() = runBlocking<Unit> {
+        server.enqueue(MockResponse().setResponseCode(404))
+        try {
+            api().pin("x", true)
+            org.junit.Assert.fail("expected Rejected")
+        } catch (e: ApiException.Rejected) {
+            assertEquals(404, e.status)
+        }
+    }
+
+    @Test fun pinnedListAsksForPinnedTrue() = runBlocking<Unit> {
+        server.enqueue(json("""{"items":[],"nextCursor":null}"""))
+        api().clips(q = "x", cursor = null, limit = 50, pinned = true)
+        assertEquals("/api/clips?q=x&limit=50&pinned=true", take().path)
+    }
+
     @Test fun deleteOther4xxStillThrows() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(401))
         assertThrowsApi<ApiException.Unauthorized> { api().delete("x") }

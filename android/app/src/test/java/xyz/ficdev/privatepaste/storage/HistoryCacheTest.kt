@@ -34,6 +34,54 @@ class HistoryCacheTest {
         sourceDeviceId = "d1", lastCopiedAt = base.plusSeconds(minute * 60),
     )
 
+    private fun pinnedClip(id: String, seq: Long, minute: Long, pinnedMinute: Long) =
+        clip(id, seq, minute).copy(pinnedAt = base.plusSeconds(pinnedMinute * 60).toString())
+
+    @Test
+    fun pinnedClipsSurviveTrimmingBeyondMax() {
+        val c = cache(max = 3)
+        c.upsert(pinnedClip("old-pin", 1, minute = 1, pinnedMinute = 50), fromSync = true)
+        for (i in 2L..10L) c.upsert(clip("n$i", i), fromSync = true)
+        val ids = c.items.value.map { it.id }
+        assertTrue("old-pin" in ids)
+        assertEquals("the pin plus the newest 3 others", 4, ids.size)
+        assertEquals(listOf("n10", "n9", "n8", "old-pin"), ids)
+        // An old pinned clip arriving late is kept too.
+        assertTrue(c.upsert(pinnedClip("late-pin", 11, minute = 0, pinnedMinute = 51), fromSync = true))
+        assertTrue(c.items.value.any { it.id == "late-pin" })
+    }
+
+    @Test
+    fun pinsBeyondMaxSurviveSaveAndReload() {
+        val c = cache(max = 2)
+        c.upsert(pinnedClip("p", 1, minute = 1, pinnedMinute = 5), fromSync = true)
+        for (i in 2L..6L) c.upsert(clip("n$i", i), fromSync = true)
+        c.save()
+        assertTrue(cache(max = 2).items.value.any { it.id == "p" })
+    }
+
+    @Test
+    fun unpinningAnOldClipLetsItFallOutOfAFullCache() {
+        val c = cache(max = 2)
+        c.upsert(pinnedClip("p", 1, minute = 1, pinnedMinute = 5), fromSync = true)
+        c.upsert(clip("a", 2), fromSync = true)
+        c.upsert(clip("b", 3), fromSync = true)
+        c.upsert(clip("c", 4), fromSync = true)
+        assertTrue(c.items.value.any { it.id == "p" })
+        assertTrue(c.upsert(clip("p", 9, minute = 1), fromSync = true))   // unpinned, newer seq
+        assertEquals(listOf("c", "b"), c.items.value.map { it.id })
+    }
+
+    @Test
+    fun pinnedIsNewestPinnedFirst() {
+        val c = cache()
+        c.upsert(pinnedClip("a", 1, minute = 9, pinnedMinute = 20), fromSync = true)
+        c.upsert(pinnedClip("b", 2, minute = 1, pinnedMinute = 30), fromSync = true)
+        c.upsert(clip("plain", 3, minute = 8), fromSync = true)
+        c.upsert(pinnedClip("c", 4, minute = 5, pinnedMinute = 10), fromSync = true)
+        assertEquals(listOf("b", "a", "c"), c.pinned().map { it.id })
+    }
+
     @Test
     fun corruptCacheStartsEmpty() {
         File(tmp.root, "cache.bin").writeBytes(ByteArray(100) { (it * 7).toByte() })

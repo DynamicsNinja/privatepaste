@@ -41,6 +41,17 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     /// <summary>Snapshot, newest first (LastCopiedAt desc, then Seq desc).</summary>
     public IReadOnlyList<CachedClip> Items { get { lock (_gate) return _items.ToArray(); } }
 
+    /// <summary>Snapshot of the pinned clips, newest pinned first (PinnedAt desc, then Seq desc).</summary>
+    public IReadOnlyList<CachedClip> Pinned
+    {
+        get
+        {
+            lock (_gate)
+                return _items.Where(i => i.Clip.PinnedAt is not null)
+                    .OrderByDescending(i => i.Clip.PinnedAt).ThenByDescending(i => i.Clip.Seq).ToArray();
+        }
+    }
+
     /// <summary>
     /// Adds or replaces a clip. False when nothing changed (not newer than what is held, or already deleted).
     /// <paramref name="fromSync"/> is false for the response to this device's own upload (see <see cref="HighestSeq"/>).
@@ -67,7 +78,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             _items.RemoveAll(i => i.Clip.Id == clip.Id);
             _items.Add(new CachedClip(clip, thumbnailPng));
             _items.Sort(Compare);
-            if (_items.Count > capacity) _items.RemoveRange(capacity, _items.Count - capacity);
+            Trim(_items, capacity);
             return true;
         }
     }
@@ -153,7 +164,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             if (snap?.Items is null) return cache;
             var loaded = snap.Items.Where(i => i?.Clip is not null).ToList();
             loaded.Sort(Compare);
-            if (loaded.Count > capacity) loaded.RemoveRange(capacity, loaded.Count - capacity);
+            Trim(loaded, capacity);
             cache._items.AddRange(loaded);
             cache._highestSeq = snap.HighestSeq;
             cache._lastAppliedAt = snap.LastAppliedAt;
@@ -194,6 +205,18 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     {
         var c = b.Clip.LastCopiedAt.CompareTo(a.Clip.LastCopiedAt);
         return c != 0 ? c : b.Clip.Seq.CompareTo(a.Clip.Seq);
+    }
+
+    /// <summary>
+    /// Drops the oldest clips beyond <paramref name="capacity"/> from a sorted list, except pinned ones: the Pinned tab must
+    /// show every pin, however old the clip.
+    /// </summary>
+    private static void Trim(List<CachedClip> sorted, int capacity)
+    {
+        if (sorted.Count <= capacity) return;
+        var keep = sorted.Take(capacity).Concat(sorted.Skip(capacity).Where(i => i.Clip.PinnedAt is not null)).ToList();
+        sorted.Clear();
+        sorted.AddRange(keep);
     }
 
     private static void TrimTombstones(Dictionary<Guid, long> t)

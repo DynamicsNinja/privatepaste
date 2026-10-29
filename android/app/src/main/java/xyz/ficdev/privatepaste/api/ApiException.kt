@@ -6,7 +6,7 @@ sealed class ApiException(message: String, cause: Throwable? = null) : Exception
     class Unauthorized : ApiException("Unauthorized")
 
     /** Any other 4xx (400, 404, 413, ...): the server refused the request; retrying will not help. */
-    class Rejected(val status: Int, message: String) : ApiException(message)
+    class Rejected(val status: Int, message: String, val title: String? = null) : ApiException(message)
 
     /** 429 on login. */
     class RateLimited : ApiException("Too many attempts")

@@ -64,6 +64,26 @@ public class DesktopRenderTests
         Render(new SettingsWindow { DataContext = vm }, theme, "settings");
     }, CancellationToken.None);
 
+    [Theory]
+    [InlineData("dark", true)]
+    [InlineData("light", true)]
+    [InlineData("dark", false)]
+    [InlineData("light", false)]
+    public Task Settings_window_renders_private_copies(string theme, bool canIdentify) => Session.Value.Dispatch(() =>
+    {
+        var vm = new SettingsViewModel("http://localhost:5299", "PC-work", "Ctrl+Shift+V", true, "Start with Windows",
+            _ => { }, _ => { }, () => Task.CompletedTask,
+            blockedApps: canIdentify ? ["keepassxc", "com.agilebits.onepassword7"] : [],
+            recentSourceApps: () => ["chrome", "notepad"], setBlockedApps: _ => { }, canIdentifySourceApp: canIdentify);
+        Render(new SettingsWindow { DataContext = vm }, theme, canIdentify ? "settings-private" : "settings-private-unavailable", w =>
+        {
+            var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            Assert.Contains("Private copies", texts);
+            Assert.Equal(canIdentify, texts.Contains("Ignore copies from these apps"));
+            Assert.Equal(!canIdentify, texts.Contains(SettingsViewModel.CannotBlockAppsMessage));
+        });
+    }, CancellationToken.None);
+
     [Fact]
     public Task Toast_window_renders() => Session.Value.Dispatch(() =>
     {
@@ -195,6 +215,43 @@ public class DesktopRenderTests
         Assert.True(vm.Items[0].IsNewest);
     }, CancellationToken.None);
 
+    [Theory]
+    [InlineData("dark", false)]
+    [InlineData("light", false)]
+    [InlineData("dark", true)]
+    [InlineData("light", true)]
+    public Task Popup_window_renders_pins_and_tabs(string theme, bool pinnedTab) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        PrivatePaste.Protocol.ClipDto Clip(int seq, string text, int minutes, string device, string platform, int? pinnedMinutes = null) =>
+            new(Guid.NewGuid(), seq, PrivatePaste.Protocol.ClipKind.Text, text, "h" + seq, null, null, 100, null, device, now.AddMinutes(-minutes))
+            {
+                SourceDevicePlatform = platform,
+                PinnedAt = pinnedMinutes is { } p ? now.AddMinutes(-p) : null,
+            };
+        cache.Upsert(Clip(5, "git commit -m \"fix(client): sync engine resume\"", 0, "PC-work", "windows"));
+        cache.Upsert(Clip(4, "Meeting room code 4471", 12, "MacBook", "macos", pinnedMinutes: 10));
+        cache.Upsert(Clip(3, "ssh deploy@paste.example.com", 90, "ThinkPad", "linux"));
+        cache.Upsert(Clip(2, "Wi-Fi password for the guest network", 600, "Phone", "android", pinnedMinutes: 500));
+        cache.Upsert(Clip(1, "IBAN DE89 3704 0044 0532 0130 00", 3000, "Web", "web", pinnedMinutes: 2000));
+        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+            _ => Task.CompletedTask, TimeProvider.System);
+        if (pinnedTab) vm.SwitchTab();
+        vm.MoveSelection(1);
+        Render(new PopupWindow { DataContext = vm }, theme, pinnedTab ? "popup-pinned" : "popup-history", w =>
+        {
+            Assert.Equal(pinnedTab ? 3 : 5, vm.Items.Count);
+            // Nothing in the popup may be focusable (the Windows popup never takes the focus).
+            Assert.All(w.GetVisualDescendants().OfType<Button>(), b => Assert.False(b.Focusable));
+            Assert.Equal(vm.Items.Count, w.GetVisualDescendants().OfType<Button>().Count(b => b.Classes.Contains("pin")));
+            Assert.Equal(pinnedTab ? "Tab for History" : "Tab for Pinned",
+                w.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text?.StartsWith("Enter to paste") == true).Text!
+                    .Split("   ")[1]);
+        });
+    }, CancellationToken.None);
+
     /// <summary>
     /// The README hero's popup, from the demo history in scripts/readme/demo.json (see scripts/readme/README.md).
     /// Runs only when PP_README_DEMO names that file; saves readme-popup-{theme}.png into PP_SCREENSHOT_DIR.
@@ -220,6 +277,8 @@ public class DesktopRenderTests
                 null, c.GetProperty("device").GetString()!, now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32()))
             {
                 SourceDevicePlatform = c.GetProperty("platform").GetString(),
+                PinnedAt = c.TryGetProperty("pinned", out var pinned) && pinned.GetBoolean()
+                    ? now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32() + 1) : null,
             });
         }
         var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
@@ -260,6 +319,19 @@ public class DesktopRenderTests
             Assert.Equal((string?)svg.Root!.Element(svgNs + "path")!.Attribute("d"), geometry.Value.Trim());
             Assert.Equal(icon.Label, (string?)svg.Root.Attribute("aria-label"));
         }
+    }
+
+    [Fact]
+    public void Pin_geometry_matches_the_branding_svg()
+    {
+        var root = PrivatePaste.Tests.Web.PlatformIconsTests.RepoRoot();
+        var theme = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "PrivatePaste.Desktop", "Theme", "NightVault.axaml"));
+        System.Xml.Linq.XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        System.Xml.Linq.XNamespace svgNs = "http://www.w3.org/2000/svg";
+        var geometry = theme.Descendants().Single(e => e.Name.LocalName == "StreamGeometry"
+                                                       && (string?)e.Attribute(x + "Key") == "PpIconPin");
+        var svg = System.Xml.Linq.XDocument.Load(Path.Combine(root, "branding", "ui-icons", "pin.svg"));
+        Assert.Equal((string?)svg.Root!.Element(svgNs + "path")!.Attribute("d"), geometry.Value.Trim());
     }
 
     private static SignInWindow NewSignIn() => new()

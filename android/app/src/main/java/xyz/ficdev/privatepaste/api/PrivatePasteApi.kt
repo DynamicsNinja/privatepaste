@@ -90,11 +90,12 @@ class PrivatePasteApi(
         return execute(request, uploadTimeout(bytes.size.toLong())) { decode(it, ClipDto.serializer()) }
     }
 
-    suspend fun clips(q: String?, cursor: String?, limit: Int = 50): ClipPage {
+    suspend fun clips(q: String?, cursor: String?, limit: Int = 50, pinned: Boolean = false): ClipPage {
         val url = url("api/clips") {
             if (!q.isNullOrEmpty()) addQueryParameter("q", q)
             if (!cursor.isNullOrEmpty()) addQueryParameter("cursor", cursor)
             addQueryParameter("limit", limit.toString())
+            if (pinned) addQueryParameter("pinned", "true")
         }
         return execute(get(url), requestTimeout) { decode(it, ClipPage.serializer()) }
     }
@@ -105,6 +106,13 @@ class PrivatePasteApi(
         return execute(request, requestTimeout, allowNotFound = true) {
             if (it.code == 404) null else decode(it, ClipDto.serializer())
         }
+    }
+
+    /** Pins or unpins a clip (history only: it never reaches a clipboard). A missing clip is a 404 [ApiException.Rejected]. */
+    suspend fun pin(id: String, pinned: Boolean): ClipDto {
+        val url = url("api/clips") { addPathSegment(id); addPathSegment("pin") }
+        val request = if (pinned) request(url).post(ByteArray(0).toRequestBody()).build() else request(url).delete().build()
+        return execute(request, requestTimeout) { decode(it, ClipDto.serializer()) }
     }
 
     /** False if the clip no longer exists. */
@@ -222,17 +230,22 @@ class PrivatePasteApi(
         401 -> ApiException.Unauthorized()
         429 -> if (isLogin) ApiException.RateLimited() else ApiException.Transient("Too many requests")
         408 -> ApiException.Transient("Request timed out")
-        in 400..499 -> ApiException.Rejected(code, problemMessage(response) ?: "Request failed ($code)")
+        in 400..499 -> {
+            val problem = problem(response)
+            ApiException.Rejected(code, problem.detail ?: problem.title ?: "Request failed ($code)", problem.title)
+        }
         else -> ApiException.Transient("Server error ($code)")
     }
 
-    /** RFC 7807: `detail`, falling back to `title`. */
-    private fun problemMessage(response: Response): String? = try {
+    private class Problem(val title: String?, val detail: String?)
+
+    /** RFC 7807 `title` and `detail`; the message shown is the detail, falling back to the title. */
+    private fun problem(response: Response): Problem = try {
         val obj = Json.parseToJsonElement(response.body.string()).jsonObject
         fun text(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
-        text("detail") ?: text("title")
+        Problem(text("title"), text("detail"))
     } catch (_: Exception) {
-        null
+        Problem(null, null)
     }
 
     companion object {

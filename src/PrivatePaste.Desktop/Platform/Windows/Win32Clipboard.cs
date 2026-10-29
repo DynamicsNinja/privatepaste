@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -26,6 +27,10 @@ internal static class Win32Clipboard
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsClipboardFormatAvailable(uint format);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint RegisterClipboardFormat(string lpszFormat);
 
+    [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr GlobalFree(IntPtr hMem);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr GlobalLock(IntPtr hMem);
@@ -34,14 +39,40 @@ internal static class Win32Clipboard
 
     public static uint SequenceNumber => GetClipboardSequenceNumber();
 
+    /// <summary>The id of a registered clipboard format by name (the same name always gives the same id); 0 if registration fails.</summary>
+    public static uint RegisterFormat(string name) => RegisterClipboardFormat(name);
+
+    /// <summary>
+    /// The app that put the current content on the clipboard: its executable name without path or extension, lowercase.
+    /// Null when no window owns the clipboard (apps that open it with a NULL owner) or the process is gone or off limits.
+    /// </summary>
+    public static string? ClipboardOwnerProcessName() => ProcessNameOfWindow(GetClipboardOwner());
+
+    /// <summary>The app in front right now, named like <see cref="ClipboardOwnerProcessName"/>.</summary>
+    public static string? ForegroundProcessName() => ProcessNameOfWindow(GetForegroundWindow());
+
+    // Only the process name is looked up, never a window title.
+    private static string? ProcessNameOfWindow(IntPtr window)
+    {
+        if (window == IntPtr.Zero || GetWindowThreadProcessId(window, out var pid) == 0 || pid == 0) return null;
+        try
+        {
+            using var process = Process.GetProcessById((int)pid);
+            var name = process.ProcessName;
+            return string.IsNullOrEmpty(name) ? null : name.ToLowerInvariant();
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or Win32Exception) { return null; }
+    }
+
     public sealed class Session : IDisposable
     {
         private bool _open;
 
+        /// <param name="owner">The window that will own what is written; NULL (the default) leaves it without an owner.</param>
         /// <exception cref="ClipboardBusyException">Another process holds the clipboard.</exception>
-        public Session()
+        public Session(IntPtr owner = default)
         {
-            if (!OpenClipboard(IntPtr.Zero)) throw new ClipboardBusyException();
+            if (!OpenClipboard(owner)) throw new ClipboardBusyException();
             _open = true;
         }
 

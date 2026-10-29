@@ -4,6 +4,7 @@ using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Cache;
 using PrivatePaste.Client.Core.Images;
 using PrivatePaste.Client.Core.Platform;
+using PrivatePaste.Client.Core.Settings;
 using PrivatePaste.Client.Core.Sync;
 using PrivatePaste.Protocol;
 using PrivatePaste.Tests.Images;
@@ -26,6 +27,8 @@ public partial class ClipboardCoordinatorTests : IDisposable
     private EchoGuard _echo = null!;
     private ClipboardCoordinator _c = null!;
     private bool _paused;
+    private List<string> _blockedApps = [];
+    private readonly List<string> _log = [];
 
     public ClipboardCoordinatorTests() => Directory.CreateDirectory(_dir);
 
@@ -43,7 +46,8 @@ public partial class ClipboardCoordinatorTests : IDisposable
         _cache = new HistoryCache(Path.Combine(_dir, "h.enc"), _key);
         _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
         _echo = new EchoGuard(_time, TimeSpan.FromSeconds(30));
-        _c = new ClipboardCoordinator(_clip, _api, _cache, _queue, _echo, _notes, _time, () => _paused);
+        _c = new ClipboardCoordinator(_clip, _api, _cache, _queue, _echo, _notes, _time, () => _paused,
+            app => BlockedApps.Matches(_blockedApps, app), _log.Add);
     }
 
     private async Task<List<ClipDto>> ServerClipsAsync()
@@ -256,6 +260,124 @@ public partial class ClipboardCoordinatorTests : IDisposable
         bmp.SetPixel(0, 0, new SKColor(255, 0, 0, 255));
         using var data = bmp.Encode(SKEncodedImageFormat.Png, 100);
         Assert.Equal("8d833d22068fdf91eecbd0d310208548d1f9418c6513c572a7c7d01fc696c49a", ImageHashing.HashPng(data.ToArray()));
+    }
+
+    // ---------------------------------------------------------------- private copies and blocked apps
+
+    [Fact]
+    public async Task A_private_copy_is_not_uploaded_queued_or_cached()
+    {
+        await StartAsync();
+        _clip.Current = new ClipboardContent.Text("hunter2") { IsPrivate = true, SourceApp = "keepass" };
+        await _c.OnClipboardChangedAsync(default);
+        _handler.Offline = true;   // offline, it must not be queued either
+        _clip.Current = new ClipboardContent.Text("hunter3") { IsPrivate = true };
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Image(TestImages.MakePng(4, 4).ToArray()) { IsPrivate = true };
+        await _c.OnClipboardChangedAsync(default);
+        _handler.Offline = false;
+        await _c.FlushQueueAsync(default);
+
+        Assert.Empty(_handler.Uploads);
+        Assert.Empty(await ServerClipsAsync());
+        Assert.Equal(0, _queue.Count);
+        Assert.Empty(_cache.Items);
+        Assert.False(File.Exists(Path.Combine(_dir, "h.enc")));
+        Assert.Empty(_notes.Messages);
+        // Exactly one fixed line per skipped copy: no content, length or app name.
+        Assert.Equal(Enumerable.Repeat("Skipped a copy marked private.", 3), _log);
+    }
+
+    [Fact]
+    public async Task A_copy_from_a_blocked_app_is_skipped_case_insensitively()
+    {
+        await StartAsync();
+        _blockedApps = ["KeePass.exe", "com.agilebits.onepassword7"];
+        _clip.Current = new ClipboardContent.Text("from keepass") { SourceApp = "keepass" };
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Text("from 1password") { SourceApp = "com.agilebits.onepassword7" };
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Text("from notepad") { SourceApp = "notepad" };
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Text("from unknown");
+        await _c.OnClipboardChangedAsync(default);
+
+        Assert.Equal(["from unknown", "from notepad"], (await ServerClipsAsync()).Select(c => c.Text));
+        Assert.Equal(["from unknown", "from notepad"], _cache.Items.Select(i => i.Clip.Text));
+        Assert.Equal(["Skipped a copy from a blocked app.", "Skipped a copy from a blocked app."], _log);   // nothing for synced copies
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Resuming_with_a_private_or_blocked_copy_on_the_clipboard_does_not_hash_it(bool isPrivate)
+    {
+        await StartAsync();
+        _blockedApps = ["keepass"];
+        _paused = true;
+        _clip.Current = new ClipboardContent.Text("pw") { IsPrivate = isPrivate, SourceApp = isPrivate ? null : "keepass" };
+        await _c.OnResumedAsync(default);
+        _paused = false;
+
+        // Had it been remembered as the last local copy, the same text copied normally would be taken for a duplicate.
+        _clip.Current = new ClipboardContent.Text("pw");
+        await _c.OnClipboardChangedAsync(default);
+        Assert.Single(_handler.Uploads);
+        Assert.Empty(_log);   // resuming reads the clipboard; it is not a copy
+    }
+
+    [Fact]
+    public async Task A_private_copy_still_counts_as_the_newest_local_copy()
+    {
+        await StartAsync();
+        var readAt = _time.GetUtcNow();
+        _clip.Current = new ClipboardContent.Text("secret") { IsPrivate = true };
+        await _c.OnClipboardChangedAsync(default);
+        Assert.Equal(readAt, _c.LastLocalCaptureAt);
+    }
+
+    [Fact]
+    public async Task Copying_the_previous_text_again_after_a_private_copy_uploads_it_again()
+    {
+        await StartAsync();
+        _clip.Current = new ClipboardContent.Text("address");
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Text("secret") { IsPrivate = true };
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Text("address");
+        await _c.OnClipboardChangedAsync(default);
+        Assert.Equal(2, _handler.Uploads.Count);   // it is on the clipboard again, so it is the newest copy again
+    }
+
+    [Fact]
+    public async Task RecentSourceApps_keeps_the_last_ten_distinct_newest_first()
+    {
+        await StartAsync();
+        _blockedApps = ["app3"];
+        for (var i = 1; i <= 12; i++)
+        {
+            _clip.Current = new ClipboardContent.Text("t" + i) { SourceApp = "app" + i, IsPrivate = i == 5 };
+            await _c.OnClipboardChangedAsync(default);
+        }
+        _clip.Current = new ClipboardContent.Text("again") { SourceApp = "app4" };
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Text("no app");
+        await _c.OnClipboardChangedAsync(default);
+
+        Assert.Equal(["app4", "app12", "app11", "app10", "app9", "app8", "app7", "app6", "app5", "app3"], _c.RecentSourceApps);
+    }
+
+    [Fact]
+    public async Task A_410_drops_the_queued_clip_without_a_toast()
+    {
+        await StartAsync();
+        _queue.Enqueue(new ClipboardContent.Text("cleared"), _time.GetUtcNow());
+        _queue.Enqueue(new ClipboardContent.Text("ok"), _time.GetUtcNow());
+        _handler.Statuses.Enqueue(410);
+        await _c.FlushQueueAsync(default);
+        Assert.Equal(0, _queue.Count);
+        Assert.Empty(_notes.Messages);
+        Assert.Equal("ok", Assert.Single(await ServerClipsAsync()).Text);
     }
 
     [Fact]

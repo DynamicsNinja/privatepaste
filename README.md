@@ -33,7 +33,10 @@
 ## Why PrivatePaste
 
 - **Copy here, paste there.** Text, links and images you copy show up on the clipboard of your other devices a moment later.
-- **A history you can search.** Every clip is kept until you delete it, with the device it came from, so the thing you copied last Tuesday is still one search away.
+- **A history you can search.** Every clip is kept until you delete it (or clear the history), with the device it came from, so the thing you copied last Tuesday is still one search away.
+- **Private copies stay private.** On the desktop apps, a copy that a password manager marks as private never leaves your computer: it isn't uploaded, cached or shown anywhere. The desktop app can also ignore copies from apps you name. Android only sends what you send or share yourself. [Details](docs/desktop.md#private-copies)
+- **Pinned clips.** Pin the clips you reuse. They get their own tab on every device and survive clearing and auto-delete.
+- **Clear it when you want.** Clear the history from the web UI, or let the server delete clips older than 7, 30 or 90 days. Pinned clips stay. Off by default: otherwise clips are kept until you delete them.
 - **Only on your server.** One small container. No accounts, no cloud relay, no push service, no analytics, no third-party requests.
 - **Encrypted at rest.** The database (SQLite3 Multiple Ciphers) and the stored images are encrypted with a key that only you hold.
 - **Native on every device.** A tray app with a history popup (Ctrl+Shift+V) on Windows, macOS and Linux, an Android app with a Quick Settings tile and a Share target, and a web UI for everything else.
@@ -100,15 +103,16 @@ Each device signs in with the server password once and gets its own device token
 - The password is hashed with Argon2id. Sign-in is rate-limited per client IP.
 - Every device has its own token. Revoke a lost device from the web UI and it is signed out at once.
 - Only HTTPS servers are accepted by the apps (plain HTTP only for localhost).
+- On the desktop apps, copies that password managers mark as private, and copies from apps on the blocklist, are never uploaded. This depends on the app marking its copies; see [Private copies](docs/desktop.md#private-copies) for what is covered. Android sends only what you send or share yourself.
 - The server can read your clips: this is encryption at rest, not end-to-end encryption. Run it on a machine you trust.
 
 ## Documentation
 
 | Guide | What's in it |
 |---|---|
-| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, changing the password, backups, proxies, local development |
-| [Desktop app](docs/desktop.md) | Install, upgrade, hotkey, pause, uninstall, building from source; macOS and Linux notes |
-| [Android app](docs/android.md) | Install, background delivery, battery settings by phone maker, building and releasing |
+| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, changing the password, backups, clearing history and auto-delete, proxies, local development |
+| [Desktop app](docs/desktop.md) | Install, upgrade, hotkey, pause, pinned clips, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
+| [Android app](docs/android.md) | Install, pinned clips, background delivery, battery settings by phone maker, building and releasing |
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 

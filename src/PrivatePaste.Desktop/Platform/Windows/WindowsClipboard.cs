@@ -26,12 +26,16 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
     private readonly object _writeLock = new();
     private uint _lastSequence = Win32Clipboard.SequenceNumber;
     private readonly ClipboardRearm _rearm = new();   // guarded by _writeLock
+    // The foreground app when the watcher last saw a change: the best guess at the source for copies whose clipboard has no owner window.
+    private string? _foregroundAtChange;
+    private readonly uint[] _markerIds;
 
     public event EventHandler? Changed;
 
     public WindowsClipboard(Action<string>? log = null)
     {
         _log = log;
+        _markerIds = PrivateCopyMarkers.WindowsFormats.Select(RegisterMarker).ToArray();
         _watcher = new Thread(Watch) { IsBackground = true, Name = "PrivatePaste clipboard watcher" };
         _watcher.Start();
     }
@@ -49,12 +53,34 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
                     changed = now != _lastSequence;
                     _lastSequence = now;
                 }
-                if (changed) Changed?.Invoke(this, EventArgs.Empty);
+                if (changed)
+                {
+                    Volatile.Write(ref _foregroundAtChange, SafeForeground());
+                    Changed?.Invoke(this, EventArgs.Empty);
+                }
             }
             catch (Exception e)
             {
                 _log?.Invoke("Clipboard watcher error: " + e.GetType().Name + ": " + e.Message);
             }
+        }
+    }
+
+    // A format that fails to register is skipped (not treated as private); said once, with no clipboard content.
+    private uint RegisterMarker(string name)
+    {
+        var id = Win32Clipboard.RegisterFormat(name);
+        if (id == 0) _log?.Invoke($"Couldn't register clipboard format {name}; private-copy detection may be incomplete.");
+        return id;
+    }
+
+    private string? SafeForeground()
+    {
+        try { return Win32Clipboard.ForegroundProcessName(); }
+        catch (Exception e)
+        {
+            _log?.Invoke("Could not tell the foreground app: " + e.GetType().Name);
+            return null;
         }
     }
 
@@ -65,12 +91,19 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
             var busy = false;
             var captured = await ClipboardRetry.RunAsync(CaptureOnce, log: _log, ct: ct, gaveUp: () => busy = true)
                 .ConfigureAwait(false);
+            var foreground = Volatile.Read(ref _foregroundAtChange);
             if (busy)
             {
                 Rearm(sequence);
                 return null;
             }
-            return captured is null ? null : ClipboardSelector.Select(captured, _log);   // converts outside the session
+            if (captured is null) return null;
+            var content = ClipboardSelector.Select(captured.Formats, _log);   // converts outside the session
+            return content is null ? null : content with
+            {
+                IsPrivate = PrivateCopyMarkers.IsPrivate(captured.Markers),
+                SourceApp = captured.Owner ?? foreground,
+            };
         }, ct);
 
     /// <summary>Makes the watcher raise this change again on its next tick, unless a newer change is already known.</summary>
@@ -120,17 +153,30 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
     }
 
     /// <summary>Copies the needed formats' raw bytes while the clipboard is open; no decoding here.</summary>
-    private static Dictionary<ClipboardFormat, byte[]> CaptureOnce()
+    private Captured CaptureOnce()
     {
         using var session = new Win32Clipboard.Session();
-        return ClipboardSelector.Capture(f => session.Get(f switch
+        var formats = ClipboardSelector.Capture(f => session.Get(f switch
         {
             ClipboardFormat.Png => Win32Clipboard.PngFormat,
             ClipboardFormat.DibV5 => Win32Clipboard.CF_DIBV5,
             ClipboardFormat.Dib => Win32Clipboard.CF_DIB,
             _ => Win32Clipboard.CF_UNICODETEXT,
         }));
+
+        // Only the four marker formats are looked at. Presence matters even when there are no bytes to read.
+        var markers = new Dictionary<string, byte[]?>();
+        for (var i = 0; i < _markerIds.Length; i++)
+            if (_markerIds[i] != 0 && session.Has(_markerIds[i])) markers[PrivateCopyMarkers.WindowsFormats[i]] = session.Get(_markerIds[i]);
+
+        // Looked up while the clipboard is held, so the owner is the one who wrote what was just copied.
+        string? owner = null;
+        try { owner = Win32Clipboard.ClipboardOwnerProcessName(); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { /* fall back to the foreground app */ }
+        return new Captured(formats, markers, owner);
     }
+
+    private sealed record Captured(Dictionary<ClipboardFormat, byte[]> Formats, Dictionary<string, byte[]?> Markers, string? Owner);
 
     /// <summary>LF to CRLF without doubling existing CRLF.</summary>
     private static string ToCrlf(string s) => s.Replace("\r\n", "\n").Replace("\n", "\r\n");

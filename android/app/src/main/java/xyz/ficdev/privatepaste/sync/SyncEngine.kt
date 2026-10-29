@@ -52,7 +52,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Catch-up applies a clip only when something was applied before (`lastAppliedAt` set, so the first sync after
  * sign-in is history only), the clip is the top of the history, it is newer than `lastAppliedAt` and than
- * [LocalCaptureClock.lastLocalCaptureAt], and the offline queue is empty.
+ * [LocalCaptureClock.lastLocalCaptureAt], the offline queue is empty, and it is not a clip already held with the same
+ * copy time (a pin change).
  *
  * Cache saves (and thumbnail pruning) are throttled to one every 2 s, plus one when a link ends and on [stop].
  * All timing uses [clock] and the dispatcher of [scope]; in tests both follow virtual time. Blocking file IO runs on
@@ -323,6 +324,9 @@ class SyncEngine(
 
     private suspend fun catchUp() {
         val caught = ArrayList<ClipDto>()
+        // A clip already held with the same copy time came back for another reason (a pin or unpin): it is not a copy, so it
+        // never goes to the clipboard, even when it is the newest clip and was never applied here (as on the desktop).
+        val heldCopiedAt = cache.items.value.associate { it.id to it.lastCopiedAt }
         while (true) {
             val before = cache.highestSeq
             val page = api.sync(before)
@@ -347,7 +351,10 @@ class SyncEngine(
         val present = items.associate { it.id to it.seq }
         // A null source device (copied or restored in the web UI) is never this device.
         val newest = caught
-            .filter { it.sourceDeviceId != ownDeviceId && present[it.id] == it.seq }
+            .filter { clip ->
+                clip.sourceDeviceId != ownDeviceId && present[clip.id] == clip.seq &&
+                    heldCopiedAt[clip.id].let { held -> held == null || clip.lastCopiedAt.isAfter(held) }
+            }
             .maxWithOrNull(compareBy<ClipDto> { it.lastCopiedAt }.thenBy { it.seq })
             ?: return
         val top = items.firstOrNull() ?: return
