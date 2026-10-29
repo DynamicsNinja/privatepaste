@@ -22,6 +22,7 @@
   <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=desktop-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=desktop-v*&label=desktop&style=flat-square&color=5B45D6" alt="Desktop release"></a>
   <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=android-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=android-v*&label=android&style=flat-square&color=5B45D6" alt="Android release"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-B7A5FF?style=flat-square" alt="Platforms: Windows, macOS, Linux, Android">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-B7A5FF?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/self--hosted-Docker-B7A5FF?style=flat-square&logo=docker&logoColor=white" alt="Self-hosted with Docker">
 </p>
 
@@ -119,3 +120,7 @@ Each device signs in with the server password once and gets its own device token
 ## Built with
 
 [ASP.NET Core](https://dotnet.microsoft.com/apps/aspnet) on .NET 10 and [SQLite3 Multiple Ciphers](https://utelle.github.io/SQLite3MultipleCiphers/) on the server, [Avalonia](https://avaloniaui.net/) for the desktop app, Kotlin and Jetpack Compose for Android, and the [Sora](https://fonts.google.com/specimen/Sora) typeface.
+
+## License
+
+[MIT](LICENSE). The bundled Sora font is under the [SIL Open Font License](src/PrivatePaste.Server/wwwroot/fonts/OFL.txt).

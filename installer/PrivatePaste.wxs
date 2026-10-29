@@ -102,7 +102,7 @@
     <UIRef Id="PrivatePaste_UI" />
   </Package>
 
-  <!-- WixUI_Minimal without the licence page (the repo has no LICENSE): Welcome, progress, finish. -->
+  <!-- WixUI_Minimal without the licence page (the MIT licence needs no click-through): Welcome, progress, finish. -->
   <Fragment>
     <UI Id="PrivatePaste_UI">
       <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
