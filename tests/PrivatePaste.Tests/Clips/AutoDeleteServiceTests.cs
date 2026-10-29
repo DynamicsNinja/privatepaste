@@ -1,4 +1,7 @@
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using PrivatePaste.Protocol;
 using PrivatePaste.Server.Clips;
@@ -10,7 +13,8 @@ public class AutoDeleteServiceTests
 {
     private static readonly DeviceIdentity Device = new(null, "test", "windows");
 
-    private sealed record Rig(PrivatePasteFactory F, SettingsRepository Settings, ClipService Clips, AutoDeleteService Service)
+    private sealed record Rig(PrivatePasteFactory F, SettingsRepository Settings, ClipService Clips,
+        ClipRepository Repo, AutoDeleteService Service)
     {
         // Backfills older than the auto-delete age are refused, so the setting is lifted while seeding old clips.
         public async Task<ClipDto> AddAsync(string text, TimeSpan age)
@@ -22,16 +26,19 @@ public class AutoDeleteServiceTests
         }
 
         public async Task<HashSet<string?>> TextsAsync() =>
-            (await F.Services.GetRequiredService<ClipRepository>().ListAsync(null, null, 100)).Items.Select(c => c.Text).ToHashSet();
+            (await Repo.ListAsync(null, null, 100)).Items.Select(c => c.Text).ToHashSet();
     }
 
     private static Rig NewRig(PrivatePasteFactory f)
     {
-        _ = f.Server; // boots the host so services exist
-        var sp = f.Services;
+        // The host's own AutoDeleteService shares the fake clock and would also run on Advance, so drop it:
+        // only the instance built below may delete anything.
+        var app = f.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+            s.RemoveAll<IHostedService>()));
+        var sp = app.Services;
         var settings = sp.GetRequiredService<SettingsRepository>();
         var clips = sp.GetRequiredService<ClipService>();
-        return new Rig(f, settings, clips,
+        return new Rig(f, settings, clips, sp.GetRequiredService<ClipRepository>(),
             new AutoDeleteService(settings, clips, f.Clock, NullLogger<AutoDeleteService>.Instance));
     }
 
@@ -90,8 +97,12 @@ public class AutoDeleteServiceTests
 
             await r.AddAsync("second", TimeSpan.FromDays(40));
             Assert.Contains("second", await r.TextsAsync());
-            f.Clock.Advance(TimeSpan.FromHours(1));
-            await WaitUntilAsync(async () => !(await r.TextsAsync()).Contains("second"));
+            // Advance until the service has parked in its delay and picks the tick up; a missed advance is retried.
+            await WaitUntilAsync(async () =>
+            {
+                f.Clock.Advance(TimeSpan.FromHours(1));
+                return !(await r.TextsAsync()).Contains("second");
+            });
         }
         finally { await r.Service.StopAsync(CancellationToken.None); }
     }
