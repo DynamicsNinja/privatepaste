@@ -1,4 +1,4 @@
-using PrivatePaste.Desktop.Platform.Windows;
+using PrivatePaste.Desktop.Platform;
 
 namespace PrivatePaste.Tests.Client;
 
@@ -53,4 +53,50 @@ public class PrivateCopyMarkersTests
     [Fact]
     public void Allowed_dword_does_not_cancel_a_blocking_marker() =>
         Assert.True(Windows(("CanIncludeInClipboardHistory", One), ("Clipboard Viewer Ignore", null)));
+
+    [Fact]
+    public void Mac_concealed_or_transient_type_is_private()
+    {
+        Assert.True(PrivateCopyMarkers.IsPrivateMac(["public.utf8-plain-text", "org.nspasteboard.ConcealedType"]));
+        Assert.True(PrivateCopyMarkers.IsPrivateMac(["org.nspasteboard.TransientType"]));
+    }
+
+    [Fact]
+    public void Mac_ordinary_or_empty_types_are_not_private()
+    {
+        Assert.False(PrivateCopyMarkers.IsPrivateMac([]));
+        Assert.False(PrivateCopyMarkers.IsPrivateMac(["public.utf8-plain-text", "org.nspasteboard.source"]));
+        Assert.False(PrivateCopyMarkers.IsPrivateMac(["org.nspasteboard.concealedtype"]));   // names are case-sensitive
+    }
+
+    private static bool Linux(string[] targets, string? value) =>
+        PrivateCopyMarkers.IsPrivateLinux(targets, _ => value);
+
+    [Fact]
+    public void Linux_password_manager_hint_secret_is_private() =>
+        Assert.True(Linux(["UTF8_STRING", "x-kde-passwordManagerHint"], "secret"));
+
+    [Fact]
+    public void Linux_hint_value_is_trimmed() =>
+        Assert.True(Linux(["x-kde-passwordManagerHint"], "secret\n"));
+
+    [Fact]
+    public void Linux_unreadable_hint_fails_closed() =>
+        Assert.True(Linux(["x-kde-passwordManagerHint"], null));
+
+    [Fact]
+    public void Linux_hint_with_another_value_is_not_private() =>
+        Assert.False(Linux(["x-kde-passwordManagerHint"], "normal"));
+
+    [Fact]
+    public void Linux_without_the_hint_is_not_private_and_reads_nothing()
+    {
+        var read = false;
+        Assert.False(PrivateCopyMarkers.IsPrivateLinux(["UTF8_STRING", "text/plain"], _ => { read = true; return "secret"; }));
+        Assert.False(read);
+    }
+
+    [Fact]
+    public void Linux_reader_that_throws_fails_closed() =>
+        Assert.True(PrivateCopyMarkers.IsPrivateLinux(["x-kde-passwordManagerHint"], _ => throw new IOException()));
 }
