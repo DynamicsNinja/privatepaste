@@ -37,6 +37,7 @@ builder.Services.AddSingleton<DeviceRepository>();
 builder.Services.AddSingleton<ConnectionHub>();
 builder.Services.AddSingleton<IClipBroadcaster>(sp => sp.GetRequiredService<ConnectionHub>());
 builder.Services.AddSingleton<ClipService>();
+builder.Services.AddHostedService<AutoDeleteService>();
 builder.Services.AddHealthChecks();
 
 // Persist the keys behind the session cookie and antiforgery tokens so a redeploy doesn't log the web UI out.
