@@ -11,14 +11,20 @@ namespace PrivatePaste.Client.Core.Sync;
 /// <summary>
 /// Decides what happens when the user copies something and when a clip arrives from another device.
 /// Failure classes for uploads: <see cref="HttpRequestException"/>, any 5xx, 408 and 429 are transient (live copy is queued,
-/// a flush counts an attempt, see <see cref="FlushQueueAsync"/>); other 4xx (400, 413, ...) are rejections (item dropped, one notification);
+/// a flush counts an attempt, see <see cref="FlushQueueAsync"/>); other 4xx (400, 413, ...) are rejections (item dropped, one notification),
+/// except a 410 for a queued clip copied before the history was cleared, which is dropped without one;
 /// <see cref="UnauthorizedApiException"/> is NOT swallowed, queued or dropped: it propagates to the caller (sync engine/host),
 /// which signs out. A queued item stays queued; a live copy that hit it is not retained.
+/// A copy marked private, or from an app <c>isBlockedApp</c> names, is ignored (see <see cref="OnClipboardChangedAsync"/>).
 /// </summary>
 public sealed class ClipboardCoordinator(
     IClipboardAccess clipboard, PrivatePasteApi api, HistoryCache cache, OutboundQueue queue,
-    EchoGuard echo, INotifier notifier, TimeProvider time, Func<bool> isPaused)
+    EchoGuard echo, INotifier notifier, TimeProvider time, Func<bool> isPaused, Func<string, bool>? isBlockedApp = null,
+    Action<string>? log = null)
 {
+    /// <summary>How many source apps <see cref="RecentSourceApps"/> remembers.</summary>
+    public const int RecentSourceAppCount = 10;
+
     public const int MaxTextBytes = 1024 * 1024;
     public const int MaxImageBytes = 20 * 1024 * 1024;
     /// <summary>A queued clip that failed this many times (transiently) moves to the back of the queue.</summary>
@@ -34,10 +40,13 @@ public sealed class ClipboardCoordinator(
     private DateTimeOffset? _ownWriteAt;
     private bool _saveFailureNotified;
     private long _lastLocalCaptureTicks;   // UTC ticks; 0 = none
+    private readonly List<string> _recentApps = [];
+    private readonly Func<string, bool> _isBlockedApp = isBlockedApp ?? (_ => false);
 
     /// <summary>
     /// When the user last copied something here that is (or will be) synced: the server time of a successful live upload,
-    /// or the copy time of a clip queued offline. A catch-up never applies a clip that is not newer than this.
+    /// or the copy time of a clip queued offline; for a private or blocked copy (never synced), the time it was read.
+    /// A catch-up never applies a clip that is not newer than this.
     /// </summary>
     public DateTimeOffset? LastLocalCaptureAt =>
         Interlocked.Read(ref _lastLocalCaptureTicks) is var t and not 0 ? new DateTimeOffset(t, TimeSpan.Zero) : null;
@@ -47,6 +56,9 @@ public sealed class ClipboardCoordinator(
 
     /// <summary>True while copies made offline still wait in the queue (they are newer than anything a catch-up brings).</summary>
     public bool HasQueuedClips => queue.Count > 0;
+
+    /// <summary>The distinct apps of the latest copies (private ones too), newest first; kept in memory only.</summary>
+    public IReadOnlyList<string> RecentSourceApps { get { lock (_recentApps) return _recentApps.ToArray(); } }
 
     public async Task OnClipboardChangedAsync(CancellationToken ct)
     {
@@ -61,6 +73,20 @@ public sealed class ClipboardCoordinator(
         try
         {
             if (isPaused()) return;
+            if (content.SourceApp is { Length: > 0 } app) RememberSourceApp(app);
+
+            // A private or blocked copy never leaves the device: no upload, queue, cache or hash. The log says only that one
+            // was skipped and why (never content, length or app), so the owner can check which password managers are caught.
+            // It is still the newest thing on this clipboard, so a catch-up must not overwrite it with an older remote clip,
+            // and the next copy of the previously synced content must count as a new copy.
+            if (IsPrivateOrBlocked(content))
+            {
+                log?.Invoke(content.IsPrivate ? "Skipped a copy marked private." : "Skipped a copy from a blocked app.");
+                RecordLocalCapture(readAt);
+                _lastLocalHash = null;
+                _ownWriteAt = null;   // our own write is no longer on the clipboard
+                return;
+            }
 
             // Cheap checks first: whitespace, then size, so oversized items never get decoded or hashed.
             if (content is ClipboardContent.Text { Value: var v } && string.IsNullOrWhiteSpace(v)) return;
@@ -145,6 +171,7 @@ public sealed class ClipboardCoordinator(
                 _lastLocalHash = content switch
                 {
                     null => null,
+                    _ when IsPrivateOrBlocked(content) => null,   // never hashed
                     ClipboardContent.Text t when string.IsNullOrWhiteSpace(t.Value) => null,
                     _ when OversizeFingerprint(content) is { } f => f,
                     ClipboardContent.Text t => ContentHash.ForText(t.Value),
@@ -186,6 +213,12 @@ public sealed class ClipboardCoordinator(
                     }
                     if (attempts < RotateAfterAttempts) return;
                     queue.MoveHeadToBack();
+                    continue;
+                }
+                catch (ApiException e) when (e.Status == HttpStatusCode.Gone)
+                {
+                    // Copied before the history was cleared (or older than the auto-delete age): cleared stays cleared, quietly.
+                    queue.Dequeue();
                     continue;
                 }
                 catch (ApiException e) when (e is not UnauthorizedApiException)
@@ -252,6 +285,21 @@ public sealed class ClipboardCoordinator(
             return true;
         }
         finally { _gate.Release(); }
+    }
+
+    private bool IsPrivateOrBlocked(ClipboardContent content) =>
+        content.IsPrivate || (content.SourceApp is { Length: > 0 } app && _isBlockedApp(app));
+
+    /// <summary>Moves <paramref name="app"/> to the front of the recent source apps, keeping at most <see cref="RecentSourceAppCount"/>.</summary>
+    private void RememberSourceApp(string app)
+    {
+        lock (_recentApps)
+        {
+            _recentApps.Remove(app);
+            _recentApps.Insert(0, app);
+            if (_recentApps.Count > RecentSourceAppCount)
+                _recentApps.RemoveRange(RecentSourceAppCount, _recentApps.Count - RecentSourceAppCount);
+        }
     }
 
     private void RecordLocalCapture(DateTimeOffset at)

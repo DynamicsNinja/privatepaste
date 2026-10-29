@@ -28,7 +28,8 @@ public sealed record SyncError(string Message, Exception Exception);
 /// is history only, which also keeps backfilled clips off the clipboard) and never on the first successful catch-up after
 /// a pause (clips copied elsewhere while paused go to history only). It never overwrites a newer local copy: the candidate
 /// must be the top of the history, newer than <c>LastAppliedAt</c> and the coordinator's <c>LastLocalCaptureAt</c>, with
-/// the offline queue empty. Live clips are applied as usual.
+/// the offline queue empty, and not a clip already held with the same copy time (a pin change). Live clips are applied as
+/// usual (a pin change arrives with <c>live: false</c>).
 /// </para>
 /// All waiting uses the injected <see cref="TimeProvider"/>. The backoff is reset only after a connection stayed up for one
 /// ping interval (25 s), so a server that accepts and then drops at once still sees growing delays.
@@ -309,6 +310,9 @@ public sealed class SyncEngine(
     {
         var caught = new List<ClipDto>();
         var changed = false;
+        // A clip already held with the same copy time came back for another reason (a pin or unpin): it is not a copy, so it
+        // never goes to the clipboard, even when it is the newest clip and was skipped before (e.g. after a pause).
+        var heldCopiedAt = cache.Items.ToDictionary(i => i.Clip.Id, i => i.Clip.LastCopiedAt);
         while (true)
         {
             var before = cache.HighestSeq;
@@ -335,7 +339,8 @@ public sealed class SyncEngine(
         var items = cache.Items;
         var present = items.ToDictionary(i => i.Clip.Id, i => i.Clip.Seq);
         var newest = caught
-            .Where(c => c.SourceDeviceId != ownDeviceId && present.TryGetValue(c.Id, out var seq) && seq == c.Seq)
+            .Where(c => c.SourceDeviceId != ownDeviceId && present.TryGetValue(c.Id, out var seq) && seq == c.Seq
+                        && !(heldCopiedAt.TryGetValue(c.Id, out var heldAt) && c.LastCopiedAt <= heldAt))
             .MaxBy(c => (c.LastCopiedAt, c.Seq));
         if (newest is null || isPaused()) return;
         if (coordinator.HasQueuedClips) return;
