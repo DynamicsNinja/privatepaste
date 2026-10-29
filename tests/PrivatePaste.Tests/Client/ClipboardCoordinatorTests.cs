@@ -28,6 +28,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
     private ClipboardCoordinator _c = null!;
     private bool _paused;
     private List<string> _blockedApps = [];
+    private readonly List<string> _log = [];
 
     public ClipboardCoordinatorTests() => Directory.CreateDirectory(_dir);
 
@@ -46,7 +47,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
         _echo = new EchoGuard(_time, TimeSpan.FromSeconds(30));
         _c = new ClipboardCoordinator(_clip, _api, _cache, _queue, _echo, _notes, _time, () => _paused,
-            app => BlockedApps.Matches(_blockedApps, app));
+            app => BlockedApps.Matches(_blockedApps, app), _log.Add);
     }
 
     private async Task<List<ClipDto>> ServerClipsAsync()
@@ -283,6 +284,8 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Empty(_cache.Items);
         Assert.False(File.Exists(Path.Combine(_dir, "h.enc")));
         Assert.Empty(_notes.Messages);
+        // Exactly one fixed line per skipped copy: no content, length or app name.
+        Assert.Equal(Enumerable.Repeat("Skipped a copy marked private.", 3), _log);
     }
 
     [Fact]
@@ -301,6 +304,26 @@ public partial class ClipboardCoordinatorTests : IDisposable
 
         Assert.Equal(["from unknown", "from notepad"], (await ServerClipsAsync()).Select(c => c.Text));
         Assert.Equal(["from unknown", "from notepad"], _cache.Items.Select(i => i.Clip.Text));
+        Assert.Equal(["Skipped a copy from a blocked app.", "Skipped a copy from a blocked app."], _log);   // nothing for synced copies
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Resuming_with_a_private_or_blocked_copy_on_the_clipboard_does_not_hash_it(bool isPrivate)
+    {
+        await StartAsync();
+        _blockedApps = ["keepass"];
+        _paused = true;
+        _clip.Current = new ClipboardContent.Text("pw") { IsPrivate = isPrivate, SourceApp = isPrivate ? null : "keepass" };
+        await _c.OnResumedAsync(default);
+        _paused = false;
+
+        // Had it been remembered as the last local copy, the same text copied normally would be taken for a duplicate.
+        _clip.Current = new ClipboardContent.Text("pw");
+        await _c.OnClipboardChangedAsync(default);
+        Assert.Single(_handler.Uploads);
+        Assert.Empty(_log);   // resuming reads the clipboard; it is not a copy
     }
 
     [Fact]

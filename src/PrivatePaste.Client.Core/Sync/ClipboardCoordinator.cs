@@ -19,7 +19,8 @@ namespace PrivatePaste.Client.Core.Sync;
 /// </summary>
 public sealed class ClipboardCoordinator(
     IClipboardAccess clipboard, PrivatePasteApi api, HistoryCache cache, OutboundQueue queue,
-    EchoGuard echo, INotifier notifier, TimeProvider time, Func<bool> isPaused, Func<string, bool>? isBlockedApp = null)
+    EchoGuard echo, INotifier notifier, TimeProvider time, Func<bool> isPaused, Func<string, bool>? isBlockedApp = null,
+    Action<string>? log = null)
 {
     /// <summary>How many source apps <see cref="RecentSourceApps"/> remembers.</summary>
     public const int RecentSourceAppCount = 10;
@@ -74,11 +75,13 @@ public sealed class ClipboardCoordinator(
             if (isPaused()) return;
             if (content.SourceApp is { Length: > 0 } app) RememberSourceApp(app);
 
-            // A private or blocked copy never leaves the device: no upload, queue, cache or hash, and no log of it here.
+            // A private or blocked copy never leaves the device: no upload, queue, cache or hash. The log says only that one
+            // was skipped and why (never content, length or app), so the owner can check which password managers are caught.
             // It is still the newest thing on this clipboard, so a catch-up must not overwrite it with an older remote clip,
             // and the next copy of the previously synced content must count as a new copy.
             if (IsPrivateOrBlocked(content))
             {
+                log?.Invoke(content.IsPrivate ? "Skipped a copy marked private." : "Skipped a copy from a blocked app.");
                 RecordLocalCapture(readAt);
                 _lastLocalHash = null;
                 _ownWriteAt = null;   // our own write is no longer on the clipboard
