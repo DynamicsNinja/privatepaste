@@ -69,6 +69,49 @@
       <Setter Property="StrokeLineCap" Value="Round" />
       <Setter Property="StrokeJoin" Value="Round" />
     </Style>
+    <!-- History / Pinned strip: plain borders, never focusable (the Windows popup must not take the focus). -->
+    <Style Selector="Border.tab">
+      <Setter Property="Padding" Value="14,6" />
+      <Setter Property="CornerRadius" Value="{StaticResource PpControlRadius}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Border.tab TextBlock">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource PpMuted}" />
+    </Style>
+    <Style Selector="Border.tab:pointerover">
+      <Setter Property="Background" Value="{DynamicResource PpSurface}" />
+    </Style>
+    <Style Selector="Border.tab.active">
+      <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+    </Style>
+    <Style Selector="Border.tab.active TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+    </Style>
+    <Style Selector="Button.pin">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Width" Value="30" />
+      <Setter Property="Height" Value="30" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.pin:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource PpLine}" />
+    </Style>
+    <Style Selector="Path.pinicon">
+      <Setter Property="Stroke" Value="{DynamicResource PpMuted}" />
+      <Setter Property="StrokeThickness" Value="2" />
+      <Setter Property="StrokeLineCap" Value="Round" />
+      <Setter Property="StrokeJoin" Value="Round" />
+    </Style>
+    <Style Selector="Path.pinicon.pinned">
+      <Setter Property="Stroke" Value="{DynamicResource PpAccent}" />
+    </Style>
     <Style Selector="Panel.icon Path, Panel.icon Rectangle, Panel.icon Ellipse">
       <Setter Property="Stroke" Value="{DynamicResource PpAccent}" />
       <Setter Property="StrokeThickness" Value="2" />
@@ -79,16 +122,25 @@
 
   <Border Background="{DynamicResource PpNight}" BorderBrush="{DynamicResource PpLine}" BorderThickness="1"
           CornerRadius="{StaticResource PpPanelRadius}" Padding="12">
-    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+    <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
       <TextBox x:Name="SearchBox" Text="{Binding Query}" PlaceholderText="Search history" />
 
-      <ListBox x:Name="ItemsList" Grid.Row="1" ItemsSource="{Binding Items}" SelectedIndex="{Binding SelectedIndex}"
+      <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="4">
+        <Border x:Name="HistoryTabButton" Classes="tab" Classes.active="{Binding IsHistoryTab}" Focusable="False">
+          <TextBlock Text="History" />
+        </Border>
+        <Border x:Name="PinnedTabButton" Classes="tab" Classes.active="{Binding IsPinnedTab}" Focusable="False">
+          <TextBlock Text="Pinned" />
+        </Border>
+      </StackPanel>
+
+      <ListBox x:Name="ItemsList" Grid.Row="2" ItemsSource="{Binding Items}" SelectedIndex="{Binding SelectedIndex}"
                Background="Transparent" BorderThickness="0" Padding="0" Focusable="False"
                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:PopupItem">
             <Border Classes="row" Classes.newest="{Binding IsNewest}">
-              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
                 <Border Classes="kind" VerticalAlignment="Top">
                   <Panel>
                     <Viewbox Width="18" Height="18">
@@ -113,7 +165,7 @@
                 </Border>
                 <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
                   <TextBlock Text="{Binding Preview}" TextTrimming="CharacterEllipsis" MaxLines="1" />
-                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="5">
+                  <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="5">
                     <!-- Source device platform, about the cap height of the 12px meta text. -->
                     <Viewbox x:Name="PlatformIcon" Width="13" Height="13" VerticalAlignment="Center"
                              AutomationProperties.Name="{Binding Platform.Label}" ToolTip.Tip="{Binding Platform.Label}">
@@ -122,20 +174,33 @@
                               Data="{Binding Platform.ResourceKey, Converter={x:Static views:PopupWindow.ResourceConverter}}" />
                       </Canvas>
                     </Viewbox>
-                    <TextBlock Grid.Column="1" Text="{Binding Meta}" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                    <!-- Marks a pinned clip (the button on the right toggles it). -->
+                    <Viewbox Grid.Column="1" Width="13" Height="13" VerticalAlignment="Center" IsVisible="{Binding IsPinned}">
+                      <Canvas Width="24" Height="24">
+                        <Path Classes="pinicon pinned" Data="{StaticResource PpIconPin}" />
+                      </Canvas>
+                    </Viewbox>
+                    <TextBlock Grid.Column="2" Text="{Binding Meta}" FontSize="12" Foreground="{DynamicResource PpMuted}"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                   </Grid>
                 </StackPanel>
+                <Button Grid.Column="2" Classes="pin" AutomationProperties.Name="{Binding PinLabel}" ToolTip.Tip="{Binding PinLabel}">
+                  <Viewbox Width="16" Height="16">
+                    <Canvas Width="24" Height="24">
+                      <Path Classes="pinicon" Classes.pinned="{Binding IsPinned}" Data="{StaticResource PpIconPin}" />
+                    </Canvas>
+                  </Viewbox>
+                </Button>
               </Grid>
             </Border>
           </DataTemplate>
         </ListBox.ItemTemplate>
       </ListBox>
 
-      <TextBlock x:Name="EmptyText" Grid.Row="1" Text="Nothing to paste yet." IsVisible="False"
+      <TextBlock x:Name="EmptyText" Grid.Row="2" Text="Nothing to paste yet." IsVisible="False"
                  HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource PpMuted}" />
 
-      <TextBlock Grid.Row="2" Text="Enter to paste   Esc to close" FontSize="12" Foreground="{DynamicResource PpMuted}"
+      <TextBlock Grid.Row="3" Text="{Binding FooterHint}" FontSize="12" Foreground="{DynamicResource PpMuted}"
                  HorizontalAlignment="Center" />
     </Grid>
   </Border>

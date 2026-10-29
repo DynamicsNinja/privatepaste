@@ -46,6 +46,42 @@
           </StackPanel>
         </Border>
 
+        <Border Classes="panel">
+          <StackPanel Spacing="12">
+            <TextBlock Classes="label" Text="Private copies" />
+
+            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource PpMuted}"
+                       Text="{x:Static vm:SettingsViewModel.CannotBlockAppsMessage}" IsVisible="{Binding CannotBlockApps}" />
+
+            <StackPanel Spacing="8" IsVisible="{Binding CanBlockApps}">
+              <TextBlock Text="Ignore copies from these apps" />
+              <TextBlock FontSize="12" Foreground="{DynamicResource PpMuted}" Text="No apps yet."
+                         IsVisible="{Binding HasNoBlockedApps}" />
+              <ItemsControl ItemsSource="{Binding BlockedApps}" IsVisible="{Binding HasBlockedApps}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="x:String">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+                      <TextBlock Text="{Binding}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <Button Grid.Column="1" Content="Remove" Padding="12,6"
+                              Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveBlockedAppCommand}"
+                              CommandParameter="{Binding}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding IsTypingApp}">
+                <TextBox x:Name="TypedAppBox" Text="{Binding TypedApp}" PlaceholderText="App name, like keepassxc" />
+                <Button Grid.Column="1" Content="Add" Classes="primary" Command="{Binding ConfirmTypedAppCommand}" />
+                <Button Grid.Column="2" Content="Cancel" Command="{Binding CancelTypingAppCommand}" />
+              </Grid>
+
+              <Button x:Name="AddAppButton" Content="Add" HorizontalAlignment="Left"
+                      IsVisible="{Binding !IsTypingApp}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
         <Button Classes="danger" Content="Sign out" HorizontalAlignment="Left" Command="{Binding SignOutCommand}" />
       </StackPanel>
     </ScrollViewer>

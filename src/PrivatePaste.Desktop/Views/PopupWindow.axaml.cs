@@ -50,6 +50,9 @@ public partial class PopupWindow : Window
         // Tunnel: arrows and Enter are taken before the search box (which would move the caret / swallow Enter).
         AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
         ItemsList.Tapped += OnItemsTapped;
+        AddHandler(Button.ClickEvent, OnPinClick);
+        HistoryTabButton.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.ShowTab(PopupTab.History);
+        PinnedTabButton.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.ShowTab(PopupTab.Pinned);
         if (KeepsFocusBelow)
         {
             // Nothing in it may take the keyboard focus: a focus request would try to activate the window.
@@ -82,7 +85,7 @@ public partial class PopupWindow : Window
         if (vm is null) return;
         vm.Items.CollectionChanged += OnItemsChanged;
         vm.PropertyChanged += OnViewModelChanged;
-        UpdateEmpty(vm);
+        ApplyTab(vm);
     }
 
     private void OnItemsChanged(object? sender, NotifyCollectionChangedEventArgs e) => UpdateEmpty(DataContext as PopupViewModel);
@@ -91,7 +94,14 @@ public partial class PopupWindow : Window
     {
         if (vm is null) return;
         EmptyText.IsVisible = vm.Items.Count == 0;
-        EmptyText.Text = vm.Query.Trim().Length == 0 ? "Nothing to paste yet." : "No matches.";
+        EmptyText.Text = vm.Query.Trim().Length > 0 ? "No matches."
+            : vm.Tab == PopupTab.Pinned ? "Nothing pinned yet." : "Nothing to paste yet.";
+    }
+
+    private void ApplyTab(PopupViewModel vm)
+    {
+        SearchBox.PlaceholderText = vm.Tab == PopupTab.Pinned ? "Search pinned" : "Search history";
+        UpdateEmpty(vm);
     }
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
@@ -99,6 +109,7 @@ public partial class PopupWindow : Window
         if (e.PropertyName == nameof(PopupViewModel.SelectedIndex) && sender is PopupViewModel { SelectedIndex: >= 0 } vm)
             ItemsList.ScrollIntoView(vm.SelectedIndex);
         else if (e.PropertyName == nameof(PopupViewModel.Query)) UpdateEmpty(sender as PopupViewModel);
+        else if (e.PropertyName == nameof(PopupViewModel.Tab) && sender is PopupViewModel tabbed) ApplyTab(tabbed);
     }
 
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
@@ -111,6 +122,8 @@ public partial class PopupWindow : Window
             case Key.PageDown: vm.MoveSelection(5); break;
             case Key.PageUp: vm.MoveSelection(-5); break;
             case Key.Enter: _ = vm.ActivateSelectedAsync(); break;
+            case Key.Tab: vm.SwitchTab(); break;
+            case Key.P when e.KeyModifiers == KeyModifiers.Control: _ = vm.TogglePinSelectedAsync(); break;
             case Key.Escape:
                 Input.PopupTrace.Write("Esc");
                 Close();
@@ -124,8 +137,19 @@ public partial class PopupWindow : Window
     {
         // Only a click on a row (not the scrollbar or empty space) pastes. The press has already selected the row.
         if (e.Source is Visual v && v.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not null
+            && v.FindAncestorOfType<Button>(includeSelf: true) is null   // the pin button toggles, it does not paste
             && DataContext is PopupViewModel vm)
             _ = vm.ActivateSelectedAsync();
+    }
+
+    private void OnPinClick(object? sender, RoutedEventArgs e)
+    {
+        if (e.Source is Button { DataContext: PopupItem item } button && button.Classes.Contains("pin")
+            && DataContext is PopupViewModel vm)
+        {
+            e.Handled = true;
+            _ = vm.TogglePinAsync(item);
+        }
     }
 
     /// <summary>Shows the popup with its top-left corner at the cursor, kept inside that screen's working area.</summary>
@@ -192,6 +216,8 @@ public partial class PopupWindow : Window
             case Input.PopupKeyAction.PageUp: vm.MoveSelection(-5); break;
             case Input.PopupKeyAction.PageDown: vm.MoveSelection(5); break;
             case Input.PopupKeyAction.Paste: _ = vm.ActivateSelectedAsync(); break;
+            case Input.PopupKeyAction.SwitchTab: vm.SwitchTab(); break;
+            case Input.PopupKeyAction.TogglePin: _ = vm.TogglePinSelectedAsync(); break;
             case Input.PopupKeyAction.Close:
                 Input.PopupTrace.Write("Esc");
                 Close();

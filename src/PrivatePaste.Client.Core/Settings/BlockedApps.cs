@@ -13,7 +13,8 @@ public static class BlockedApps
         return app.Length > 0 && blocked.Any(b => Normalize(b) == app);
     }
 
-    private static string Normalize(string name)
+    /// <summary>The stored form of an app name: trimmed, lowercase, without a typed ".exe" (empty when nothing is left).</summary>
+    public static string Normalize(string name)
     {
         var n = name.Trim();
         if (n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) n = n[..^4];

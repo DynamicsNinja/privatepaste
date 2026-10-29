@@ -29,6 +29,7 @@ public partial class App : Application
     private HotkeyService? _hotkeys;
     private PasteInjector? _injector;
     private PopupActivation? _activation;
+    private ToastNotifier? _toast;
     private bool _quitting;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
@@ -135,7 +136,9 @@ public partial class App : Application
             server: s.ServerUrl?.TrimEnd('/') ?? "", deviceName: s.DeviceName, hotkey: s.Hotkey, autostart: s.Autostart,
             autostartLabel: _host.Platform.AutostartLabel,
             applyHotkey: _host.SetHotkey, setAutostart: _host.SetAutostart, signOut: _host.SignOutAsync,
-            notifyOnClipArrival: s.NotifyOnClipArrival, setNotifyOnClipArrival: _host.SetNotifyOnClipArrival);
+            notifyOnClipArrival: s.NotifyOnClipArrival, setNotifyOnClipArrival: _host.SetNotifyOnClipArrival,
+            blockedApps: s.BlockedApps, recentSourceApps: () => _host?.Coordinator?.RecentSourceApps ?? [],
+            setBlockedApps: _host.SetBlockedApps, canIdentifySourceApp: _host.Platform.CanIdentifySourceApp);
         var window = new SettingsWindow { DataContext = vm };
         window.Closed += (_, _) => _settings = null;
         _settings = window;
@@ -147,6 +150,7 @@ public partial class App : Application
     private void SetUpPopup(ToastNotifier notifier)
     {
         var host = _host!;
+        _toast = notifier;
         _injector = new PasteInjector();
         _activation = new PopupActivation(
             isSignedIn: () => _host?.IsSignedIn == true,
@@ -203,7 +207,8 @@ public partial class App : Application
             return;
         }
         var host = _host;
-        var vm = new PopupViewModel(host.Cache, SearchServerAsync, ActivateFromPopupAsync, TimeProvider.System);
+        var vm = new PopupViewModel(host.Cache, SearchServerAsync, ActivateFromPopupAsync, TimeProvider.System,
+            PinFromPopupAsync, ListPinnedFromServerAsync, message => _toast?.Notify(message));
         var window = new PopupWindow { DataContext = vm };
         // History that arrives while the popup is open shows up in it (the query and selection are kept).
         EventHandler onHistory = (_, _) => Dispatcher.UIThread.Post(() => { if (_popup == window) vm.RefreshFromCache(); });
@@ -237,6 +242,16 @@ public partial class App : Application
         var api = _host?.Api;
         if (api is null) return [];
         return (await api.ListAsync(query, null, 50, ct)).Items;
+    }
+
+    private Task<ClipDto> PinFromPopupAsync(Guid id, bool pinned) =>
+        (_host?.Api ?? throw new InvalidOperationException("Signed out.")).PinAsync(id, pinned);
+
+    private async Task<IReadOnlyList<ClipDto>> ListPinnedFromServerAsync(string query, CancellationToken ct)
+    {
+        var api = _host?.Api;
+        if (api is null) return [];
+        return (await api.ListPinnedAsync(query.Length == 0 ? null : query, null, 50, ct)).Items;
     }
 
     private Task ActivateFromPopupAsync(ClipDto clip)
