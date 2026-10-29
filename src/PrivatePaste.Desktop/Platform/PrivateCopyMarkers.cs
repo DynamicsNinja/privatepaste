@@ -1,4 +1,4 @@
-namespace PrivatePaste.Desktop.Platform.Windows;
+namespace PrivatePaste.Desktop.Platform;
 
 /// <summary>
 /// Whether the app that copied marked the copy as private (password managers do), judged from the marker formats on the
@@ -24,6 +24,26 @@ public static class PrivateCopyMarkers
     {
         if (formatsByName.ContainsKey(ExcludeFromMonitor) || formatsByName.ContainsKey(ViewerIgnore)) return true;
         return BlocksDword(formatsByName, CanIncludeInHistory) || BlocksDword(formatsByName, CanUploadToCloud);
+    }
+
+    public const string MacConcealedType = "org.nspasteboard.ConcealedType";
+    public const string MacTransientType = "org.nspasteboard.TransientType";
+    public const string LinuxPasswordHint = "x-kde-passwordManagerHint";
+
+    /// <summary>nspasteboard.org convention: password managers and the like add one of these types next to the text.</summary>
+    public static bool IsPrivateMac(IEnumerable<string> types) =>
+        types.Any(t => t == MacConcealedType || t == MacTransientType);
+
+    /// <summary>
+    /// KeePassXC, KDE and others add the <c>x-kde-passwordManagerHint</c> target with the value <c>secret</c>.
+    /// <paramref name="readText"/> reads that target's text; null or a throw (present but unreadable) fails closed.
+    /// Nothing is read unless the target is listed.
+    /// </summary>
+    public static bool IsPrivateLinux(IEnumerable<string> targets, Func<string, string?> readText)
+    {
+        if (!targets.Contains(LinuxPasswordHint)) return false;
+        try { return readText(LinuxPasswordHint) is not { } value || value.Trim() == "secret"; }
+        catch (Exception) { return true; }
     }
 
     private static bool BlocksDword(IReadOnlyDictionary<string, byte[]?> formats, string name) =>

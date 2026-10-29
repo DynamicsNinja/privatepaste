@@ -19,6 +19,12 @@ public sealed class PlatformServices
     /// <summary>The <c>platform</c> sent at login: "windows", "macos" or "linux".</summary>
     public required string PlatformName { get; init; }
 
+    /// <summary>
+    /// Whether the app that copied can be named, so a per-app blocklist can work: always on Windows and macOS, on Linux only in
+    /// an X11 session where libX11 answers (Wayland hides the owner).
+    /// </summary>
+    public bool CanIdentifySourceApp { get; init; }
+
     /// <summary>Settings label for the autostart checkbox.</summary>
     public required string AutostartLabel { get; init; }
 
@@ -37,6 +43,7 @@ public sealed class PlatformServices
                 Autostart = isolated ? new NullAutostart() : new WindowsAutostart(exePath),
                 SecretProtector = new DpapiSecretProtector(),
                 PlatformName = "windows",
+                CanIdentifySourceApp = true,
                 AutostartLabel = "Start with Windows",
             };
         }
@@ -50,6 +57,7 @@ public sealed class PlatformServices
                 Autostart = isolated ? new NullAutostart() : new MacAutostart(exePath),
                 SecretProtector = new KeychainSecretProtector(),
                 PlatformName = "macos",
+                CanIdentifySourceApp = true,
                 AutostartLabel = "Start at login",
             };
         }
@@ -65,6 +73,7 @@ public sealed class PlatformServices
                 Autostart = isolated ? new NullAutostart() : new XdgAutostart(exePath),
                 SecretProtector = new SecretToolProtector(Path.Combine(dir, "data-key.bin"), notifier),
                 PlatformName = "linux",
+                CanIdentifySourceApp = X11SelectionOwner.CanIdentify,
                 AutostartLabel = "Start at login",
             };
             if (IsWayland(Environment.GetEnvironmentVariable)) NotifyOnce(notifier, Path.Combine(dir, "wayland-notice-shown"), WaylandNotice);

@@ -5,6 +5,8 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Threading;
 using PrivatePaste.Client.Core.Platform;
+using PrivatePaste.Desktop.Platform.Linux;
+using PrivatePaste.Desktop.Platform.Mac;
 
 namespace PrivatePaste.Desktop.Platform.Polling;
 
@@ -36,8 +38,45 @@ internal sealed class AvaloniaClipboardBackend : IClipboardBackend
             var text = await clipboard.TryGetTextAsync();
             // Text first (office apps put text plus a bitmap); the PNG is only fetched when there is no usable text.
             var png = string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(clipboard) : null;
-            return ClipboardSelection.Choose(text, () => png);
+            var content = ClipboardSelection.Choose(text, () => png);
+            return content is null ? null : content with
+            {
+                IsPrivate = await IsPrivateAsync(clipboard),
+                SourceApp = SourceApp(),
+            };
         });
+
+    /// <summary>
+    /// Marker formats through Avalonia's public format list. Unverified on real machines: if a platform does not list the
+    /// marker, the copy is simply not seen as private there. If listing the formats itself fails, the copy is treated as not private.
+    /// </summary>
+    private static async Task<bool> IsPrivateAsync(IClipboard clipboard)
+    {
+        try
+        {
+            using var data = await clipboard.TryGetDataAsync();
+            if (data is null) return false;
+            var names = data.Formats.Select(f => f.Identifier).ToList();
+            if (OperatingSystem.IsMacOS()) return PrivateCopyMarkers.IsPrivateMac(names);
+            if (!OperatingSystem.IsLinux() || !names.Contains(PrivateCopyMarkers.LinuxPasswordHint)) return false;
+
+            string? hint = null;
+            var format = DataFormat.CreateBytesPlatformFormat(PrivateCopyMarkers.LinuxPasswordHint);
+            foreach (var item in data.Items)
+            {
+                if (await item.TryGetRawAsync(format) is byte[] bytes) { hint = System.Text.Encoding.UTF8.GetString(bytes); break; }
+            }
+            return PrivateCopyMarkers.IsPrivateLinux(names, _ => hint);
+        }
+        catch (Exception) { return false; }
+    }
+
+    private static string? SourceApp()
+    {
+        if (OperatingSystem.IsMacOS()) return FrontmostApp.BundleId();
+        if (OperatingSystem.IsLinux()) return X11SelectionOwner.ProcessName();
+        return null;
+    }
 
     public Task WriteAsync(ClipboardContent content, CancellationToken ct) =>
         Dispatcher.UIThread.InvokeAsync(async Task () =>
