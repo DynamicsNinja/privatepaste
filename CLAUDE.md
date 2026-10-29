@@ -23,7 +23,7 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 - Android tests: in `android/`, `./gradlew testDebugUnitTest` (Robolectric, sdk 35). Needs a JDK 21 in `JAVA_HOME`; on this machine `C:\Program Files\Microsoft\jdk-21.0.13.21-hotspot`.
 - Android end-to-end against a local server: `PP_E2E_URL=http://localhost:5202 ./gradlew testDebugUnitTest --tests '*LocalServerE2eTest*'`.
 - Screenshots for review: set `PP_SCREENSHOT_DIR` and run `DesktopRenderTests` (desktop) or `ScreenshotTest` (Android); PNGs land in that directory.
-- README hero images: `powershell -File scripts/readme/build.ps1` (see `scripts/readme/README.md`). Rerun it after any visible UI change in the web history, desktop popup or Android history.
+- README hero images: `powershell -File scripts/readme/build.ps1` (see `scripts/readme/README.md`, and the README rule below for when).
 
 ## Rules
 
@@ -34,6 +34,11 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 - Protocol changes must stay compatible both ways: add fields as optional, never rename or remove. Android parses with `ignoreUnknownKeys` and `explicitNulls = false`; a field that can be missing or null on the wire must be nullable with a default there (a missing `sourceDeviceId` once broke Android sync).
 - `ContentHash` must match on every client: keep the test vectors in `docs/api.md` passing on .NET and Android.
 - Platform strings are `windows`, `macos`, `linux`, `android`, `web`; anything else is shown as an unknown device.
+- **Keep the README in step with the apps.** A change is not done until the README matches it (details in `scripts/readme/README.md`):
+  - Changed how the web history page, the desktop history popup or the Android history screen looks (layout, colors, type, icons, row content, top bar)? Run `powershell -File scripts/readme/build.ps1`, look at both `docs/images/hero-*.png` and commit them with the change.
+  - Changed the logo, wordmark or brand colors? Also run `python scripts/make-lockup.py .` and update `DESIGN.md` and `branding/README.md`.
+  - Changed features, platforms, release file names, environment variables, the port, security behaviour or install steps? Update the matching README text and `docs/` page; the list of facts to check is under "Text to keep in step" in `scripts/readme/README.md`.
+  - If the build can't run (no JDK, no Node), say so in your summary instead of leaving the old images silently.
 
 ## Gotchas
 
