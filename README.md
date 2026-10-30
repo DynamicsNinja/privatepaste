@@ -126,7 +126,7 @@ Each device signs in with a person's name and password once and gets its own dev
 
 Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
-> Applied for; until it is approved, the Windows downloads are unsigned (see [SmartScreen](docs/desktop.md)).
+> Being set up; until it is in place, the Windows downloads are unsigned (see [SmartScreen](docs/desktop.md)).
 
 - What is signed: the Windows app (`PrivatePaste.exe`) and its installer (`PrivatePaste-<version>-win-x64.msi`), built from this repository by the [desktop release workflow](.github/workflows/desktop.yml) on GitHub-hosted runners. Nothing built elsewhere is signed.
 - Committers and reviewers: [Ivan Ficko](https://github.com/DynamicsNinja). Changes from anyone else come in as pull requests and are reviewed before they are merged.
