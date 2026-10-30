@@ -1,0 +1,9 @@
+# Replaces the root .dockerignore (written for the server image, which skips docs/) for this Dockerfile only:
+# send just the files the homepage copies.
+*
+!site/
+!branding/logo.svg
+!docs/images/hero-dark.png
+!docs/images/hero-light.png
+!src/PrivatePaste.Server/wwwroot/fonts/sora-latin.woff2
+!src/PrivatePaste.Server/wwwroot/fonts/sora-latin-ext.woff2
