@@ -35,7 +35,7 @@ public static class DeviceClaims
     {
         var id = user.DeviceId();
         var platform = id is null ? WebPlatform : NormalizePlatform(user.FindFirstValue(Platform));
-        return new(id, user.FindFirstValue(Name) ?? "Web", platform);
+        return new(id, user.FindFirstValue(Name) ?? "Web", platform, user.UserId());
     }
 
     /// <summary>Lowercase and trimmed, or null when empty.</summary>
