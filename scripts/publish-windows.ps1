@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds the unsigned single-file win-x64 PrivatePaste.exe and zips it.
+  Builds the unsigned single-file win-x64 PrivatePaste.exe and zips it (CI signs the exe and re-zips it).
 .DESCRIPTION
   Works in Windows PowerShell 5.1 and PowerShell 7. Needs the .NET SDK 10.
   Output: artifacts/win-x64/PrivatePaste.exe and artifacts/PrivatePaste-win-x64.zip
@@ -17,9 +17,11 @@ $zip = Join-Path $repo 'artifacts/PrivatePaste-win-x64.zip'
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 if (Test-Path $zip) { Remove-Item $zip -Force }
 
+# No "+<commit>" suffix on the product version: code signing (.signpath/) only signs an exe whose product version is
+# exactly the release version.
 dotnet publish (Join-Path $repo 'src/PrivatePaste.Desktop') -c Release -r win-x64 --self-contained `
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none `
-  -p:Version=$Version -o $out
+  -p:Version=$Version -p:IncludeSourceRevisionInInformationalVersion=false -o $out
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
 # Native symbol files shipped by SkiaSharp/HarfBuzz are not part of the app.
