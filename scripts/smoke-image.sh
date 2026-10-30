@@ -27,7 +27,7 @@ docker run -d --name "$name" --platform "$platform" -p "$port:8080" \
 wait_healthy
 
 token=$(curl -fs -X POST "$base/api/auth/login" -H 'content-type: application/json' \
-  -d '{"password":"smoke","deviceName":"Smoke","platform":"linux"}' | jq -r .token) || fail "sign-in"
+  -d '{"username":"owner","password":"smoke","deviceName":"Smoke","platform":"linux"}' | jq -r .token) || fail "sign-in"
 auth=(-H "authorization: Bearer $token")
 
 curl -fs -X POST "$base/api/clips/text" "${auth[@]}" -H 'content-type: application/json' \
