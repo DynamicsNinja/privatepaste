@@ -29,6 +29,10 @@
               <TextBox x:Name="ServerBox" Text="{Binding ServerUrl}" />
             </StackPanel>
             <StackPanel>
+              <TextBlock Classes="label" Text="Name" />
+              <TextBox x:Name="NameBox" Text="{Binding Username}" MaxLength="32" />
+            </StackPanel>
+            <StackPanel>
               <TextBlock Classes="label" Text="Password" />
               <TextBox x:Name="PasswordBox" Text="{Binding Password}" PasswordChar="•" />
             </StackPanel>

@@ -8,7 +8,9 @@ public sealed record ClientSettings(
     bool Paused = false,
     Guid? DeviceId = null,
     // A settings file from before this key existed loads as true (the constructor default).
-    bool NotifyOnClipArrival = true)
+    bool NotifyOnClipArrival = true,
+    // The name last signed in with; prefills the sign-in window. Empty in a file from before there were people.
+    string Username = "")
 {
     /// <summary>
     /// Apps whose copies are never synced (see <see cref="PrivatePaste.Client.Core.Settings.BlockedApps.Matches"/>).

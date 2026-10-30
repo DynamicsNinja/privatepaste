@@ -155,7 +155,7 @@ public sealed class DesktopHost : IAsyncDisposable
 
     // ======================================================================== Sign-in / sign-out
 
-    public async Task<SignInOutcome> SignInAsync(string serverUrl, string password, string deviceName)
+    public async Task<SignInOutcome> SignInAsync(string serverUrl, string username, string password, string deviceName)
     {
         Uri server;
         try { server = ServerUrl.Normalize(serverUrl); }
@@ -173,8 +173,7 @@ public sealed class DesktopHost : IAsyncDisposable
             LoginResponse login;
             try
             {
-                // Until the sign-in window asks for a name, the desktop app signs in as the owner, as it did before.
-                login = await new PrivatePasteApi(http, _time).LoginAsync("owner", password, deviceName,
+                login = await new PrivatePasteApi(http, _time).LoginAsync(username.Trim(), password, deviceName,
                     Platform.PlatformName, _shutdown.Token);
             }
             catch (Exception e)
@@ -184,6 +183,8 @@ public sealed class DesktopHost : IAsyncDisposable
                 {
                     UnauthorizedApiException => new SignInOutcome(SignInResult.WrongPassword, null),
                     ApiException { Status: HttpStatusCode.TooManyRequests } => new SignInOutcome(SignInResult.RateLimited, null),
+                    // Only a newer server rejects the request this way; its detail says what to do.
+                    ApiException { Status: HttpStatusCode.BadRequest } bad => new SignInOutcome(SignInResult.UpdateNeeded, bad.Message),
                     _ => LogUnreachable(e),
                 };
             }
@@ -198,7 +199,8 @@ public sealed class DesktopHost : IAsyncDisposable
                 _log.Error("Could not store the sign-in token.", e);
                 _notifier.Notify("Signed in, but the sign-in could not be saved for the next start.");
             }
-            UpdateSettings(s => s with { ServerUrl = server.AbsoluteUri, DeviceName = deviceName, DeviceId = login.DeviceId });
+            UpdateSettings(s => s with { ServerUrl = server.AbsoluteUri, DeviceName = deviceName, DeviceId = login.DeviceId,
+                Username = username.Trim() });
             StartSession(server, login.Token, login.DeviceId, http);
             _log.Info("Signed in.");
             return new SignInOutcome(SignInResult.Ok, null);
