@@ -14,7 +14,7 @@ public static class ClipEndpoints
 {
     public static void MapClipEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api").RequireAuthorization(AuthSchemes.OwnerPolicy).RequireAntiforgeryForCookieAuth();
+        var group = app.MapGroup("/api").RequireAuthorization(AuthSchemes.SignedInPolicy).RequireAntiforgeryForCookieAuth();
         group.AddEndpointFilter(async (ctx, next) =>
         {
             try
@@ -121,7 +121,7 @@ public static class ClipEndpoints
             await service.SetPinnedAsync(id, false) is { } clip ? Results.Ok(clip) : Results.NotFound());
 
         group.MapPost("history/clear", async (ClipService service) =>
-            Results.Ok(new { deleted = await service.ClearAsync() }));
+            Results.Ok(new { deleted = await service.ClearAsync() })).RequireAuthorization(AuthSchemes.OwnerPolicy);
 
         group.MapDelete("clips/{id:guid}", async (Guid id, ClipService service) =>
             await service.DeleteAsync(id) ? Results.NoContent() : Results.NotFound());

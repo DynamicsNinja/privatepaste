@@ -44,9 +44,10 @@ public class DesktopRenderTests
     [InlineData("light")]
     public Task Sign_in_window_renders(string theme) => Session.Value.Dispatch(() =>
     {
-        var vm = new SignInViewModel((_, _, _) => Task.FromResult(new SignInOutcome(SignInResult.Ok, null)))
+        var vm = new SignInViewModel((_, _, _, _) => Task.FromResult(new SignInOutcome(SignInResult.Ok, null)))
         {
             ServerUrl = "http://localhost:5299",
+            Username = "Ana",
             Password = "dev",
             DeviceName = "PC-work",
             Error = SignInViewModel.WrongPasswordMessage,
@@ -160,6 +161,17 @@ public class DesktopRenderTests
     }
 
     [Theory]
+    [InlineData("Ana", "Work laptop", "From Ana · Work laptop")]
+    [InlineData("Ana", "", "From Ana")]
+    [InlineData(null, "Work laptop", "From Work laptop")]
+    [InlineData("  ", "Work laptop", "From Work laptop")]
+    public void Toast_Title_WithAndWithoutPerson(string? person, string device, string title)
+    {
+        var clip = ToastClip(PrivatePaste.Protocol.ClipKind.Text, "x", device, "windows") with { SourceUserName = person };
+        Assert.Equal(title, PrivatePaste.Desktop.Tray.ClipToast.For(clip).Title);
+    }
+
+    [Theory]
     [InlineData("MacBook", "macos", "From MacBook", "macos")]
     [InlineData("  ", "linux", "From another device", "linux")]
     [InlineData(null, null, "From another device", "unknown")]
@@ -252,6 +264,32 @@ public class DesktopRenderTests
         });
     }, CancellationToken.None);
 
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Popup_window_renders_person_chips(string theme) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        PrivatePaste.Protocol.ClipDto Clip(int seq, string text, int minutes, string device, string platform, string? person) =>
+            new(Guid.NewGuid(), seq, PrivatePaste.Protocol.ClipKind.Text, text, "h" + seq, null, null, 100, null, device,
+                now.AddMinutes(-minutes))
+            { SourceDevicePlatform = platform, SourceUserName = person };
+        cache.Upsert(Clip(4, "git commit -m \"fix(client): sync engine resume\"", 0, "PC-work", "windows", "Ana"));
+        cache.Upsert(Clip(3, "https://paste.example.com/some/long/path?with=query", 4, "Pixel 9", "android", "Marko"));
+        cache.Upsert(Clip(2, "Meeting room code 4471", 35, "MacBook", "macos", "Ana"));
+        cache.Upsert(Clip(1, "A clip from before there were people", 190, "ThinkPad", "linux", null));
+        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+            _ => Task.CompletedTask, TimeProvider.System);
+        Render(new PopupWindow { DataContext = vm }, theme, "popup-people", w =>
+        {
+            var chips = w.GetVisualDescendants().OfType<Border>().Where(b => b.Name == "PersonChip" && b.IsEffectivelyVisible).ToList();
+            Assert.Equal(["Ana", "Marko", "Ana"], chips.Select(c => ((TextBlock)c.Child!).Text));
+            Assert.All(chips, c => Assert.False(c.Focusable));
+        });
+    }, CancellationToken.None);
+
     /// <summary>
     /// The README hero's popup, from the demo history in scripts/readme/demo.json (see scripts/readme/README.md).
     /// Runs only when PP_README_DEMO names that file; saves readme-popup-{theme}.png into PP_SCREENSHOT_DIR.
@@ -277,6 +315,7 @@ public class DesktopRenderTests
                 null, c.GetProperty("device").GetString()!, now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32()))
             {
                 SourceDevicePlatform = c.GetProperty("platform").GetString(),
+                SourceUserName = c.TryGetProperty("user", out var user) ? user.GetString() : null,
                 PinnedAt = c.TryGetProperty("pinned", out var pinned) && pinned.GetBoolean()
                     ? now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32() + 1) : null,
             });
@@ -336,7 +375,7 @@ public class DesktopRenderTests
 
     private static SignInWindow NewSignIn() => new()
     {
-        DataContext = new SignInViewModel((_, _, _) => Task.FromResult(new SignInOutcome(SignInResult.Ok, null))),
+        DataContext = new SignInViewModel((_, _, _, _) => Task.FromResult(new SignInOutcome(SignInResult.Ok, null))),
     };
 
     private static T Find<T>(Window w, string name) where T : Control =>

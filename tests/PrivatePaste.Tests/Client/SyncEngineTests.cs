@@ -57,10 +57,10 @@ public class SyncEngineTests : IAsyncLifetime
     {
         Directory.CreateDirectory(_dir);
         _apiA = new PrivatePasteApi(_server.CreateClient());
-        var a = await _apiA.LoginAsync(PrivatePasteFactory.Password, "A", "windows");
+        var a = await _apiA.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "A", "windows");
         (_idA, _tokenA, _apiA.Token) = (a.DeviceId, a.Token, a.Token);
         _apiB = new PrivatePasteApi(_server.CreateClient());
-        _apiB.Token = (await _apiB.LoginAsync(PrivatePasteFactory.Password, "B", "windows")).Token;
+        _apiB.Token = (await _apiB.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "B", "windows")).Token;
         _cache = new HistoryCache(CachePath, _key);
         _handlerA = new SwitchHandler(_server.Server.CreateHandler());
         _coordApi = new PrivatePasteApi(new HttpClient(_handlerA) { BaseAddress = new Uri("http://localhost/") }) { Token = _tokenA };

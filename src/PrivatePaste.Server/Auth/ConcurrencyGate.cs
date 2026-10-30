@@ -9,6 +9,9 @@ public sealed class ConcurrencyGate(int maxConcurrent, int maxQueued)
     private readonly SemaphoreSlim _slots = new(maxConcurrent, maxConcurrent);
     private int _pending; // holders + waiters
 
+    /// <summary>Holders plus waiters right now.</summary>
+    public int Pending => Volatile.Read(ref _pending);
+
     /// <summary>Returns a lease to dispose when done, or null (synchronously) if the gate and its queue are full.</summary>
     public async Task<IDisposable?> TryEnterAsync(CancellationToken ct = default)
     {

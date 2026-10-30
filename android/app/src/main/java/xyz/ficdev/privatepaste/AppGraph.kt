@@ -90,6 +90,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         queue = queue,
         apiFactory = ::api,
         hints = PrefsSignInHints(app),
+        settings = settings,
     )
 
     private val lifecycle = Mutex()
@@ -196,10 +197,10 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         appScope.launch(start = CoroutineStart.UNDISPATCHED) { g.engine.stop() }
     }
 
-    suspend fun signIn(url: String, password: String, deviceName: String): SignInResult = lifecycle.withLock {
+    suspend fun signIn(url: String, username: String, password: String, deviceName: String): SignInResult = lifecycle.withLock {
         // The UI signs in only while signed out; a leftover graph would write the cache the sign-in clears.
         _current.value?.let { end(it) }
-        val result = sessions.signIn(url, password, deviceName)
+        val result = sessions.signIn(url, username, password, deviceName)
         if (result is SignInResult.Ok) {
             sessions.session.value?.let { _current.value = SessionGraph(it) }
             Notifications.cancelSignedOut(app)
@@ -286,11 +287,12 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
 
     val uiDeps: UiDeps = object : UiDeps {
         override val session = sessions.session
-        override suspend fun signIn(url: String, password: String, deviceName: String) =
-            this@AppGraph.signIn(url, password, deviceName)
+        override suspend fun signIn(url: String, username: String, password: String, deviceName: String) =
+            this@AppGraph.signIn(url, username, password, deviceName)
         override suspend fun signOut() = this@AppGraph.signOut()
         override val lastServerUrl: String? get() = sessions.lastServerUrl
         override val lastDeviceName: String? get() = sessions.lastDeviceName
+        override val lastUsername: String? get() = sessions.lastUsername
         override val syncState: StateFlow<SyncState> = this@AppGraph.syncState
         override val cache: HistoryCache? get() = this@AppGraph.cache.takeIf { _current.value != null }
         override val thumbs: ThumbnailStore? get() = this@AppGraph.thumbs.takeIf { _current.value != null }

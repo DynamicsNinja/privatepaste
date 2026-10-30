@@ -28,7 +28,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
-  <img src="docs/images/hero-light.png" alt="The PrivatePaste web history, the desktop history popup and the Android app showing the same clips, each marked with the device it came from">
+  <img src="docs/images/hero-light.png" alt="The PrivatePaste web history, the desktop history popup and the Android app showing the same clips, each marked with the person and device it came from">
 </picture>
 
 ## Why PrivatePaste
@@ -38,10 +38,11 @@
 - **Private copies stay private.** On the desktop apps, a copy that a password manager marks as private never leaves your computer: it isn't uploaded, cached or shown anywhere. The desktop app can also ignore copies from apps you name. Android only sends what you send or share yourself. [Details](docs/desktop.md#private-copies)
 - **Pinned clips.** Pin the clips you reuse. They get their own tab on every device and survive clearing and auto-delete.
 - **Clear it when you want.** Clear the history from the web UI, or let the server delete clips older than 7, 30 or 90 days. Pinned clips stay. Off by default: otherwise clips are kept until you delete them.
-- **Only on your server.** One small container. No accounts, no cloud relay, no push service, no analytics, no third-party requests.
+- **Multiple people, one shared history.** Add the people you share a server with (a household, a small team). Each signs in with their own name and password, everyone sees the same history, and each clip shows who copied it. The owner can sign someone out or remove them without changing a password for everyone. [Details](docs/self-hosting.md#people)
+- **Only on your server.** One small container. No cloud relay, no push service, no analytics, no third-party requests.
 - **Encrypted at rest.** The database (SQLite3 Multiple Ciphers) and the stored images are encrypted with a key that only you hold.
 - **Native on every device.** A tray app with a history popup (Ctrl+Shift+V) on Windows, macOS and Linux, an Android app with a Quick Settings tile and a Share target, and a web UI for everything else.
-- **Knows where a clip came from.** Each clip carries its device's name and platform icon, and the desktop app can show a small notification when a clip from another device lands.
+- **Knows where a clip came from.** Each clip carries its device's name and platform icon (and, once a second person is added, a chip with the name of who copied it), and the desktop app can show a small notification when a clip from another device lands.
 
 ## Apps
 
@@ -58,9 +59,9 @@
 ### Dokploy
 
 1. Create a **Compose** service from this repository.
-2. Set `PP_DB_KEY` (a random key, see below) and `PP_PASSWORD` (your login password).
+2. Set `PP_DB_KEY` (a random key, see below) and `PP_PASSWORD` (the owner's password).
 3. Add a domain for service `privatepaste` on port `8080` with HTTPS.
-4. Deploy, then sign in from the apps with your domain and password.
+4. Deploy, then sign in from the apps with your domain, the name `owner` and that password.
 
 ### Docker Compose
 
@@ -85,7 +86,10 @@ All settings, backups and proxy notes are in [Self-hosting](docs/self-hosting.md
 
 ### Connect your devices
 
-Install an app, then enter your server URL, the password and a name for the device. That's it: from then on the device stays signed in and in sync. You can see and revoke devices on the **Devices** page of the web UI.
+Install an app, then enter your server URL, your name and password, and a name for the device. On a new server the name is `owner` and the password is `PP_PASSWORD`. That's it: from then on the device stays signed in and in sync. Add the other people on the **People** page of the web UI, where you can also see and sign out devices.
+
+> [!NOTE]
+> **Upgrading a server that several people already share?** First, right after upgrading, change the owner's password (**Settings > Change password**, or set a new `PP_PASSWORD` and restart): anyone who knew the old shared password may be signed in on the web as `owner`, and this ends those sessions. Every existing device becomes the owner's and keeps working. Sign the devices that belong to someone else out on the **People** page; each person then signs in again with their own account. Apps from before this version can't sign in until they are updated. Back up `/data` before upgrading. [Details](docs/self-hosting.md#upgrading-to-multiple-people)
 
 ## How it works
 
@@ -96,13 +100,14 @@ flowchart LR
     B["Web UI"] <-->|HTTPS| S
 ```
 
-Each device signs in with the server password once and gets its own device token. A copy is uploaded to the server, stored, and pushed over a WebSocket to your other devices, which put it on their clipboard. A device that was offline catches up when it reconnects, and only the newest clip lands on its clipboard, so nothing old overwrites what you have now. The same content copied twice is bumped to the top instead of stored again.
+Each device signs in with a person's name and password once and gets its own device token. A copy is uploaded to the server, stored, and pushed over a WebSocket to your other devices, which put it on their clipboard. A device that was offline catches up when it reconnects, and only the newest clip lands on its clipboard, so nothing old overwrites what you have now. The same content copied twice is bumped to the top instead of stored again.
 
 ## Security
 
 - The database and image files are encrypted at rest with `PP_DB_KEY`.
-- The password is hashed with Argon2id. Sign-in is rate-limited per client IP.
-- Every device has its own token. Revoke a lost device from the web UI and it is signed out at once.
+- Passwords are hashed with Argon2id. Sign-in is rate-limited per client IP.
+- Every device has its own token. Sign out a lost device from the People page and it is out at once. Removing a person or resetting their password signs out all their devices and web sessions. Changing your own password signs you out of your other browsers and keeps your devices signed in.
+- Only the owner can add or remove people, clear the history or change auto-delete.
 - Only HTTPS servers are accepted by the apps (plain HTTP only for localhost).
 - On the desktop apps, copies that password managers mark as private, and copies from apps on the blocklist, are never uploaded. This depends on the app marking its copies; see [Private copies](docs/desktop.md#private-copies) for what is covered. Android sends only what you send or share yourself.
 - The server can read your clips: this is encryption at rest, not end-to-end encryption. Run it on a machine you trust.
@@ -111,7 +116,7 @@ Each device signs in with the server password once and gets its own device token
 
 | Guide | What's in it |
 |---|---|
-| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, changing the password, backups, clearing history and auto-delete, proxies, local development |
+| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, upgrading, backups, clearing history and auto-delete, proxies, local development |
 | [Desktop app](docs/desktop.md) | Install, upgrade, hotkey, pause, pinned clips, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
 | [Android app](docs/android.md) | Install, pinned clips, background delivery, battery settings by phone maker, building and releasing |
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules and the content hash, for writing your own client |

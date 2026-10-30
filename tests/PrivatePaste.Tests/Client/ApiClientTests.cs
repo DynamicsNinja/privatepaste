@@ -11,9 +11,31 @@ public class ApiClientTests
     private static async Task<PrivatePasteApi> LoggedInAsync(PrivatePasteFactory server, string device = "PC-test")
     {
         var api = new PrivatePasteApi(server.CreateClient());
-        var r = await api.LoginAsync(PrivatePasteFactory.Password, device, "windows");
+        var r = await api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, device, "windows");
         api.Token = r.Token;
         return api;
+    }
+
+    private sealed class Capture : HttpMessageHandler
+    {
+        public string? Body;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Body = await request.Content!.ReadAsStringAsync(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new LoginResponse(Guid.NewGuid(), "t"), options: ProtocolJson.Options),
+            };
+        }
+    }
+
+    [Fact]
+    public async Task Login_SendsUsername()
+    {
+        var capture = new Capture();
+        var api = new PrivatePasteApi(new HttpClient(capture) { BaseAddress = new Uri("http://localhost") });
+        await api.LoginAsync("Ana", "pw", "PC", "windows");
+        Assert.Contains("\"username\":\"Ana\"", capture.Body);
     }
 
     [Fact]
@@ -62,7 +84,7 @@ public class ApiClientTests
     {
         using var server = new PrivatePasteFactory();
         var api = new PrivatePasteApi(server.CreateClient());
-        await Assert.ThrowsAsync<UnauthorizedApiException>(() => api.LoginAsync("nope", "PC", "windows"));
+        await Assert.ThrowsAsync<UnauthorizedApiException>(() => api.LoginAsync(PrivatePasteFactory.OwnerName, "nope", "PC", "windows"));
     }
 
     [Fact]

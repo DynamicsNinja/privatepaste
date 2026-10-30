@@ -22,6 +22,7 @@ import xyz.ficdev.privatepaste.core.ServerUrl
 import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.OutboundQueue
 import xyz.ficdev.privatepaste.storage.SessionStore
+import xyz.ficdev.privatepaste.storage.SettingsStore
 import xyz.ficdev.privatepaste.storage.StoredSession
 import xyz.ficdev.privatepaste.storage.ThumbnailStore
 import java.io.IOException
@@ -70,6 +71,7 @@ class SessionManager(
     private val queue: OutboundQueue,
     private val apiFactory: (baseUrl: HttpUrl, token: String?) -> PrivatePasteApi,
     private val hints: SignInHints = InMemorySignInHints(),
+    private val settings: SettingsStore? = null,
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val mutex = Mutex()
@@ -84,14 +86,17 @@ class SessionManager(
     /** For the sign-in form: the current session's device name, else the one of the session that was revoked. */
     val lastDeviceName: String? get() = _session.value?.deviceName ?: hints.deviceName
 
-    suspend fun signIn(url: String, password: String, deviceName: String): SignInResult = mutex.withLock {
+    /** For the sign-in form: the name of the last successful sign-in. */
+    val lastUsername: String? get() = settings?.lastUsername
+
+    suspend fun signIn(url: String, username: String, password: String, deviceName: String): SignInResult = mutex.withLock {
         val baseUrl = try {
             ServerUrl.normalize(url)
         } catch (e: IllegalArgumentException) {
             return SignInResult.InvalidUrl(e.message ?: "That doesn't look like a server address.")
         }
         val login = try {
-            apiFactory(baseUrl, null).login(password, deviceName)
+            apiFactory(baseUrl, null).login(username, password, deviceName)
         } catch (e: ApiException.Unauthorized) {
             return SignInResult.WrongPassword
         } catch (e: ApiException.RateLimited) {
@@ -113,6 +118,7 @@ class SessionManager(
         }
         hints.serverUrl = session.serverUrl
         hints.deviceName = deviceName
+        settings?.lastUsername = username
         _session.value = session
         SignInResult.Ok
     }

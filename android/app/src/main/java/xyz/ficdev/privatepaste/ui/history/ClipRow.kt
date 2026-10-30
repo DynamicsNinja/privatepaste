@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -98,6 +99,7 @@ fun ClipRow(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
+                    clip.sourceUserName?.takeIf { it.isNotBlank() }?.let { PersonChip(it) }
                     PlatformBadge(clip.sourceDevicePlatform)
                     Text(
                         text = stringResource(R.string.history_meta, device, time),
@@ -151,6 +153,24 @@ private fun KindTile(kind: ClipKind) {
             modifier = Modifier.size(18.dp),
         )
     }
+}
+
+/** The person who copied it: a small pill before the platform icon, shown only when the server names one. */
+@Composable
+private fun PersonChip(name: String) {
+    val colors = MaterialTheme.colorScheme
+    Text(
+        text = name,
+        style = MaterialTheme.typography.labelSmall,
+        color = colors.primary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .widthIn(max = 96.dp)
+            .clip(CircleShape)
+            .background(colors.surfaceVariant)
+            .padding(horizontal = 8.dp, vertical = 1.dp),
+    )
 }
 
 /** The source device's platform icon, muted and about the cap height of the meta text. */

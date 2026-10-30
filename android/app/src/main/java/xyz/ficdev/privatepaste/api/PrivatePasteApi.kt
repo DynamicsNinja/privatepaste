@@ -47,8 +47,9 @@ class PrivatePasteApi(
 
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun login(password: String, deviceName: String): LoginResponse {
+    suspend fun login(username: String, password: String, deviceName: String): LoginResponse {
         val body = buildJsonObject {
+            put("username", username)
             put("password", password)
             put("deviceName", deviceName)
             put("platform", "android")

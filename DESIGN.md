@@ -57,7 +57,7 @@ The logo is fixed in both modes: tile `#221D40`, keyhole `#B7A5FF`, hairline edg
 - **Search field:** `raised` fill, 10px radius, placeholder "Search history".
 - **Connection chip (apps):** pill in `raised` with a `live` dot and "Connected".
 - **Desktop popup:** search field on top, the clip list, a footer hint "Enter to paste  Esc to close".
-- **Desktop toast:** small card, platform icon tile, "From {device}" in 600, a one-line preview ("Image W×H" for images); hides after 4 s and never takes focus.
+- **Desktop toast:** small card, platform icon tile, "From {person} · {device}" (just "From {device}" when no person is shown) in 600, a one-line preview ("Image W×H" for images); hides after 4 s and never takes focus.
 - **Android top bar:** 32dp logo tile, the two-tone wordmark, the connection chip and a settings button.
 
 ## Copy
@@ -76,5 +76,5 @@ Plain, sentence case, says what happens. Buttons name the action ("Copy", "Delet
 ## Checking a UI change
 
 1. Render both themes: desktop `DesktopRenderTests` and Android `ScreenshotTest` with `PP_SCREENSHOT_DIR` set; the web UI against a local dev server in a browser, dark and light.
-2. Check a phone-width web layout too (the devices page stacks on narrow screens).
+2. Check a phone-width web layout too (the People page stacks on narrow screens).
 3. If the web history, desktop popup or Android history changed visibly, rebuild the README hero with `scripts/readme/build.ps1`.

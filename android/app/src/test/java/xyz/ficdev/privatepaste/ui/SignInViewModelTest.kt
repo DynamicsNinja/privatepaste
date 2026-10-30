@@ -29,21 +29,23 @@ class SignInViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val context = ApplicationProvider.getApplicationContext<Context>()
 
-    private val calls = mutableListOf<Triple<String, String, String>>()
+    private val calls = mutableListOf<List<String>>()
     private var servicesStarted = 0
 
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
 
-    private fun vm(initialUrl: String? = null, result: suspend () -> SignInResult) = SignInViewModel(
+    private fun vm(initialUrl: String? = null, initialUsername: String? = null, result: suspend () -> SignInResult) = SignInViewModel(
         initialUrl = initialUrl,
+        initialUsername = initialUsername,
         defaultDeviceName = "Pixel 9",
-        signIn = { url, password, name -> calls += Triple(url, password, name); result() },
+        signIn = { url, username, password, name -> calls += listOf(url, username, password, name); result() },
         onSignedIn = { servicesStarted++ },
     )
 
     private fun SignInViewModel.fill() {
         onUrlChange(" https://paste.example.com ")
+        onUsernameChange(" Ana ")
         onPasswordChange("dev")
     }
 
@@ -62,7 +64,7 @@ class SignInViewModelTest {
     }
 
     @Test
-    fun wrongPassword() = assertEquals("Wrong password.", errorFor(SignInResult.WrongPassword))
+    fun wrongPassword() = assertEquals("Wrong name or password.", errorFor(SignInResult.WrongPassword))
 
     @Test
     fun rateLimited() =
@@ -96,7 +98,7 @@ class SignInViewModelTest {
         assertNull(vm.state.value.error)
         assertEquals("", vm.state.value.password)
         assertEquals(1, servicesStarted)
-        assertEquals(Triple("https://paste.example.com", "dev", "Pixel 9"), calls.last())
+        assertEquals(listOf("https://paste.example.com", "Ana", "dev", "Pixel 9"), calls.last())
     }
 
     @Test
@@ -128,6 +130,8 @@ class SignInViewModelTest {
         vm.onUrlChange("https://paste.example.com")
         assertFalse(vm.state.value.canSubmit)
         vm.onPasswordChange("dev")
+        assertFalse(vm.state.value.canSubmit)   // the name is required
+        vm.onUsernameChange("Ana")
         assertTrue(vm.state.value.canSubmit)
         vm.onDeviceNameChange("   ")
         assertFalse(vm.state.value.canSubmit)
@@ -135,6 +139,23 @@ class SignInViewModelTest {
         assertFalse(vm.state.value.canSubmit)
         vm.onDeviceNameChange("x".repeat(50))
         assertTrue(vm.state.value.canSubmit)
+    }
+
+    @Test
+    fun signIn_requiresName() {
+        val vm = vm { SignInResult.Ok }
+        vm.onUrlChange("https://paste.example.com")
+        vm.onPasswordChange("dev")
+        vm.onUsernameChange("   ")
+        assertFalse(vm.state.value.canSubmit)
+        vm.submit()
+        assertEquals(0, calls.size)
+    }
+
+    @Test
+    fun signIn_prefillsLastName() {
+        val vm = vm(initialUsername = "Ana") { SignInResult.Ok }
+        assertEquals("Ana", vm.state.value.username)
     }
 
     @Test

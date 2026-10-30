@@ -41,6 +41,7 @@ class ReadmeScreenshotTest {
     @Serializable
     private data class DemoClip(
         val device: String, val platform: String?, val kind: ClipKind, val text: String? = null, val minutesAgo: Long, val pinned: Boolean = false,
+        val user: String? = null,
     )
 
     @Serializable
@@ -61,7 +62,7 @@ class ReadmeScreenshotTest {
         val items = demo.clips.filter { it.kind != ClipKind.IMAGE }.mapIndexed { i, c ->
             ClipDto(
                 id = "demo-$i", seq = 1000L - i, kind = c.kind, text = c.text, hash = "h-$i", sizeBytes = 10,
-                sourceDeviceId = c.device, sourceDeviceName = c.device, sourceDevicePlatform = c.platform,
+                sourceDeviceId = c.device, sourceDeviceName = c.device, sourceDevicePlatform = c.platform, sourceUserName = c.user,
                 lastCopiedAt = now.minusSeconds(c.minutesAgo * 60),
                 pinnedAt = if (c.pinned) now.minusSeconds(c.minutesAgo * 60 - 60).toString() else null,
             )

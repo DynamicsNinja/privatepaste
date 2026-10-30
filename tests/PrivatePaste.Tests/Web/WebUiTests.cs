@@ -32,15 +32,7 @@ public class WebUiTests
             fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value))
                 .Append(new("__RequestVerificationToken", token))));
 
-    private static async Task<HttpClient> WebLoginAsync(PrivatePasteFactory factory)
-    {
-        var client = WebClient(factory);
-        var token = await TokenFromAsync(client, "/login");
-        var response = await PostFormAsync(client, "/login", token, ("Password", PrivatePasteFactory.Password));
-        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal("/", response.Headers.Location?.OriginalString);
-        return client;
-    }
+    private static Task<HttpClient> WebLoginAsync(PrivatePasteFactory factory) => factory.LoginWebAsync();
 
     private static async Task<ClipDto> UploadTextAsync(HttpClient api, string text)
     {
@@ -71,9 +63,9 @@ public class WebUiTests
         using var factory = new PrivatePasteFactory();
         var client = WebClient(factory);
         var token = await TokenFromAsync(client, "/login");
-        var response = await PostFormAsync(client, "/login", token, ("Password", "nope"));
+        var response = await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", "nope"));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("Wrong password.", await response.Content.ReadAsStringAsync());
+        Assert.Contains("Wrong name or password.", await response.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -83,8 +75,8 @@ public class WebUiTests
         var client = WebClient(factory);
         var token = await TokenFromAsync(client, "/login");
         for (var i = 0; i < 5; i++)
-            Assert.Equal(HttpStatusCode.OK, (await PostFormAsync(client, "/login", token, ("Password", "nope"))).StatusCode);
-        Assert.Equal(HttpStatusCode.TooManyRequests, (await PostFormAsync(client, "/login", token, ("Password", "nope"))).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", "nope"))).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", "nope"))).StatusCode);
         // Viewing the page is never limited.
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/login")).StatusCode);
     }
@@ -95,7 +87,7 @@ public class WebUiTests
         using var factory = new PrivatePasteFactory();
         var client = WebClient(factory);
         var token = await TokenFromAsync(client, "/login");
-        var response = await PostFormAsync(client, "/login", token, ("Password", PrivatePasteFactory.Password));
+        var response = await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", PrivatePasteFactory.Password));
         var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"), c => c.StartsWith(".AspNetCore.Cookies="));
         Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
@@ -217,29 +209,29 @@ public class WebUiTests
     }
 
     [Fact]
-    public async Task Devices_page_shows_the_platform_icon_before_each_name()
+    public async Task People_page_shows_the_platform_icon_before_each_device_name()
     {
         using var factory = new PrivatePasteFactory();
         await factory.LoginAsync("Pixel", "android");
         await factory.LoginAsync("Air", "macos");
         var web = await WebLoginAsync(factory);
 
-        var html = await web.GetStringAsync("/devices");
-        Assert.Matches("<td class=\"name\"><svg class=\"platform\" data-platform=\"android\"[^>]*>.*?</svg>Pixel</td>", html);
-        Assert.Matches("<td class=\"name\"><svg class=\"platform\" data-platform=\"macos\"[^>]*aria-label=\"macOS\">.*?</svg>Air</td>", html);
+        var html = await web.GetStringAsync("/people");
+        Assert.Matches("<span class=\"device-name\"><svg class=\"platform\" data-platform=\"android\"[^>]*>.*?</svg>Pixel</span>", html);
+        Assert.Matches("<span class=\"device-name\"><svg class=\"platform\" data-platform=\"macos\"[^>]*aria-label=\"macOS\">.*?</svg>Air</span>", html);
     }
 
     [Fact]
-    public async Task Devices_page_revoke_works()
+    public async Task People_page_sign_out_device_works()
     {
         using var factory = new PrivatePasteFactory();
         var (device, deviceId, _) = await factory.LoginDeviceAsync("Laptop-revoke");
         Assert.Equal(HttpStatusCode.OK, (await device.GetAsync("/api/clips")).StatusCode);
 
         var web = await WebLoginAsync(factory);
-        Assert.Contains("Laptop-revoke", await web.GetStringAsync("/devices"));
-        var token = await TokenFromAsync(web, "/devices");
-        var response = await PostFormAsync(web, "/devices?handler=Revoke", token, ("id", deviceId.ToString()));
+        Assert.Contains("Laptop-revoke", await web.GetStringAsync("/people"));
+        var token = await TokenFromAsync(web, "/people");
+        var response = await PostFormAsync(web, "/people?handler=SignOutDevice", token, ("id", deviceId.ToString()));
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await device.GetAsync("/api/clips")).StatusCode);
     }
@@ -251,8 +243,8 @@ public class WebUiTests
         var web = await WebLoginAsync(factory);
         Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/")).StatusCode);
 
-        var token = await TokenFromAsync(web, "/devices");
-        var response = await PostFormAsync(web, "/devices?handler=SignOut", token);
+        var token = await TokenFromAsync(web, "/people");
+        var response = await PostFormAsync(web, "/people?handler=SignOut", token);
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
 
         var after = await web.GetAsync("/");
@@ -265,7 +257,7 @@ public class WebUiTests
     {
         using var factory = new PrivatePasteFactory();
         var web = await WebLoginAsync(factory);
-        var token = await TokenFromAsync(web, "/devices");
+        var token = await TokenFromAsync(web, "/people");
 
         Assert.Equal(HttpStatusCode.NoContent, (await web.SendAsync(ApiPost("/api/auth/logout", token))).StatusCode);
 

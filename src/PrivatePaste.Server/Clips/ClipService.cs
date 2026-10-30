@@ -7,10 +7,10 @@ using PrivatePaste.Server.Storage;
 namespace PrivatePaste.Server.Clips;
 
 /// <summary>
-/// The device that produced a clip. The web UI uses <c>(null, "Web", "web")</c>. <see cref="Platform"/> is lowercase,
-/// or null when unknown.
+/// The device that produced a clip. The web UI uses <c>(null, "Web", "web", userId)</c>. <see cref="Platform"/> is
+/// lowercase, or null when unknown. <see cref="UserId"/> is the person signed in on it.
 /// </summary>
-public sealed record DeviceIdentity(Guid? Id, string Name, string? Platform);
+public sealed record DeviceIdentity(Guid? Id, string Name, string? Platform, Guid? UserId);
 
 public sealed class ClipRejectedException(int statusCode, string message, string? title = null) : Exception(message)
 {
@@ -57,7 +57,7 @@ public sealed class ClipService(
             await EnsureNotClearedAsync(copiedAt);
 
         var result = await clips.UpsertAsync(new NewClip(ContentClassifier.ClassifyText(text), text,
-            ContentHash.ForText(text), null, null, size, device.Id, device.Name, device.Platform, copiedAt));
+            ContentHash.ForText(text), null, null, size, device.Id, device.Name, device.Platform, copiedAt, device.UserId));
         await broadcaster.ClipChangedAsync(result.Clip, live: !upload.Backfill);
         return result.Clip;
     }
@@ -94,7 +94,8 @@ public sealed class ClipService(
             await blobs.WriteAsync(ClipBlobs.Thumbnail(processed.Hash), processed.ThumbnailPng);
 
             result = await clips.UpsertAsync(new NewClip(ClipKind.Image, null, processed.Hash, processed.Width,
-                processed.Height, processed.Png.Length, device.Id, device.Name, device.Platform, effectiveCopiedAt));
+                processed.Height, processed.Png.Length, device.Id, device.Name, device.Platform, effectiveCopiedAt,
+                device.UserId));
         }
         finally
         {
@@ -107,7 +108,7 @@ public sealed class ClipService(
 
     public async Task<ClipDto?> RestoreAsync(Guid id, DeviceIdentity device)
     {
-        var clip = await clips.BumpAsync(id, device.Id, device.Name, device.Platform, time.GetUtcNow());
+        var clip = await clips.BumpAsync(id, device.Id, device.Name, device.Platform, device.UserId, time.GetUtcNow());
         if (clip is null)
             return null;
         await broadcaster.ClipChangedAsync(clip, live: true);
@@ -124,6 +125,17 @@ public sealed class ClipService(
         if (clip is not null && clip.Seq != before.Seq)
             await broadcaster.ClipChangedAsync(clip, live: false);
         return clip;
+    }
+
+    /// <summary>
+    /// Re-sends a person's clips (every clip when <paramref name="userId"/> is null) with new seqs, so devices pick up
+    /// a changed name. Like a pin, they go out as non-live changes and keep their copy time, so no device pastes them.
+    /// A socket whose outbox overflows is dropped and catches up by seq when it reconnects.
+    /// </summary>
+    public async Task ResendAsync(Guid? userId)
+    {
+        foreach (var clip in await clips.ResequenceAsync(userId))
+            await broadcaster.ClipChangedAsync(clip, live: false);
     }
 
     /// <summary>

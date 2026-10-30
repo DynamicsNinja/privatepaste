@@ -8,6 +8,7 @@ public sealed class SettingsRepository(PrivatePasteDb db)
 {
     private const string AutoDeleteDays = "auto_delete_days";
     private const string HistoryClearedAt = "history_cleared_at";
+    private const string LegacyWebSessions = "legacy_web_sessions";
 
     private static readonly int[] AllowedAutoDeleteDays = [7, 30, 90];
 
@@ -33,7 +34,21 @@ public sealed class SettingsRepository(PrivatePasteDb db)
     public Task SetHistoryClearedAtAsync(DateTimeOffset at) =>
         SetAsync(HistoryClearedAt, at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
 
-    private async Task<string?> GetAsync(string name)
+    /// <summary>
+    /// Whether web sessions from before there were people (cookies with no person in them) are still honoured as the
+    /// owner's. Those cookies may be held by anyone the old shared password was given to.
+    /// </summary>
+    public async Task<bool> GetLegacyWebSessionsAllowedAsync() => await GetAsync(LegacyWebSessions) == "on";
+
+    public Task AllowLegacyWebSessionsAsync() => SetAsync(LegacyWebSessions, "on");
+
+    /// <summary>
+    /// Ends every web session from before there were people, for good. Called when PP_PASSWORD resets the owner's
+    /// password; call it too when the owner changes their own password.
+    /// </summary>
+    public Task EndLegacyWebSessionsAsync() => SetAsync(LegacyWebSessions, "off");
+
+    public async Task<string?> GetAsync(string name)
     {
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
@@ -42,7 +57,7 @@ public sealed class SettingsRepository(PrivatePasteDb db)
         return await cmd.ExecuteScalarAsync() as string;
     }
 
-    private async Task SetAsync(string name, string value)
+    public async Task SetAsync(string name, string value)
     {
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();

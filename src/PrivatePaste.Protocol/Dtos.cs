@@ -17,9 +17,19 @@ public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, str
 
     /// <summary>When the clip was pinned, or null when it is not pinned. Pinned clips survive history clearing.</summary>
     public DateTimeOffset? PinnedAt { get; init; }
+
+    /// <summary>
+    /// The person who last copied the clip. Null while the server has only one person, so a household of one sees no
+    /// names, and null when unknown.
+    /// </summary>
+    public string? SourceUserName { get; init; }
 }
 
-public sealed record LoginRequest(string Password, string DeviceName, string Platform);
+public sealed record LoginRequest(string Password, string DeviceName, string Platform)
+{
+    /// <summary>The person signing in. Apps from before there were people send none and are told to update.</summary>
+    public string? Username { get; init; }
+}
 
 public sealed record LoginResponse(Guid DeviceId, string Token);
 

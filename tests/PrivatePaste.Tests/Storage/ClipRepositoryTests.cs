@@ -63,13 +63,13 @@ public sealed class ClipRepositoryTests : IDisposable
     public async Task Bump_by_id_updates_and_unknown_id_returns_null()
     {
         var a = await Upsert("x", at: T0);
-        var bumped = await _repo.BumpAsync(a.Clip.Id, null, "Tablet", "linux", T0.AddMinutes(5));
+        var bumped = await _repo.BumpAsync(a.Clip.Id, null, "Tablet", "linux", null, T0.AddMinutes(5));
         Assert.NotNull(bumped);
         Assert.Equal("Tablet", bumped!.SourceDeviceName);
         Assert.Equal("linux", bumped.SourceDevicePlatform);
         Assert.Equal(T0.AddMinutes(5), bumped.LastCopiedAt);
         Assert.True(bumped.Seq > a.Clip.Seq);
-        Assert.Null(await _repo.BumpAsync(Guid.NewGuid(), null, "x", null, T0));
+        Assert.Null(await _repo.BumpAsync(Guid.NewGuid(), null, "x", null, null, T0));
     }
 
     [Fact]

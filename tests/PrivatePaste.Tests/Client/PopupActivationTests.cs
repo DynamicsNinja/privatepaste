@@ -269,7 +269,7 @@ public class PopupActivationTests
         using var server = new PrivatePasteFactory();
         var handler = new SwitchHandler(server.Server.CreateHandler());
         var api = new PrivatePasteApi(new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") });
-        api.Token = (await api.LoginAsync(PrivatePasteFactory.Password, "A", "windows")).Token;
+        api.Token = (await api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "A", "windows")).Token;
         var image = await api.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(4, 4, 1).ToArray(), null, false);
         handler.Respond = r => r.RequestUri!.AbsolutePath.EndsWith("/image") && r.Method == HttpMethod.Get
             ? new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("<html>captive portal</html>") }

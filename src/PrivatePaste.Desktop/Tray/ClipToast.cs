@@ -3,7 +3,7 @@ using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Desktop.Tray;
 
-/// <summary>What the "clip arrived" toast shows: the source platform icon, "From {device}" and a one-line preview.</summary>
+/// <summary>What the "clip arrived" toast shows: the source platform icon, "From {device}" (or "From {person} · {device}") and a one-line preview.</summary>
 public sealed record ClipToast(PlatformIcon Platform, string Title, string Preview)
 {
     public const int PreviewLength = 80;
@@ -11,7 +11,14 @@ public sealed record ClipToast(PlatformIcon Platform, string Title, string Previ
     public static ClipToast For(ClipDto clip)
     {
         var device = clip.SourceDeviceName?.Trim();
-        var title = string.IsNullOrEmpty(device) ? "From another device" : $"From {device}";
+        var person = clip.SourceUserName?.Trim();
+        var title = (person, device) switch
+        {
+            ({ Length: > 0 }, { Length: > 0 }) => $"From {person} · {device}",
+            ({ Length: > 0 }, _) => $"From {person}",
+            (_, { Length: > 0 }) => $"From {device}",
+            _ => "From another device",
+        };
         return new ClipToast(PlatformIcons.For(clip.SourceDevicePlatform), title, FormatPreview(clip));
     }
 

@@ -33,10 +33,14 @@ builder.Services.AddSingleton<SettingsRepository>();
 builder.Services.AddSingleton<BlobStore>();
 builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();
+builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<OwnerBootstrap>();
+builder.Services.AddSingleton<SignInVerifier>();
 builder.Services.AddSingleton<DeviceRepository>();
 builder.Services.AddSingleton<ConnectionHub>();
 builder.Services.AddSingleton<IClipBroadcaster>(sp => sp.GetRequiredService<ConnectionHub>());
 builder.Services.AddSingleton<ClipService>();
+builder.Services.AddSingleton<PeopleService>();
 builder.Services.AddHostedService<AutoDeleteService>();
 builder.Services.AddHealthChecks();
 
@@ -62,6 +66,7 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
         o.Cookie.SameSite = SameSiteMode.Strict;
         o.ExpireTimeSpan = TimeSpan.FromDays(30);
         o.SlidingExpiration = true;
+        o.Events.OnValidatePrincipal = WebSessionValidator.ValidateAsync;
         o.Events.OnRedirectToLogin = ctx =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api"))
@@ -79,14 +84,21 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
             return Task.CompletedTask;
         };
     });
-builder.Services.AddAuthorization(o => o.AddPolicy(AuthSchemes.OwnerPolicy, p => p
-    .AddAuthenticationSchemes(AuthSchemes.DeviceToken, AuthSchemes.Cookies)
-    .RequireAuthenticatedUser()));
+builder.Services.AddAuthorization(o =>
+{
+    o.AddPolicy(AuthSchemes.SignedInPolicy, p => p
+        .AddAuthenticationSchemes(AuthSchemes.DeviceToken, AuthSchemes.Cookies)
+        .RequireAuthenticatedUser());
+    o.AddPolicy(AuthSchemes.OwnerPolicy, p => p
+        .AddAuthenticationSchemes(AuthSchemes.DeviceToken, AuthSchemes.Cookies)
+        .RequireAuthenticatedUser()
+        .RequireClaim(UserClaims.IsOwner, "true"));
+});
 
 builder.Services.AddAntiforgery(o => o.HeaderName = CookieAntiforgery.HeaderName);
 builder.Services.AddRazorPages(o =>
 {
-    o.Conventions.AuthorizeFolder("/", AuthSchemes.OwnerPolicy);
+    o.Conventions.AuthorizeFolder("/", AuthSchemes.SignedInPolicy);
     o.Conventions.AllowAnonymousToPage("/Login");
 });
 
@@ -94,7 +106,8 @@ builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     // Only attempts (POST) count; the login page itself (GET) is shared with the API policy name but never limited.
-    o.AddPolicy("login", ctx => HttpMethods.IsPost(ctx.Request.Method)
+    // A page may narrow that to some of its handlers (Settings: only Change password).
+    o.AddPolicy("login", ctx => LoginPartition.IsAttempt(ctx)
         ? RateLimitPartition.GetFixedWindowLimiter(
             LoginPartition.KeyFor(ctx.Connection.RemoteIpAddress),
             _ => new FixedWindowRateLimiterOptions
@@ -127,8 +140,7 @@ catch (DatabaseKeyMismatchException ex)
     Environment.Exit(1);
 }
 
-// Hash the password now rather than on the first login attempt.
-app.Services.GetRequiredService<PasswordVerifier>();
+await app.Services.GetRequiredService<OwnerBootstrap>().EnsureOwnerAsync();
 
 app.Use((context, next) =>
 {
@@ -150,6 +162,8 @@ app.MapDeviceEndpoints();
 app.MapClipEndpoints();
 app.MapSettingsEndpoints();
 app.MapWebSocketEndpoint();
+// The People page replaced Devices; old bookmarks still land somewhere.
+app.MapGet("/devices", () => Results.Redirect("/people", permanent: true));
 app.MapRazorPages();
 
 app.Run();

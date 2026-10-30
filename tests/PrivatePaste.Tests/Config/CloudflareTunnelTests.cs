@@ -14,7 +14,7 @@ public class CloudflareTunnelTests
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
         {
-            Content = JsonContent.Create(new LoginRequest(password, "PC", "windows"), options: ProtocolJson.Options),
+            Content = JsonContent.Create(new LoginRequest(password, "PC", "windows") { Username = PrivatePasteFactory.OwnerName }, options: ProtocolJson.Options),
         };
         request.Headers.Add("CF-Connecting-IP", ip);
         return (await client.SendAsync(request)).StatusCode;
@@ -67,6 +67,7 @@ public class CloudflareTunnelTests
         var token = Regex.Match(input, "value=\"([^\"]+)\"").Groups[1].Value;
         var response = await client.PostAsync("/login", new FormUrlEncodedContent(new Dictionary<string, string>
         {
+            ["Name"] = PrivatePasteFactory.OwnerName,
             ["Password"] = PrivatePasteFactory.Password,
             ["__RequestVerificationToken"] = token,
         }));

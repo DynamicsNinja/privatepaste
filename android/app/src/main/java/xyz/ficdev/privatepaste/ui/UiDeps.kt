@@ -19,7 +19,7 @@ interface UiDeps {
     /** The signed-in session, or null when signed out (also after a revocation). */
     val session: StateFlow<StoredSession?>
 
-    suspend fun signIn(url: String, password: String, deviceName: String): SignInResult
+    suspend fun signIn(url: String, username: String, password: String, deviceName: String): SignInResult
 
     suspend fun signOut()
 
@@ -28,6 +28,9 @@ interface UiDeps {
 
     /** Device name of the previous session, to prefill the sign-in form; null falls back to the model name. */
     val lastDeviceName: String? get() = null
+
+    /** Name of the last sign-in, to prefill the sign-in form. */
+    val lastUsername: String? get() = null
 
     val syncState: StateFlow<SyncState>
 

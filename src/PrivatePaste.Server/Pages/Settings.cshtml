@@ -7,26 +7,51 @@
 <h1>Settings</h1>
 
 <section class="panel">
-    <form method="post" asp-page-handler="AutoDelete" id="auto-delete-form">
-        <label for="auto-delete">Auto-delete history</label>
-        <p class="muted hint">Deletes clips from every device once they are this old. Pinned clips stay.</p>
-        <div class="field">
-            <select id="auto-delete" name="days">
-                @foreach (var option in days)
-                {
-                    <option value="@(option.Value?.ToString() ?? "")" selected="@(option.Value == Model.AutoDeleteDays)">@option.Label</option>
-                }
-            </select>
-            <noscript><button type="submit">Save</button></noscript>
-            <span class="saved" id="auto-delete-status" role="status" aria-live="polite"></span>
-        </div>
+    <h2>Change password</h2>
+    <p class="muted hint">Your devices stay signed in. Other browsers are signed out.</p>
+    @if (Model.PasswordStatus is not null)
+    {
+        <p class="saved" role="status">@Model.PasswordStatus</p>
+    }
+    @if (Model.PasswordError is not null)
+    {
+        <p class="error" role="alert">@Model.PasswordError</p>
+    }
+    <form method="post" asp-page-handler="ChangePassword" class="password-form">
+        <label for="current-password">Current password</label>
+        <input type="password" id="current-password" name="current" autocomplete="current-password" required>
+        <label for="new-password">New password</label>
+        <input type="password" id="new-password" name="password" minlength="8" autocomplete="new-password" required>
+        <label for="repeat-password">Repeat new password</label>
+        <input type="password" id="repeat-password" name="repeat" minlength="8" autocomplete="new-password" required>
+        <button type="submit" class="primary">Change password</button>
     </form>
 </section>
 
-<section class="panel">
-    <h2>Clear history</h2>
-    <p class="muted hint">Deletes every clip that is not pinned, on every device.</p>
-    <form method="post" asp-page-handler="Clear" data-confirm="@Model.ConfirmClear">
-        <button type="submit" class="danger">Clear history</button>
-    </form>
-</section>
+@if (Model.IsOwner)
+{
+    <section class="panel">
+        <form method="post" asp-page-handler="AutoDelete" id="auto-delete-form">
+            <label for="auto-delete">Auto-delete history</label>
+            <p class="muted hint">Deletes clips from every device once they are this old. Pinned clips stay.</p>
+            <div class="field">
+                <select id="auto-delete" name="days">
+                    @foreach (var option in days)
+                    {
+                        <option value="@(option.Value?.ToString() ?? "")" selected="@(option.Value == Model.AutoDeleteDays)">@option.Label</option>
+                    }
+                </select>
+                <noscript><button type="submit">Save</button></noscript>
+                <span class="saved" id="auto-delete-status" role="status" aria-live="polite"></span>
+            </div>
+        </form>
+    </section>
+
+    <section class="panel">
+        <h2>Clear history</h2>
+        <p class="muted hint">Deletes every clip that is not pinned, on every device.</p>
+        <form method="post" asp-page-handler="Clear" data-confirm="@Model.ConfirmClear">
+            <button type="submit" class="danger">Clear history</button>
+        </form>
+    </section>
+}

@@ -28,6 +28,7 @@
           <SolidColorBrush x:Key="PpLive" Color="#7CE0C3" />
           <SolidColorBrush x:Key="PpOnAccent" Color="#15122B" />
           <SolidColorBrush x:Key="PpAccentHover" Color="#C6B8FF" />
+          <SolidColorBrush x:Key="PpChipBackground" Color="#332B63" />
           <!-- Fluent accent: focus rings, checkbox fill and selection use the brand accent. -->
           <Color x:Key="SystemAccentColor">#B7A5FF</Color>
           <Color x:Key="SystemAccentColorDark1">#A592F5</Color>
@@ -56,6 +57,7 @@
           <SolidColorBrush x:Key="PpLive" Color="#7CE0C3" />
           <SolidColorBrush x:Key="PpOnAccent" Color="#FFFFFF" />
           <SolidColorBrush x:Key="PpAccentHover" Color="#4A36C0" />
+          <SolidColorBrush x:Key="PpChipBackground" Color="#E6E0FA" />
           <!-- Fluent accent: focus rings, checkbox fill and selection use the brand accent. -->
           <Color x:Key="SystemAccentColor">#5B45D6</Color>
           <Color x:Key="SystemAccentColorDark1">#4A36C0</Color>

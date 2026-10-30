@@ -11,7 +11,7 @@ namespace PrivatePaste.Tests.Clips;
 
 public class AutoDeleteServiceTests
 {
-    private static readonly DeviceIdentity Device = new(null, "test", "windows");
+    private static readonly DeviceIdentity Device = new(null, "test", "windows", null);
 
     private sealed record Rig(PrivatePasteFactory F, SettingsRepository Settings, ClipService Clips,
         ClipRepository Repo, AutoDeleteService Service)

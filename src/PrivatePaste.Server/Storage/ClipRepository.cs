@@ -7,7 +7,8 @@ using PrivatePaste.Protocol;
 namespace PrivatePaste.Server.Storage;
 
 public sealed record NewClip(ClipKind Kind, string? Text, string Hash, int? Width, int? Height, long SizeBytes,
-    Guid? SourceDeviceId, string SourceDeviceName, string? SourceDevicePlatform, DateTimeOffset CopiedAt);
+    Guid? SourceDeviceId, string SourceDeviceName, string? SourceDevicePlatform, DateTimeOffset CopiedAt,
+    Guid? SourceUserId = null);
 
 public sealed record UpsertResult(ClipDto Clip, bool Created);
 
@@ -15,7 +16,11 @@ public sealed class ClipRepository(PrivatePasteDb db)
 {
     private const string Columns =
         "c.id, c.seq, c.kind, c.text, c.hash, c.width, c.height, c.size_bytes, c.source_device_id, c.source_device_name, c.last_copied_at, " +
-        "c.source_device_platform, c.pinned_at";
+        "c.source_device_platform, c.pinned_at, " +
+        // Names only mean something once there is more than one person to tell apart.
+        "CASE WHEN (SELECT count(*) FROM users WHERE removed_at IS NULL) > 1 THEN u.name END";
+
+    private const string From = "clips c LEFT JOIN users u ON u.id = c.source_user_id";
 
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
@@ -32,7 +37,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
             if (existing is not null)
             {
                 var bumped = await BumpCoreAsync(conn, tx, Guid.Parse(existing), clip.SourceDeviceId,
-                    clip.SourceDeviceName, clip.SourceDevicePlatform, clip.CopiedAt);
+                    clip.SourceDeviceName, clip.SourceDevicePlatform, clip.SourceUserId, clip.CopiedAt);
                 result = new UpsertResult(bumped!, false);
             }
             else
@@ -42,14 +47,14 @@ public sealed class ClipRepository(PrivatePasteDb db)
                 var at = Format(clip.CopiedAt);
                 await ExecAsync(conn, tx, """
                     INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes,
-                                      source_device_id, source_device_name, source_device_platform,
+                                      source_device_id, source_device_name, source_device_platform, source_user_id,
                                       created_at, last_copied_at)
-                    VALUES(@id, @seq, @kind, @text, @hash, @w, @h, @size, @dev, @devName, @devPlatform, @at, @at)
+                    VALUES(@id, @seq, @kind, @text, @hash, @w, @h, @size, @dev, @devName, @devPlatform, @user, @at, @at)
                     """,
                     ("@id", id.ToString()), ("@seq", seq), ("@kind", KindToDb(clip.Kind)), ("@text", clip.Text),
                     ("@hash", clip.Hash), ("@w", clip.Width), ("@h", clip.Height), ("@size", clip.SizeBytes),
                     ("@dev", clip.SourceDeviceId?.ToString()), ("@devName", clip.SourceDeviceName),
-                    ("@devPlatform", clip.SourceDevicePlatform), ("@at", at));
+                    ("@devPlatform", clip.SourceDevicePlatform), ("@user", clip.SourceUserId?.ToString()), ("@at", at));
                 result = new UpsertResult(await GetCoreAsync(conn, tx, id) ?? throw new InvalidOperationException(), true);
             }
 
@@ -63,14 +68,14 @@ public sealed class ClipRepository(PrivatePasteDb db)
     }
 
     public async Task<ClipDto?> BumpAsync(Guid id, Guid? deviceId, string deviceName, string? devicePlatform,
-        DateTimeOffset at)
+        Guid? userId, DateTimeOffset at)
     {
         await _writeLock.WaitAsync();
         try
         {
             await using var conn = db.Open();
             await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
-            var dto = await BumpCoreAsync(conn, tx, id, deviceId, deviceName, devicePlatform, at);
+            var dto = await BumpCoreAsync(conn, tx, id, deviceId, deviceName, devicePlatform, userId, at);
             await tx.CommitAsync();
             return dto;
         }
@@ -101,7 +106,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
 
-        var sql = new StringBuilder($"SELECT {Columns} FROM clips c");
+        var sql = new StringBuilder($"SELECT {Columns} FROM {From}");
         var where = new List<string>();
 
         if (!string.IsNullOrEmpty(query))
@@ -222,7 +227,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
             await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
 
             // Timestamps are all stored in the same fixed-width UTC format, so text comparison is time order.
-            var sql = $"SELECT {Columns} FROM clips c WHERE c.pinned_at IS NULL";
+            var sql = $"SELECT {Columns} FROM {From} WHERE c.pinned_at IS NULL";
             var args = new List<(string, object?)>();
             if (olderThan is { } cutoff)
             {
@@ -253,6 +258,51 @@ public sealed class ClipRepository(PrivatePasteDb db)
         }
     }
 
+    /// <summary>
+    /// Gives each clip last copied by <paramref name="userId"/> (every clip when null) a new seq, in seq order and in
+    /// one transaction, without touching <c>last_copied_at</c>. Returns them so the caller can broadcast them.
+    /// </summary>
+    public async Task<IReadOnlyList<ClipDto>> ResequenceAsync(Guid? userId)
+    {
+        await _writeLock.WaitAsync();
+        try
+        {
+            await using var conn = db.Open();
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
+
+            // Set-based: one UPDATE gives the matching clips base+1, base+2, ... in their current seq order, the
+            // counter moves once, and nothing else can hold a seq above the old counter.
+            var seqBase = await ScalarAsync<long?>(conn, tx, "SELECT value FROM counters WHERE name = 'seq'") ?? 0;
+            var moved = await ExecAsync(conn, tx, """
+                WITH ordered AS (
+                    SELECT id, row_number() OVER (ORDER BY seq) AS n FROM clips
+                    WHERE @user IS NULL OR source_user_id = @user
+                )
+                UPDATE clips SET seq = @base + ordered.n FROM ordered WHERE clips.id = ordered.id
+                """,
+                ("@user", userId?.ToString()), ("@base", seqBase));
+            if (moved == 0)
+                return [];
+            await ExecAsync(conn, tx, """
+                INSERT INTO counters(name, value) VALUES('seq', @value)
+                ON CONFLICT(name) DO UPDATE SET value = excluded.value
+                """,
+                ("@value", seqBase + moved));
+
+            List<ClipDto> result;
+            await using (var select = Command(conn, tx, $"SELECT {Columns} FROM {From} WHERE c.seq > @base ORDER BY c.seq ASC",
+                             [("@base", seqBase)]))
+                result = await ReadClipsAsync(select);
+
+            await tx.CommitAsync();
+            return result;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
     public async Task<SyncResponse> SyncAsync(long afterSeq, int limit)
     {
         limit = Math.Clamp(limit, 1, 500);
@@ -261,7 +311,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
 
         await using var clipsCmd = conn.CreateCommand();
         clipsCmd.Transaction = tx;
-        clipsCmd.CommandText = $"SELECT {Columns} FROM clips c WHERE c.seq > @after ORDER BY c.seq ASC LIMIT @limit";
+        clipsCmd.CommandText = $"SELECT {Columns} FROM {From} WHERE c.seq > @after ORDER BY c.seq ASC LIMIT @limit";
         clipsCmd.Parameters.AddWithValue("@after", afterSeq);
         clipsCmd.Parameters.AddWithValue("@limit", limit + 1);
         var clips = await ReadClipsAsync(clipsCmd);
@@ -289,7 +339,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
     }
 
     private static async Task<ClipDto?> BumpCoreAsync(SqliteConnection conn, SqliteTransaction tx, Guid id,
-        Guid? deviceId, string deviceName, string? devicePlatform, DateTimeOffset at)
+        Guid? deviceId, string deviceName, string? devicePlatform, Guid? userId, DateTimeOffset at)
     {
         var current = await ScalarAsync<string>(conn, tx, "SELECT last_copied_at FROM clips WHERE id = @id",
             ("@id", id.ToString()));
@@ -303,11 +353,11 @@ public sealed class ClipRepository(PrivatePasteDb db)
         var seq = await NextSeqAsync(conn, tx);
         await ExecAsync(conn, tx, """
             UPDATE clips SET seq = @seq, last_copied_at = @at, source_device_id = @dev, source_device_name = @devName,
-                             source_device_platform = @devPlatform
+                             source_device_platform = @devPlatform, source_user_id = @user
             WHERE id = @id
             """,
             ("@seq", seq), ("@at", Format(newest)), ("@dev", deviceId?.ToString()), ("@devName", deviceName),
-            ("@devPlatform", devicePlatform), ("@id", id.ToString()));
+            ("@devPlatform", devicePlatform), ("@user", userId?.ToString()), ("@id", id.ToString()));
         return await GetCoreAsync(conn, tx, id);
     }
 
@@ -315,7 +365,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
     {
         await using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = $"SELECT {Columns} FROM clips c WHERE c.id = @id";
+        cmd.CommandText = $"SELECT {Columns} FROM {From} WHERE c.id = @id";
         cmd.Parameters.AddWithValue("@id", id.ToString());
         return (await ReadClipsAsync(cmd)).SingleOrDefault();
     }
@@ -341,6 +391,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
             {
                 SourceDevicePlatform = r.IsDBNull(11) ? null : r.GetString(11),
                 PinnedAt = r.IsDBNull(12) ? null : Parse(r.GetString(12)),
+                SourceUserName = r.IsDBNull(13) ? null : r.GetString(13),
             });
         }
 

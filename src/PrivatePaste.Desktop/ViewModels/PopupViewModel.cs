@@ -11,6 +11,9 @@ public enum PopupTab { History, Pinned }
 /// <summary>One popup row. <see cref="IsNewest"/> is true only for the first row while the query is empty.</summary>
 public sealed record PopupItem(ClipDto Clip, string Preview, string Meta, byte[]? Thumbnail, bool IsNewest = false)
 {
+    /// <summary>Who copied it; null while the server has one person, so the row shows no chip.</summary>
+    public string? Person => string.IsNullOrWhiteSpace(Clip.SourceUserName) ? null : Clip.SourceUserName.Trim();
+
     public bool IsImage => Clip.Kind == ClipKind.Image;
     public bool IsLink => Clip.Kind == ClipKind.Link;
     public bool IsText => Clip.Kind == ClipKind.Text;
