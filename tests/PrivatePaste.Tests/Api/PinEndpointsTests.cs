@@ -40,7 +40,7 @@ public class PinEndpointsTests
         }));
         var client = app.CreateClient();
         var login = await client.PostAsJsonAsync("/api/auth/login",
-            new LoginRequest(PrivatePasteFactory.Password, "Recorded", "windows"), ProtocolJson.Options);
+            new LoginRequest(PrivatePasteFactory.Password, "Recorded", "windows") { Username = PrivatePasteFactory.OwnerName }, ProtocolJson.Options);
         login.EnsureSuccessStatusCode();
         client.DefaultRequestHeaders.Authorization = new("Bearer",
             (await login.Content.ReadFromJsonAsync<LoginResponse>(ProtocolJson.Options))!.Token);

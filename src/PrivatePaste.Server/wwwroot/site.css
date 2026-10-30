@@ -88,12 +88,12 @@ nav a[aria-current="page"] { color: var(--text); background: var(--raised); }
 form.inline { display: inline; margin: 0; }
 
 /* Controls */
-button, input[type=search], input[type=password] {
+button, input[type=search], input[type=text], input[type=password] {
     font: inherit; color: var(--text); background: var(--raised);
     border: 1px solid var(--line); border-radius: 10px; padding: .55rem .85rem;
 }
 input::placeholder { color: var(--muted); }
-input[type=search]:focus, input[type=password]:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+input[type=search]:focus, input[type=text]:focus, input[type=password]:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
 button { cursor: pointer; transition: background-color .15s, border-color .15s, color .15s; }
 button:hover { border-color: var(--accent); }
 button:disabled { cursor: default; opacity: .8; }

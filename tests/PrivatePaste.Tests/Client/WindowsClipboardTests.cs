@@ -108,9 +108,9 @@ public class WindowsClipboardTests : IDisposable
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
         var key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         var api = new PrivatePasteApi(new HttpClient(server.Server.CreateHandler()) { BaseAddress = new Uri("http://localhost/") });
-        api.Token = (await api.LoginAsync(PrivatePasteFactory.Password, "A", "windows")).Token;
+        api.Token = (await api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "A", "windows")).Token;
         var other = new PrivatePasteApi(server.CreateClient());
-        other.Token = (await other.LoginAsync(PrivatePasteFactory.Password, "B", "windows")).Token;
+        other.Token = (await other.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "B", "windows")).Token;
 
         using var clip = new WindowsClipboard();
         var coordinator = new ClipboardCoordinator(clip, api,

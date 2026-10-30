@@ -13,16 +13,7 @@ public class PinnedWebTests
     private static readonly Regex TokenInput = new("<input[^>]*name=\"__RequestVerificationToken\"[^>]*>", RegexOptions.Compiled);
     private static readonly Regex ValueAttr = new("value=\"([^\"]+)\"", RegexOptions.Compiled);
 
-    private static async Task<HttpClient> WebLoginAsync(PrivatePasteFactory factory)
-    {
-        // The test client's cookie jar uses the real clock; the server's fake clock would issue already-expired cookies.
-        factory.Clock.SetUtcNow(DateTimeOffset.UtcNow);
-        var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = true });
-        var token = await TokenFromAsync(client, "/login");
-        var response = await PostFormAsync(client, "/login", token, ("Password", PrivatePasteFactory.Password));
-        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        return client;
-    }
+    private static Task<HttpClient> WebLoginAsync(PrivatePasteFactory factory) => factory.LoginWebAsync();
 
     private static async Task<string> TokenFromAsync(HttpClient client, string path)
     {

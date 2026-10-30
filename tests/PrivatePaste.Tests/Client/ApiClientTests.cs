@@ -11,7 +11,7 @@ public class ApiClientTests
     private static async Task<PrivatePasteApi> LoggedInAsync(PrivatePasteFactory server, string device = "PC-test")
     {
         var api = new PrivatePasteApi(server.CreateClient());
-        var r = await api.LoginAsync(PrivatePasteFactory.Password, device, "windows");
+        var r = await api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, device, "windows");
         api.Token = r.Token;
         return api;
     }
@@ -62,7 +62,7 @@ public class ApiClientTests
     {
         using var server = new PrivatePasteFactory();
         var api = new PrivatePasteApi(server.CreateClient());
-        await Assert.ThrowsAsync<UnauthorizedApiException>(() => api.LoginAsync("nope", "PC", "windows"));
+        await Assert.ThrowsAsync<UnauthorizedApiException>(() => api.LoginAsync(PrivatePasteFactory.OwnerName, "nope", "PC", "windows"));
     }
 
     [Fact]

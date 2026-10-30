@@ -32,15 +32,7 @@ public class WebUiTests
             fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value))
                 .Append(new("__RequestVerificationToken", token))));
 
-    private static async Task<HttpClient> WebLoginAsync(PrivatePasteFactory factory)
-    {
-        var client = WebClient(factory);
-        var token = await TokenFromAsync(client, "/login");
-        var response = await PostFormAsync(client, "/login", token, ("Password", PrivatePasteFactory.Password));
-        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal("/", response.Headers.Location?.OriginalString);
-        return client;
-    }
+    private static Task<HttpClient> WebLoginAsync(PrivatePasteFactory factory) => factory.LoginWebAsync();
 
     private static async Task<ClipDto> UploadTextAsync(HttpClient api, string text)
     {
@@ -71,9 +63,9 @@ public class WebUiTests
         using var factory = new PrivatePasteFactory();
         var client = WebClient(factory);
         var token = await TokenFromAsync(client, "/login");
-        var response = await PostFormAsync(client, "/login", token, ("Password", "nope"));
+        var response = await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", "nope"));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("Wrong password.", await response.Content.ReadAsStringAsync());
+        Assert.Contains("Wrong name or password.", await response.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -83,8 +75,8 @@ public class WebUiTests
         var client = WebClient(factory);
         var token = await TokenFromAsync(client, "/login");
         for (var i = 0; i < 5; i++)
-            Assert.Equal(HttpStatusCode.OK, (await PostFormAsync(client, "/login", token, ("Password", "nope"))).StatusCode);
-        Assert.Equal(HttpStatusCode.TooManyRequests, (await PostFormAsync(client, "/login", token, ("Password", "nope"))).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", "nope"))).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", "nope"))).StatusCode);
         // Viewing the page is never limited.
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/login")).StatusCode);
     }
@@ -95,7 +87,7 @@ public class WebUiTests
         using var factory = new PrivatePasteFactory();
         var client = WebClient(factory);
         var token = await TokenFromAsync(client, "/login");
-        var response = await PostFormAsync(client, "/login", token, ("Password", PrivatePasteFactory.Password));
+        var response = await PostFormAsync(client, "/login", token, ("Name", "owner"), ("Password", PrivatePasteFactory.Password));
         var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"), c => c.StartsWith(".AspNetCore.Cookies="));
         Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);

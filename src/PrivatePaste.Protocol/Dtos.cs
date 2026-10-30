@@ -19,7 +19,11 @@ public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, str
     public DateTimeOffset? PinnedAt { get; init; }
 }
 
-public sealed record LoginRequest(string Password, string DeviceName, string Platform);
+public sealed record LoginRequest(string Password, string DeviceName, string Platform)
+{
+    /// <summary>The person signing in. Apps from before there were people send none and are told to update.</summary>
+    public string? Username { get; init; }
+}
 
 public sealed record LoginResponse(Guid DeviceId, string Token);
 

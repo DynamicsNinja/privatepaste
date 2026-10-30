@@ -33,7 +33,7 @@ public sealed class SettingsRepository(PrivatePasteDb db)
     public Task SetHistoryClearedAtAsync(DateTimeOffset at) =>
         SetAsync(HistoryClearedAt, at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
 
-    private async Task<string?> GetAsync(string name)
+    public async Task<string?> GetAsync(string name)
     {
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
@@ -42,7 +42,7 @@ public sealed class SettingsRepository(PrivatePasteDb db)
         return await cmd.ExecuteScalarAsync() as string;
     }
 
-    private async Task SetAsync(string name, string value)
+    public async Task SetAsync(string name, string value)
     {
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();

@@ -33,6 +33,9 @@ builder.Services.AddSingleton<SettingsRepository>();
 builder.Services.AddSingleton<BlobStore>();
 builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();
+builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<OwnerBootstrap>();
+builder.Services.AddSingleton<SignInVerifier>();
 builder.Services.AddSingleton<DeviceRepository>();
 builder.Services.AddSingleton<ConnectionHub>();
 builder.Services.AddSingleton<IClipBroadcaster>(sp => sp.GetRequiredService<ConnectionHub>());
@@ -62,6 +65,7 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
         o.Cookie.SameSite = SameSiteMode.Strict;
         o.ExpireTimeSpan = TimeSpan.FromDays(30);
         o.SlidingExpiration = true;
+        o.Events.OnValidatePrincipal = WebSessionValidator.ValidateAsync;
         o.Events.OnRedirectToLogin = ctx =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api"))
@@ -127,8 +131,7 @@ catch (DatabaseKeyMismatchException ex)
     Environment.Exit(1);
 }
 
-// Hash the password now rather than on the first login attempt.
-app.Services.GetRequiredService<PasswordVerifier>();
+await app.Services.GetRequiredService<OwnerBootstrap>().EnsureOwnerAsync();
 
 app.Use((context, next) =>
 {

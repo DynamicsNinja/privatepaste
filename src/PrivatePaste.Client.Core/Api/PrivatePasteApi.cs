@@ -36,11 +36,13 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
         return BaseTimeout + TimeSpan.FromSeconds(Math.Min(extraSeconds, maxExtra));
     }
 
-    public Task<LoginResponse> LoginAsync(string password, string deviceName, string platform, CancellationToken ct = default) =>
+    public Task<LoginResponse> LoginAsync(string username, string password, string deviceName, string platform,
+        CancellationToken ct = default) =>
         WithTimeoutAsync(RequestTimeout, ct, async t =>
         {
             using var req = Request(HttpMethod.Post, "api/auth/login");
-            req.Content = JsonContent.Create(new LoginRequest(password, deviceName, platform), options: ProtocolJson.Options);
+            req.Content = JsonContent.Create(new LoginRequest(password, deviceName, platform) { Username = username },
+                options: ProtocolJson.Options);
             return await SendJsonAsync<LoginResponse>(req, t).ConfigureAwait(false);
         });
 

@@ -112,6 +112,20 @@ public sealed class PrivatePasteDb(ServerOptions options)
             tx.Commit();
         }
 
+        // Who each device and clip belongs to. Existing rows get the owner from OwnerBootstrap, which runs after this.
+        if (!HasColumn(conn, "devices", "user_id"))
+        {
+            using var tx = conn.BeginTransaction();
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                ALTER TABLE devices ADD COLUMN user_id TEXT;
+                ALTER TABLE clips ADD COLUMN source_user_id TEXT;
+                """;
+            cmd.ExecuteNonQuery();
+            tx.Commit();
+        }
+
         // Here, not in Schema.sql: that script runs before this method, when an old database has no pinned_at yet.
         using var index = conn.CreateCommand();
         index.CommandText = "CREATE INDEX IF NOT EXISTS ix_clips_pinned ON clips(pinned_at DESC, seq DESC) " +

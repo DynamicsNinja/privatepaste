@@ -42,6 +42,32 @@ public static class DeviceClaims
         string.IsNullOrWhiteSpace(platform) ? null : platform.Trim().ToLowerInvariant();
 }
 
+/// <summary>The person behind a principal: device-token and web-cookie principals both carry these.</summary>
+public static class UserClaims
+{
+    public const string UserId = "uid";
+
+    /// <summary>"true" for the owner, absent otherwise.</summary>
+    public const string IsOwner = "owner";
+
+    /// <summary>The person's security stamp when the web session began; only on cookie principals.</summary>
+    public const string Stamp = "stamp";
+
+    /// <summary>A person's claims, without the stamp.</summary>
+    public static IEnumerable<Claim> For(Guid userId, bool isOwner) => isOwner
+        ? [new Claim(UserId, userId.ToString()), new Claim(IsOwner, "true")]
+        : [new Claim(UserId, userId.ToString())];
+}
+
+public static class UserClaimsPrincipalExtensions
+{
+    /// <summary>The signed-in person, or null for a principal from before there were people.</summary>
+    public static Guid? UserId(this ClaimsPrincipal user) =>
+        Guid.TryParse(user.FindFirstValue(UserClaims.UserId), out var id) ? id : null;
+
+    public static bool IsOwner(this ClaimsPrincipal user) => user.FindFirstValue(UserClaims.IsOwner) == "true";
+}
+
 public sealed class DeviceTokenAuthHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
@@ -63,15 +89,17 @@ public sealed class DeviceTokenAuthHandler(
         if (token.Length > MaxTokenLength)
             return AuthenticateResult.Fail("Invalid token.");
 
-        var device = await devices.FindByTokenAsync(token);
-        if (device is null)
+        var found = await devices.FindByTokenAsync(token);
+        if (found is null)
             return AuthenticateResult.Fail("Invalid token.");
 
+        var device = found.Device;
         var identity = new ClaimsIdentity(
             [
                 new Claim(DeviceClaims.Subject, device.Id.ToString()),
                 new Claim(DeviceClaims.Name, device.Name),
                 new Claim(DeviceClaims.Platform, device.Platform),
+                ..UserClaims.For(found.UserId, found.IsOwner),
             ],
             Scheme.Name, DeviceClaims.Name, roleType: null);
         return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name));

@@ -42,7 +42,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
     {
         _handler = new SwitchHandler(_server.Server.CreateHandler());
         _api = new PrivatePasteApi(new HttpClient(_handler) { BaseAddress = new Uri("http://localhost/") });
-        _api.Token = (await _api.LoginAsync(PrivatePasteFactory.Password, device, "windows")).Token;
+        _api.Token = (await _api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, device, "windows")).Token;
         _cache = new HistoryCache(Path.Combine(_dir, "h.enc"), _key);
         _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
         _echo = new EchoGuard(_time, TimeSpan.FromSeconds(30));
@@ -73,7 +73,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
     {
         await StartAsync();
         var b = new PrivatePasteApi(_server.CreateClient());
-        b.Token = (await b.LoginAsync(PrivatePasteFactory.Password, "B", "windows")).Token;
+        b.Token = (await b.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "B", "windows")).Token;
         var remote = await b.UploadTextAsync("from b", null, false);
 
         await _c.ApplyRemoteAsync(remote, default);

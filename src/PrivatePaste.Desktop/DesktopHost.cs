@@ -173,7 +173,9 @@ public sealed class DesktopHost : IAsyncDisposable
             LoginResponse login;
             try
             {
-                login = await new PrivatePasteApi(http, _time).LoginAsync(password, deviceName, Platform.PlatformName, _shutdown.Token);
+                // Until the sign-in window asks for a name, the desktop app signs in as the owner, as it did before.
+                login = await new PrivatePasteApi(http, _time).LoginAsync("owner", password, deviceName,
+                    Platform.PlatformName, _shutdown.Token);
             }
             catch (Exception e)
             {
