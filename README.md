@@ -122,6 +122,17 @@ Each device signs in with a person's name and password once and gets its own dev
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+> Applied for; until it is approved, the Windows downloads are unsigned (see [SmartScreen](docs/desktop.md)).
+
+- What is signed: the Windows app (`PrivatePaste.exe`) and its installer (`PrivatePaste-<version>-win-x64.msi`), built from this repository by the [desktop release workflow](.github/workflows/desktop.yml) on GitHub-hosted runners. Nothing built elsewhere is signed.
+- Committers and reviewers: [Ivan Ficko](https://github.com/DynamicsNinja). Changes from anyone else come in as pull requests and are reviewed before they are merged.
+- Approvers: [Ivan Ficko](https://github.com/DynamicsNinja). Every release is approved by hand before it is signed.
+- Privacy: PrivatePaste sends data only to the PrivatePaste server you enter when you sign in, which you or someone you trust runs. It sends nothing to the authors or to any other system.
+
 ## Built with
 
 [ASP.NET Core](https://dotnet.microsoft.com/apps/aspnet) on .NET 10 and [SQLite3 Multiple Ciphers](https://utelle.github.io/SQLite3MultipleCiphers/) on the server, [Avalonia](https://avaloniaui.net/) for the desktop app, Kotlin and Jetpack Compose for Android, and the [Sora](https://fonts.google.com/specimen/Sora) typeface.

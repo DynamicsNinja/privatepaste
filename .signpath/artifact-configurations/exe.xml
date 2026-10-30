@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "exe" (copy of the one stored in SignPath; keep the two in step).
+  Input: the GitHub artifact zip holding the single-file PrivatePaste.exe from scripts/publish-windows.ps1.
+  The product name and version restrictions are a SignPath Foundation requirement: only PrivatePaste, at the
+  version of the release being built, can be signed.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="PrivatePaste.exe" product-name="PrivatePaste" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

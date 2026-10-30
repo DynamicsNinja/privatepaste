@@ -29,18 +29,79 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Publish and build the installer
+      - name: Publish
+        id: publish
         shell: pwsh
         env:
           TAG: ${{ github.ref_name }}
         run: |
           $version = $env:TAG -replace '^desktop-v', ''
-          # Runs publish-windows.ps1 (exe + zip), then WiX (a .NET local tool) for the MSI.
-          ./scripts/build-installer.ps1 -Version $version
-          Move-Item artifacts/PrivatePaste-win-x64.zip "artifacts/PrivatePaste-$version-win-x64.zip"
-          foreach ($f in "artifacts/PrivatePaste-$version-win-x64.zip", "artifacts/PrivatePaste-$version-win-x64.msi") {
+          "version=$version" >> $env:GITHUB_OUTPUT
+          ./scripts/publish-windows.ps1 -Version $version
+
+      # Code signing through SignPath (see .signpath/ and "Code signing policy" in the README). Off until the
+      # repository variable SIGNPATH_ORGANIZATION_ID is set; the release is then built unsigned, as before.
+      # Each signing request waits for a manual approval in SignPath.
+      - name: Upload the unsigned exe
+        id: unsigned-exe
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: artifacts/win-x64/PrivatePaste.exe
+          if-no-files-found: error
+      - name: Sign the exe
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: exe
+          github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          # Approval is manual, so allow time to approve.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: artifacts/win-x64
+          parameters: |
+            version: ${{ toJSON(steps.publish.outputs.version) }}
+
+      - name: Zip and build the installer
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.publish.outputs.version }}
+        run: |
+          # Zipped again here so the zip holds the signed exe when signing is on.
+          $zip = "artifacts/PrivatePaste-$env:VERSION-win-x64.zip"
+          Compress-Archive -Path artifacts/win-x64/PrivatePaste.exe -DestinationPath $zip -CompressionLevel Optimal -Force
+          Remove-Item artifacts/PrivatePaste-win-x64.zip -ErrorAction SilentlyContinue
+          ./scripts/build-installer.ps1 -Version $env:VERSION -NoPublish
+          foreach ($f in $zip, "artifacts/PrivatePaste-$env:VERSION-win-x64.msi") {
             if (-not (Test-Path $f)) { throw "$f is missing" }
           }
+
+      - name: Upload the unsigned installer
+        id: unsigned-msi
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-msi
+          path: artifacts/PrivatePaste-*-win-x64.msi
+          if-no-files-found: error
+      - name: Sign the installer
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: msi
+          github-artifact-id: ${{ steps.unsigned-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: artifacts
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -104,5 +165,7 @@ jobs:
           else
             flags=""
             case "$version" in *-*) flags="--prerelease" ;; esac
-            gh release create "$GITHUB_REF_NAME" dist/* --title "PrivatePaste $version" --generate-notes $flags
+            # SignPath Foundation asks for the term "Code signing policy" on the download page.
+            gh release create "$GITHUB_REF_NAME" dist/* --title "PrivatePaste $version" --generate-notes $flags \
+              --notes "Code signing policy: https://github.com/$GH_REPO#code-signing-policy"
           fi

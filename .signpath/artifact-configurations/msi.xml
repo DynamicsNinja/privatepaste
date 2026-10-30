@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "msi" (copy of the one stored in SignPath; keep the two in step).
+  Input: the GitHub artifact zip holding the installer that scripts/build-installer.ps1 builds from the exe
+  already signed with the "exe" configuration.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <msi-file path="PrivatePaste-*-win-x64.msi">
+      <authenticode-sign />
+    </msi-file>
+  </zip-file>
+</artifact-configuration>

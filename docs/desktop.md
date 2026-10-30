@@ -8,7 +8,7 @@ A tray app that keeps your clipboard in sync with the server (Windows; see [macO
 
 - **Install**: download `PrivatePaste-<version>-win-x64.msi` from the latest GitHub Release and run it. It installs for your user only (no admin prompt) to `%LOCALAPPDATA%\Programs\PrivatePaste\PrivatePaste.exe`, adds a Start menu shortcut and can start the app when it finishes. No .NET runtime is needed.
 - **Portable**: `PrivatePaste-<version>-win-x64.zip` holds the same single self-contained `PrivatePaste.exe`. Unzip it anywhere and run it; nothing is installed.
-- **SmartScreen**: the installer and the exe are not code-signed, so Windows shows "Windows protected your PC". Click "More info", then "Run anyway".
+- **SmartScreen**: the installer and the exe are not code-signed yet (see the [Code signing policy](../README.md#code-signing-policy)), so Windows shows "Windows protected your PC". Click "More info", then "Run anyway", or before opening the download right-click it, choose Properties, tick **Unblock** and click OK.
 - **Work PCs**: a managed PC can block unsigned apps with Microsoft Defender attack surface reduction (ASR) rules. Ask your IT department for an exception for the exact path `%LOCALAPPDATA%\Programs\PrivatePaste\PrivatePaste.exe`.
 - **Upgrade**: install the newer `.msi`. It closes a running PrivatePaste, replaces the old version and keeps your settings, sign-in and history. Installing an older version over a newer one is refused; uninstall first if you really want to go back.
 - **Silent upgrade**: after an upgrade run with `msiexec /qn` or `/passive` the app is not started again; it comes back at your next sign-in (if "Start with Windows" is on) or when you start it from the Start menu.
