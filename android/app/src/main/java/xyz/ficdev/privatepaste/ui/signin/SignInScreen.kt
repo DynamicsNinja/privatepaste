@@ -39,6 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -56,6 +57,7 @@ fun SignInScreen(vm: SignInViewModel) {
     SignInContent(
         state = state,
         onUrlChange = vm::onUrlChange,
+        onUsernameChange = vm::onUsernameChange,
         onPasswordChange = vm::onPasswordChange,
         onDeviceNameChange = vm::onDeviceNameChange,
         onSubmit = vm::submit,
@@ -66,6 +68,7 @@ fun SignInScreen(vm: SignInViewModel) {
 fun SignInContent(
     state: SignInViewModel.State,
     onUrlChange: (String) -> Unit,
+    onUsernameChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onDeviceNameChange: (String) -> Unit,
     onSubmit: () -> Unit,
@@ -102,6 +105,20 @@ fun SignInContent(
                     shape = fieldShape,
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Uri,
+                        autoCorrectEnabled = false,
+                        imeAction = ImeAction.Next,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = state.username,
+                    onValueChange = onUsernameChange,
+                    label = { Text(stringResource(R.string.signin_name)) },
+                    singleLine = true,
+                    enabled = !state.busy,
+                    shape = fieldShape,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
                         autoCorrectEnabled = false,
                         imeAction = ImeAction.Next,
                     ),

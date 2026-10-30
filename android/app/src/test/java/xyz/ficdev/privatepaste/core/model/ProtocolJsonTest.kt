@@ -37,6 +37,19 @@ class ProtocolJsonTest {
     }
 
     @Test
+    fun clipDto_withoutSourceUserName_decodes() {
+        assertNull(json.decodeFromString<ClipDto>(linkClipJson).sourceUserName)
+        assertNull(json.decodeFromString<ClipDto>(linkClipJson.replace("\"width\"", "\"sourceUserName\":null,\"width\"")).sourceUserName)
+    }
+
+    @Test
+    fun clipDto_withSourceUserName_decodes() {
+        val clip = json.decodeFromString<ClipDto>(linkClipJson.replace("\"width\"", "\"sourceUserName\":\"Ana\",\"width\""))
+        assertEquals("Ana", clip.sourceUserName)
+        assertEquals(clip, json.decodeFromString<ClipDto>(json.encodeToString(ClipDto.serializer(), clip)))
+    }
+
+    @Test
     fun pinnedAtDecodesWhenPresentNullOrMissing() {
         assertNull(json.decodeFromString<ClipDto>(linkClipJson).pinnedAt)
         val pinned = json.decodeFromString<ClipDto>(linkClipJson.replace("\"width\"", "\"pinnedAt\":\"2026-10-29T09:00:00+00:00\",\"width\""))

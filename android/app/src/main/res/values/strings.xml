@@ -10,12 +10,13 @@
 
     <!-- Sign in -->
     <string name="signin_server">Server address</string>
+    <string name="signin_name">Name</string>
     <string name="signin_password">Password</string>
     <string name="signin_device_name">Device name</string>
     <string name="signin_button">Sign in</string>
     <string name="signin_show_password">Show password</string>
     <string name="signin_hide_password">Hide password</string>
-    <string name="signin_wrong_password">Wrong password.</string>
+    <string name="signin_wrong_password">Wrong name or password.</string>
     <string name="signin_rate_limited">Too many attempts. Wait a minute and try again.</string>
     <string name="signin_unreachable">Can\'t reach the server. Check the address and your connection.</string>
 
@@ -48,6 +49,7 @@
     <string name="history_pin_failed">Couldn\'t change the pin. Check your connection.</string>
     <string name="history_cancel">Cancel</string>
     <string name="history_copy_action">Copy</string>
+    <string name="notification_new_clip_from_person">New clip from %1$s · %2$s</string>
     <string name="history_meta">%1$s · %2$s</string>
     <string name="history_unknown_device">Unknown device</string>
     <string name="history_live">Applied on this phone</string>

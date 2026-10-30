@@ -28,9 +28,15 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_ONBOARDING_DONE, false)
         set(value) = prefs.edit { putBoolean(KEY_ONBOARDING_DONE, value) }
 
+    /** The name last used to sign in, to prefill the form. Not secret. */
+    var lastUsername: String?
+        get() = prefs.getString(KEY_LAST_USERNAME, null)
+        set(value) = prefs.edit { if (value == null) remove(KEY_LAST_USERNAME) else putString(KEY_LAST_USERNAME, value) }
+
     private companion object {
         const val NAME = "settings"
         const val KEY_DELIVERY_MODE = "deliveryMode"
         const val KEY_ONBOARDING_DONE = "onboardingDone"
+        const val KEY_LAST_USERNAME = "lastUsername"
     }
 }

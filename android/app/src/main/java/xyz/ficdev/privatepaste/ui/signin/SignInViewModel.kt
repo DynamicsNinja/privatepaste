@@ -19,27 +19,31 @@ import xyz.ficdev.privatepaste.ui.UiText
 class SignInViewModel(
     initialUrl: String?,
     defaultDeviceName: String,
-    private val signIn: suspend (url: String, password: String, deviceName: String) -> SignInResult,
+    initialUsername: String? = null,
+    private val signIn: suspend (url: String, username: String, password: String, deviceName: String) -> SignInResult,
     private val onSignedIn: () -> Unit,
 ) : ViewModel() {
 
     data class State(
         val url: String = "",
+        val username: String = "",
         val password: String = "",
         val deviceName: String = "",
         val busy: Boolean = false,
         val error: UiText? = null,
     ) {
         val canSubmit: Boolean
-            get() = !busy && url.isNotBlank() && password.isNotEmpty() && deviceName.trim().length in DEVICE_NAME_LENGTH
+            get() = !busy && url.isNotBlank() && username.isNotBlank() && password.isNotEmpty() && deviceName.trim().length in DEVICE_NAME_LENGTH
     }
 
     private val _state = MutableStateFlow(
-        State(url = initialUrl.orEmpty(), deviceName = defaultDeviceName.trim().take(DEVICE_NAME_LENGTH.last)),
+        State(url = initialUrl.orEmpty(), username = initialUsername.orEmpty(), deviceName = defaultDeviceName.trim().take(DEVICE_NAME_LENGTH.last)),
     )
     val state: StateFlow<State> = _state.asStateFlow()
 
     fun onUrlChange(value: String) = _state.update { it.copy(url = value, error = null) }
+
+    fun onUsernameChange(value: String) = _state.update { it.copy(username = value, error = null) }
 
     fun onPasswordChange(value: String) = _state.update { it.copy(password = value, error = null) }
 
@@ -51,7 +55,7 @@ class SignInViewModel(
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             val result = try {
-                signIn(form.url.trim(), form.password, form.deviceName.trim())
+                signIn(form.url.trim(), form.username.trim(), form.password, form.deviceName.trim())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

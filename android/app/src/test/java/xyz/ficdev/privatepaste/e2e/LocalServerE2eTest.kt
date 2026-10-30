@@ -88,7 +88,7 @@ class LocalServerE2eTest {
         val manager = SessionManager(store, cache, thumbs, queue, apiFactory = { u, token -> PrivatePasteApi(u, token, client) })
 
         // 1. Sign in as the phone.
-        assertEquals(SignInResult.Ok, manager.signIn(baseUrl.toString(), password, "e2e-phone"))
+        assertEquals(SignInResult.Ok, manager.signIn(baseUrl.toString(), "owner", password, "e2e-phone"))
         val session = checkNotNull(manager.session.value)
         val phoneDeviceId = session.deviceId
         val phoneApi = PrivatePasteApi(baseUrl, session.token, client)
@@ -107,7 +107,7 @@ class LocalServerE2eTest {
         waitFor("engine connected") { engine.state.value == SyncState.CONNECTED }
 
         // 2. A second client signs in as the PC.
-        val pcLogin = PrivatePasteApi(baseUrl, null, client).login(password, "e2e-pc")
+        val pcLogin = PrivatePasteApi(baseUrl, null, client).login("owner", password, "e2e-pc")
         val pc = PrivatePasteApi(baseUrl, pcLogin.token, client)
 
         try {

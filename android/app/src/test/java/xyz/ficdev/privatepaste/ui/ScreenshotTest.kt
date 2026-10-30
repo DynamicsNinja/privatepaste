@@ -69,6 +69,11 @@ class ScreenshotTest {
         syncState = SyncState.CONNECTED,
     )
 
+    // Two people on one server: the person chip shows on every row.
+    private val people = history.copy(
+        items = history.items.mapIndexed { i, c -> c.copy(sourceUserName = if (i % 2 == 0) "Ana" else "Ben") },
+    )
+
     private val pinnedTab = HistoryState(
         tab = HistoryTab.PINNED,
         items = history.items.filter { it.id in setOf("2", "4", "5") }
@@ -81,6 +86,8 @@ class ScreenshotTest {
     @Test fun signInLight() = shootOne("signin", dark = false) { SignInSample() }
     @Test fun historyDark() = shootOne("history", dark = true) { HistorySample() }
     @Test fun historyLight() = shootOne("history", dark = false) { HistorySample() }
+    @Test fun historyPeopleDark() = shootOne("history-people", dark = true) { HistorySample(people) }
+    @Test fun historyPeopleLight() = shootOne("history-people", dark = false) { HistorySample(people) }
     // Close-ups of the history top bar (brand mark, connection chip, settings button).
     @Test fun historyPinnedDark() = shootOne("history-pinned", dark = true) { HistorySample(pinnedTab) }
     @Test fun historyPinnedLight() = shootOne("history-pinned", dark = false) { HistorySample(pinnedTab) }
@@ -103,8 +110,8 @@ class ScreenshotTest {
 
     @Composable
     private fun SignInSample() = SignInContent(
-        state = SignInViewModel.State(url = "https://paste.example.com", deviceName = "Pixel 9"),
-        onUrlChange = {}, onPasswordChange = {}, onDeviceNameChange = {}, onSubmit = {},
+        state = SignInViewModel.State(url = "https://paste.example.com", username = "Ana", deviceName = "Pixel 9"),
+        onUrlChange = {}, onUsernameChange = {}, onPasswordChange = {}, onDeviceNameChange = {}, onSubmit = {},
     )
 
     @Composable
