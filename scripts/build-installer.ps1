@@ -28,6 +28,9 @@ $repo = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $repo 'artifacts/win-x64/PrivatePaste.exe'
 $icon = Join-Path $repo 'src/PrivatePaste.Desktop/Assets/app.ico'
 $wxs = Join-Path $repo 'installer/PrivatePaste.wxs'
+$uiWxs = Join-Path $repo 'installer/PrivatePasteUI.wxs'
+# Dialog and banner artwork (made by make-installer-art.ps1, committed).
+$art = Join-Path $repo 'installer/art'
 $msi = Join-Path $repo "artifacts/PrivatePaste-$Version-win-x64.msi"
 
 if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)([-+].*)?$') {
@@ -53,8 +56,8 @@ try {
 
   if (Test-Path $msi) { Remove-Item $msi -Force }
   $extArgs = $wixExtensions | ForEach-Object { '-ext', $_ }
-  dotnet tool run wix build $wxs -arch x64 -culture en-US @extArgs `
-    -d "Version=$msiVersion" -d "ExePath=$exe" -d "IconPath=$icon" -o $msi
+  dotnet tool run wix build $wxs $uiWxs -arch x64 -culture en-US @extArgs `
+    -d "Version=$msiVersion" -d "ExePath=$exe" -d "IconPath=$icon" -d "ArtDir=$art" -o $msi
   if ($LASTEXITCODE -ne 0) { throw "wix build failed ($LASTEXITCODE)" }
 }
 finally { Pop-Location }

@@ -1,0 +1,70 @@
+<!--
+  "PrivatePaste UI Preview": a throwaway MSI with the real installer dialogs (PrivatePasteUI.wxs) for looking at them
+  without installing PrivatePaste. It has its own UpgradeCode and product name, installs only a text file to
+  %LOCALAPPDATA%\Programs\PrivatePasteUIPreview and never touches an installed PrivatePaste. Never ship it.
+  Pauses (ping, about 4 s) keep the preparing and progress pages up long enough to look at.
+
+  Build (from the repo root; writes outside artifacts/, which holds the release files):
+    dotnet tool run wix build installer/preview/Preview.wxs installer/PrivatePasteUI.wxs -arch x64 -culture en-US
+      -ext WixToolset.Util.wixext/6.0.2 -ext WixToolset.UI.wixext/6.0.2 -d ArtDir=installer/art -o <temp>/Preview.msi
+  Run it with full UI (msiexec /i Preview.msi), then run it again for the repair/remove pages, and remove it at the end.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- Not PrivatePaste's UpgradeCode: this product must never upgrade or replace the real app. -->
+  <Package Name="PrivatePaste UI Preview"
+           Manufacturer="ficdev"
+           Version="1.0.0"
+           UpgradeCode="743A92AD-A6FF-4624-8A14-A82B911420CF"
+           Scope="perUser"
+           Language="1033">
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="PreviewProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="PrivatePasteUIPreview" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Preview" AllowAbsent="no">
+      <Component Id="PreviewFile" Directory="INSTALLFOLDER" Guid="A50DD5DB-E085-4BEF-BF1D-636F453F2497">
+        <!-- Any small file will do; this one is always at hand. -->
+        <File Id="PreviewReadme" Source="$(sys.SOURCEFILEDIR)Preview.wxs" Name="readme.txt" />
+        <RegistryValue Root="HKCU" Key="Software\ficdev\PrivatePasteUIPreview" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemovePreviewFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <RemoveFolder Id="RemovePreviewProgramsFolder" Directory="PreviewProgramsFolder" On="uninstall" />
+      </Component>
+    </Feature>
+
+    <!-- The Finish page's "Launch PrivatePaste" checkbox: nothing to launch here, so it only sets a property. -->
+    <CustomAction Id="LaunchApplication" Property="PREVIEW_LAUNCHED" Value="1" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch PrivatePaste" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <!-- Pause while the preparing page is up (its action text shows the message below)... -->
+    <SetProperty Id="WixQuietExecCmdLine" Sequence="ui" Before="PreviewPreparePause"
+                 Value="&quot;[System64Folder]PING.EXE&quot; -n 5 127.0.0.1" />
+    <CustomAction Id="PreviewPreparePause" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="immediate" Return="ignore" />
+    <InstallUISequence>
+      <Custom Action="PreviewPreparePause" After="AppSearch" />
+    </InstallUISequence>
+
+    <!-- ...and while files are installed or removed, for the progress page. -->
+    <SetProperty Id="PreviewProgressPause" Sequence="execute" Before="PreviewProgressPause"
+                 Value="&quot;[System64Folder]PING.EXE&quot; -n 5 127.0.0.1" />
+    <CustomAction Id="PreviewProgressPause" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="PreviewProgressPause" Before="InstallFinalize" />
+    </InstallExecuteSequence>
+
+    <UI>
+      <ProgressText Action="PreviewPreparePause" Message="Preparing the preview" />
+      <ProgressText Action="PreviewProgressPause" Message="Pausing so the progress page can be seen" />
+    </UI>
+
+    <UIRef Id="PrivatePaste_UI" />
+  </Package>
+</Wix>
