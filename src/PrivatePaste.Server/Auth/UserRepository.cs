@@ -72,7 +72,11 @@ public sealed class UserRepository(PrivatePasteDb db, TimeProvider time)
         ExecuteAsync("UPDATE users SET name = @name, name_key = @key WHERE id = @id",
             ("@id", id.ToString()), ("@name", name.Trim()), ("@key", NameKey(name)));
 
-    /// <param name="newSecurityStamp">Ends the person's web sessions (a reset by someone else, or a change they made).</param>
+    /// <summary>Sets the password without checking the old one: an owner's reset, or the PP_PASSWORD recovery.</summary>
+    /// <param name="newSecurityStamp">
+    /// Ends the person's web sessions, since whoever knew the old password may hold one. The server always passes
+    /// true; device tokens are not tied to the stamp either way.
+    /// </param>
     public Task SetPasswordAsync(Guid id, string passwordHash, bool newSecurityStamp) =>
         ExecuteAsync(newSecurityStamp
                 ? "UPDATE users SET password_hash = @hash, security_stamp = @stamp WHERE id = @id"
@@ -80,21 +84,24 @@ public sealed class UserRepository(PrivatePasteDb db, TimeProvider time)
             ("@id", id.ToString()), ("@hash", passwordHash), ("@stamp", NewStamp()));
 
     /// <summary>
-    /// A person's own password change: sets the hash, keeping the stamp, only while the stamp is still
-    /// <paramref name="expectedStamp"/> and they are not removed. False when a reset or removal got there first.
+    /// A person's own password change: sets the hash and a new stamp, which ends their other web sessions, only while
+    /// the stamp is still <paramref name="expectedStamp"/> and they are not removed. Returns the new stamp, for the
+    /// cookie of the browser that made the change, or null when a reset or removal got there first.
     /// </summary>
-    public async Task<bool> ChangeOwnPasswordAsync(Guid id, string passwordHash, string expectedStamp)
+    public async Task<string?> ChangeOwnPasswordAsync(Guid id, string passwordHash, string expectedStamp)
     {
+        var stamp = NewStamp();
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            UPDATE users SET password_hash = @hash
+            UPDATE users SET password_hash = @hash, security_stamp = @newStamp
             WHERE id = @id AND security_stamp = @stamp AND removed_at IS NULL
             """;
         cmd.Parameters.AddWithValue("@id", id.ToString());
         cmd.Parameters.AddWithValue("@hash", passwordHash);
         cmd.Parameters.AddWithValue("@stamp", expectedStamp);
-        return await cmd.ExecuteNonQueryAsync() > 0;
+        cmd.Parameters.AddWithValue("@newStamp", stamp);
+        return await cmd.ExecuteNonQueryAsync() > 0 ? stamp : null;
     }
 
     /// <summary>Frees the name and, with a new security stamp, ends the person's web sessions.</summary>

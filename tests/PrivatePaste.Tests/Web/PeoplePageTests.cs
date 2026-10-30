@@ -274,6 +274,75 @@ public class PeoplePageTests
         await f.LoginAsync("Ana-phone", "android", "Ana", "ana-new-pass");
     }
 
+    /// <summary>Changes the password on /settings in <paramref name="web"/> and checks it worked.</summary>
+    private static async Task ChangePasswordAsync(HttpClient web, string current, string password)
+    {
+        var token = await PrivatePasteFactory.AntiforgeryTokenAsync(web, "/settings");
+        var response = await PostFormAsync(web, "/settings?handler=ChangePassword", token,
+            ("current", current), ("password", password), ("repeat", password));
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Contains("Password changed.", await web.GetStringAsync(response.Headers.Location!.OriginalString));
+    }
+
+    private static async Task AssertSignedOutAsync(HttpClient web)
+    {
+        var response = await web.GetAsync("/");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/login", response.Headers.Location!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task Settings_OwnerChangesPassword_EndsOtherBrowsers_KeepsThisOneAndDevices()
+    {
+        using var f = new PrivatePasteFactory();
+        var device = await f.LoginAsync("Owner-pc");
+        var here = await f.LoginWebAsync();
+        var elsewhere = await f.LoginWebAsync();
+
+        await ChangePasswordAsync(here, PrivatePasteFactory.Password, "owner-new-pass");
+
+        await AssertSignedOutAsync(elsewhere);
+        Assert.Equal(HttpStatusCode.OK, (await here.GetAsync("/")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await device.GetAsync("/api/clips")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Settings_PersonChangesPassword_EndsOtherBrowsers_KeepsThisOneAndDevices()
+    {
+        using var f = new PrivatePasteFactory();
+        await f.AddPersonAsync("Ana");
+        var device = await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword);
+        var here = await f.LoginWebAsync("Ana", AnaPassword);
+        var elsewhere = await f.LoginWebAsync("Ana", AnaPassword);
+
+        await ChangePasswordAsync(here, AnaPassword, "ana-new-pass");
+
+        await AssertSignedOutAsync(elsewhere);
+        Assert.Equal(HttpStatusCode.OK, (await here.GetAsync("/")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await device.GetAsync("/api/clips")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Settings_ChangePassword_IsRateLimitedWithSignIns_OtherPostsAreNot()
+    {
+        using var f = new PrivatePasteFactory();
+        var web = await f.LoginWebAsync(); // the first attempt this minute
+        var token = await PrivatePasteFactory.AntiforgeryTokenAsync(web, "/settings");
+        Task<HttpResponseMessage> Attempt() => PostFormAsync(web, "/settings?handler=ChangePassword", token,
+            ("current", "wrong-current"), ("password", "owner-new-pass"), ("repeat", "owner-new-pass"));
+
+        for (var i = 0; i < 4; i++)
+            Assert.Equal(HttpStatusCode.OK, (await Attempt()).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await Attempt()).StatusCode);
+        // Handler names are matched the way Razor Pages matches them, so a different case is the same attempt.
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await PostFormAsync(web, "/settings?handler=changepassword", token,
+            ("current", "wrong-current"), ("password", "owner-new-pass"), ("repeat", "owner-new-pass"))).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Redirect,
+            (await PostFormAsync(web, "/settings?handler=AutoDelete", token, ("days", "7"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/settings")).StatusCode);
+    }
+
     [Theory]
     [InlineData("wrong-current", "ana-new-pass", "ana-new-pass", "Current password is wrong.")]
     [InlineData(AnaPassword, "ana-new-pass", "ana-other-pass", "Passwords don&#x27;t match.")]

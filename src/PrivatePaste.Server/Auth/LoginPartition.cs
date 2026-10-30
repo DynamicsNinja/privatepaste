@@ -6,6 +6,12 @@ namespace PrivatePaste.Server.Auth;
 /// <summary>Rate-limit partition key for login attempts.</summary>
 public static class LoginPartition
 {
+    /// <summary>A POST, narrowed to the listed handlers on a page with <see cref="LoginAttemptHandlersAttribute"/>.</summary>
+    public static bool IsAttempt(HttpContext ctx) =>
+        HttpMethods.IsPost(ctx.Request.Method)
+        && (ctx.GetEndpoint()?.Metadata.GetMetadata<LoginAttemptHandlersAttribute>() is not { } only
+            || only.Matches(ctx.Request));
+
     /// <summary>
     /// IPv4 (including IPv4-mapped IPv6) by full address; IPv6 by its /64 prefix, since a single client usually
     /// controls a whole /64 and could otherwise rotate addresses to dodge the limit. Null (TestServer) is "unknown".

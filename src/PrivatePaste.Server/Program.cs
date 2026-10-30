@@ -106,7 +106,8 @@ builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     // Only attempts (POST) count; the login page itself (GET) is shared with the API policy name but never limited.
-    o.AddPolicy("login", ctx => HttpMethods.IsPost(ctx.Request.Method)
+    // A page may narrow that to some of its handlers (Settings: only Change password).
+    o.AddPolicy("login", ctx => LoginPartition.IsAttempt(ctx)
         ? RateLimitPartition.GetFixedWindowLimiter(
             LoginPartition.KeyFor(ctx.Connection.RemoteIpAddress),
             _ => new FixedWindowRateLimiterOptions

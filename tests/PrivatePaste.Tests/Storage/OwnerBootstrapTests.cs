@@ -106,7 +106,7 @@ public class OwnerBootstrapTests
     }
 
     [Fact]
-    public async Task Restart_ChangedPpPassword_ResetsOwnerPassword_KeepsStamp()
+    public async Task Restart_ChangedPpPassword_ResetsOwnerPassword_NewStamp()
     {
         var dataDir = NewDataDir();
         try
@@ -121,12 +121,60 @@ public class OwnerBootstrapTests
             var verifier = second.Services.GetRequiredService<PasswordVerifier>();
             Assert.Equal(PasswordCheck.Valid, await verifier.VerifyAsync("recovered-pass", owner.PasswordHash));
             Assert.Equal(PasswordCheck.Invalid, await verifier.VerifyAsync(PrivatePasteFactory.Password, owner.PasswordHash));
-            Assert.Equal(stamp, owner.SecurityStamp);
+            Assert.NotEqual(stamp, owner.SecurityStamp);
         }
         finally
         {
             DeleteDataDir(dataDir);
         }
+    }
+
+    /// <summary>The bootstrap as a restart with <paramref name="password"/> as PP_PASSWORD would run it.</summary>
+    private static OwnerBootstrap BootstrapWith(IServiceProvider services, string password) =>
+        new(services.GetRequiredService<UserRepository>(), services.GetRequiredService<PasswordVerifier>(),
+            services.GetRequiredService<SettingsRepository>(), services.GetRequiredService<PrivatePasteDb>(),
+            services.GetRequiredService<ServerOptions>() with { Password = password },
+            services.GetRequiredService<ILogger<OwnerBootstrap>>());
+
+    [Fact]
+    public async Task Restart_ChangedPpPassword_EndsOwnerWebSessions_KeepsDevices()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = await factory.LoginWebAsync();
+        var device = await factory.LoginAsync();
+        Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/")).StatusCode);
+
+        await BootstrapWith(factory.Services, "recovered-pass").EnsureOwnerAsync();
+
+        var response = await web.GetAsync("/");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/login", response.Headers.Location!.AbsolutePath);
+        Assert.Equal(HttpStatusCode.OK, (await device.GetAsync("/api/clips")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Restart_SamePpPassword_GivesDevicesWithoutOwnerToOwner()
+    {
+        // A device the previous release created after a rollback: it has no person.
+        using var factory = new PrivatePasteFactory();
+        const string token = "rollback-device-token";
+        await using (var conn = factory.Services.GetRequiredService<PrivatePasteDb>().Open())
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                INSERT INTO devices(id, name, platform, token_hash, created_at)
+                VALUES(@device, 'Rollback PC', 'windows', @hash, '2026-01-01T00:00:00.0000000Z')
+                """;
+            cmd.Parameters.AddWithValue("@device", Guid.NewGuid().ToString());
+            cmd.Parameters.AddWithValue("@hash", Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token))));
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await BootstrapWith(factory.Services, PrivatePasteFactory.Password).EnsureOwnerAsync();
+
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/clips")).StatusCode);
     }
 
     [Fact]

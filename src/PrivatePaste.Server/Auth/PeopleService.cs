@@ -10,6 +10,9 @@ public sealed record PeopleResult(bool Ok, string? Error)
     public static readonly PeopleResult Success = new(true, null);
 
     public static PeopleResult Fail(string error) => new(false, error);
+
+    /// <summary>After a person changed their own password: them with the new stamp, to re-issue this browser's cookie.</summary>
+    public UserRecord? User { get; init; }
 }
 
 /// <summary>
@@ -150,7 +153,10 @@ public sealed class PeopleService(
         }
     }
 
-    /// <summary>A person changing their own password: their devices and web sessions stay signed in.</summary>
+    /// <summary>
+    /// A person changing their own password: their devices stay signed in, their web sessions end (anyone who knew the
+    /// old password may hold one). The caller re-issues its own cookie from <see cref="PeopleResult.User"/>.
+    /// </summary>
     public async Task<PeopleResult> ChangeOwnPasswordAsync(Guid id, string? current, string? newPassword, string? repeat)
     {
         if (await CurrentAsync(id) is not { } user)
@@ -172,13 +178,13 @@ public sealed class PeopleService(
 
         // The current password was checked against what was read above; if a reset or removal landed during the
         // hashing, that wins and this change is refused.
-        if (!await users.ChangeOwnPasswordAsync(id, hash, user.SecurityStamp))
+        if (await users.ChangeOwnPasswordAsync(id, hash, user.SecurityStamp) is not { } stamp)
             return PeopleResult.Fail(PasswordResetMeanwhileError);
         // Cookies from before there were people may be held by anyone the old shared password was given to; the
         // owner changing their password is how those end.
         if (user.IsOwner)
             await settings.EndLegacyWebSessionsAsync();
-        return PeopleResult.Success;
+        return PeopleResult.Success with { User = user with { PasswordHash = hash, SecurityStamp = stamp } };
     }
 
     private static string? ValidatePassword(string? password) => password switch

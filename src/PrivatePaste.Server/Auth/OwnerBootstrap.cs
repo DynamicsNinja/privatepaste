@@ -6,7 +6,8 @@ namespace PrivatePaste.Server.Auth;
 /// <summary>
 /// Makes sure the server has an owner. On the first start (or the upgrade from one shared password) the owner is
 /// created with PP_PASSWORD and given every existing device and clip. Afterwards PP_PASSWORD is the recovery path:
-/// changing it resets the owner's password, while restarting with the same value keeps one set on the web.
+/// changing it resets the owner's password and ends their web sessions, while restarting with the same value keeps one
+/// set on the web.
 /// </summary>
 public sealed class OwnerBootstrap(
     UserRepository users,
@@ -34,24 +35,23 @@ public sealed class OwnerBootstrap(
             await settings.AllowLegacyWebSessionsAsync();
         }
 
+        // On every start, not just the first: after a rollback to a release without people and a redeploy, devices
+        // and clips the old release created have no owner, and such a device's token would stop working.
+        await GiveUnownedRowsToAsync(owner.Id);
+
         var fingerprint = await settings.GetAsync(FingerprintSetting);
-        if (fingerprint is null)
+        if (fingerprint is not null)
         {
-            // The owner was just created, or a first start stopped before the fingerprint was stored.
-            await GiveUnownedRowsToAsync(owner.Id);
-        }
-        else if (await VerifyAsync(options.Password, fingerprint) == PasswordCheck.Valid)
-        {
-            return;
-        }
-        else
-        {
-            // Not a new stamp: the owner's own devices and sessions stay signed in. Sessions from the old shared
-            // password end, though: a reset means the password may have been known to someone else.
-            await users.SetPasswordAsync(owner.Id, await HashAsync(options.Password), newSecurityStamp: false);
+            if (await VerifyAsync(options.Password, fingerprint) == PasswordCheck.Valid)
+                return;
+            // A reset means the old password may have been known to someone else, so every web session as the owner
+            // ends, the ones from the old shared password included. Device tokens don't depend on the stamp: the
+            // owner's devices stay signed in.
+            await users.SetPasswordAsync(owner.Id, await HashAsync(options.Password), newSecurityStamp: true);
             await settings.EndLegacyWebSessionsAsync();
             logger.LogWarning("The owner's password was reset from PP_PASSWORD.");
         }
+        // Otherwise the owner was just created, or a first start stopped before the fingerprint was stored.
 
         await settings.SetAsync(FingerprintSetting, await HashAsync(options.Password));
     }

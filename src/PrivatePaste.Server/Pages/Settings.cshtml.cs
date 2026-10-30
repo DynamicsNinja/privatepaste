@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.AspNetCore.RateLimiting;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Clips;
 using PrivatePaste.Server.Storage;
@@ -7,6 +9,9 @@ using PrivatePaste.Server.Storage;
 namespace PrivatePaste.Server.Pages;
 
 /// <summary>Everyone changes their own password here; auto-delete and Clear history are the owner's.</summary>
+// A password change costs two Argon2 hashes, so it counts against the sign-in limit; the owner's other posts don't.
+[EnableRateLimiting("login")]
+[LoginAttemptHandlers("ChangePassword")]
 public class SettingsModel(SettingsRepository settings, ClipRepository clips, ClipService service, PeopleService people)
     : PageModel
 {
@@ -31,8 +36,11 @@ public class SettingsModel(SettingsRepository settings, ClipRepository clips, Cl
         if (User.UserId() is not { } self)
             return Forbidden();
         var result = await people.ChangeOwnPasswordAsync(self, current, password, repeat);
-        if (result.Ok)
+        if (result is { Ok: true, User: { } changed })
         {
+            // The change gave the person a new stamp, which ends their other web sessions; this one carries on.
+            await HttpContext.SignInAsync(AuthSchemes.Cookies, WebSessionValidator.CreatePrincipal(changed),
+                new AuthenticationProperties { IsPersistent = true });
             PasswordStatus = PasswordChangedMessage;
             return RedirectToPage();
         }

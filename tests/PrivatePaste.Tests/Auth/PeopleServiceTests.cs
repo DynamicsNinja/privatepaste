@@ -138,6 +138,21 @@ public class PeopleServiceTests
     }
 
     [Fact]
+    public async Task ResetPassword_ClosesTheirOpenWebSocket()
+    {
+        using var f = new PrivatePasteFactory();
+        var id = await AddAsync(f, "Ana");
+        var (_, _, token) = await f.LoginDeviceAsync("Ana-phone", "android", "Ana", AnaPassword);
+        using var socket = await WebSocketTests.ConnectAsync(f, token);
+
+        Assert.True((await People(f).ResetPasswordAsync(id, "brand-new-pass")).Ok);
+
+        var (result, _) = await WebSocketTests.ReceiveAsync(socket);
+        Assert.Equal(WebSocketMessageType.Close, result.MessageType);
+        Assert.Equal("revoked", result.CloseStatusDescription);
+    }
+
+    [Fact]
     public async Task RemovePerson_PastClipsKeepTheirName()
     {
         using var f = new PrivatePasteFactory();
@@ -195,18 +210,22 @@ public class PeopleServiceTests
     }
 
     [Fact]
-    public async Task ChangeOwnPassword_KeepsDevices()
+    public async Task ChangeOwnPassword_KeepsDevices_NewStamp()
     {
         using var f = new PrivatePasteFactory();
         var id = await AddAsync(f, "Ana");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword);
         var stampBefore = (await f.Services.GetRequiredService<UserRepository>().GetAsync(id))!.SecurityStamp;
 
-        Assert.Equal(new PeopleResult(true, null),
-            await People(f).ChangeOwnPasswordAsync(id, AnaPassword, "changed-pass-1", "changed-pass-1"));
+        var result = await People(f).ChangeOwnPasswordAsync(id, AnaPassword, "changed-pass-1", "changed-pass-1");
 
+        Assert.True(result.Ok);
+        Assert.Null(result.Error);
         Assert.Equal(HttpStatusCode.OK, (await ana.GetAsync("/api/clips")).StatusCode);
-        Assert.Equal(stampBefore, (await f.Services.GetRequiredService<UserRepository>().GetAsync(id))!.SecurityStamp);
+        // A new stamp ends her other web sessions; the result carries it for the browser that made the change.
+        var stored = (await f.Services.GetRequiredService<UserRepository>().GetAsync(id))!;
+        Assert.NotEqual(stampBefore, stored.SecurityStamp);
+        Assert.Equal(stored, result.User);
         Assert.Equal(HttpStatusCode.OK, await LoginStatusAsync(f, "Ana", "changed-pass-1"));
     }
 
