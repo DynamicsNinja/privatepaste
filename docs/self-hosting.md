@@ -37,12 +37,12 @@ The owner manages people on the **People** page of the web UI (History, People, 
 - **Remove**: signs out all their devices and web sessions at once. Their past clips stay in the history under their name. The name can be reused later.
 - **Sign out** a single device, for any person.
 
-Anyone changes their own password under **Settings > Change password** (their devices stay signed in) and signs out their own devices on the People page. Only the owner sees auto-delete and Clear history, and the server refuses them to anyone else. History rows show a name chip once the server has more than one person.
+Anyone changes their own password under **Settings > Change password** (it signs them out of their other browsers; their devices stay signed in) and signs out their own devices on the People page. Only the owner sees auto-delete and Clear history, and the server refuses them to anyone else. History rows show a name chip once the server has more than one person.
 
 ## Changing the password
 
-- **Your own password** (owner or anyone): **Settings > Change password** in the web UI. When the owner does this, web sessions from before the upgrade to people end too.
-- **Forgot the owner's password**: set a new `PP_PASSWORD` and redeploy. When the server starts with a different `PP_PASSWORD` than last time (it remembers a hash, never the value), it resets the owner's password to it. This does not sign out the owner's devices. If `PP_PASSWORD` is unchanged, a password the owner set on the web stays in force. Web sessions from before the upgrade to people also end then.
+- **Your own password** (owner or anyone): **Settings > Change password** in the web UI. This signs you out of every other browser; the browser you changed it in and your devices stay signed in. When the owner does this, web sessions from before the upgrade to people end too. Attempts count against the sign-in limit (5 per minute per IP).
+- **Forgot the owner's password**: set a new `PP_PASSWORD` and redeploy. When the server starts with a different `PP_PASSWORD` than last time (it remembers a hash, never the value), it resets the owner's password to it. This signs the owner out of every browser, including web sessions from before the upgrade to people, but not out of their devices. If `PP_PASSWORD` is unchanged, a password the owner set on the web stays in force.
 - **Another person's password**: the owner resets it on the People page.
 - If a password leaked, reset it: the person's devices are signed out. Passwords are hashed with Argon2id.
 
@@ -50,9 +50,10 @@ Anyone changes their own password under **Settings > Change password** (their de
 
 **Back up `/data` before upgrading**: the first start migrates the database.
 
+- **If the server was shared, change the owner's password first**, right after upgrading: **Settings > Change password**, or set a new `PP_PASSWORD` and restart. Everyone who knew the old shared password could sign in on the web as `owner`; changing it ends those web sessions. The owner's devices stay signed in.
 - The owner account is created from your existing setup (name `owner`, password `PP_PASSWORD`). Every existing device becomes the owner's and keeps working without signing in again; clips copied so far are the owner's.
 - On a server that several people already shared, the devices that belong to someone else are not moved. The owner signs them out on the People page; each person then signs in again with their own account, which the owner adds there.
-- Apps from before this version can't sign in: they get "Update PrivatePaste to sign in." Update them (release the server first, then the desktop and Android apps). Devices already signed in with an old app keep syncing.
+- Apps from before this version can't sign in. The server answers them with "Update PrivatePaste to sign in.", which the old Android app shows; the old desktop app shows "Can't reach the server." instead. Update them (release the server first, then the desktop and Android apps). Devices already signed in with an old app keep syncing.
 - New apps still sign in to an old server.
 
 ## Backups
@@ -71,7 +72,7 @@ Pinned clips are never cleared or auto-deleted. Cleared stays cleared: a device 
 
 ## Proxy and forwarded headers
 
-Sign-in is rate-limited to 5 attempts per minute per client IP (IPv6 clients per /64 prefix). The server trusts `X-Forwarded-For` from the reverse proxy to identify the client IP, so only expose the container through the proxy (Traefik). Do not publish port 8080 directly to the internet, or clients could spoof their IP and bypass the limit.
+Sign-in (and Change password in Settings) is rate-limited to 5 attempts per minute per client IP (IPv6 clients per /64 prefix). The server trusts `X-Forwarded-For` from the reverse proxy to identify the client IP, so only expose the container through the proxy (Traefik). Do not publish port 8080 directly to the internet, or clients could spoof their IP and bypass the limit.
 
 ## Local development
 

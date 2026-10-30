@@ -6,7 +6,9 @@ All JSON is camelCase; enums are lowercase strings (`kind` is `text`, `link` or 
 
 ## Authentication
 
-`POST /api/auth/login` with a person's name and password returns a device token for that person. Send it on every other request as `Authorization: Bearer <token>`, including the WebSocket upgrade request. A token stays valid until the device logs out or is revoked; it is not tied to the password (see [Changing the password](self-hosting.md#changing-the-password)).
+`POST /api/auth/login` with a person's name and password returns a device token for that person. Send it on every other request as `Authorization: Bearer <token>`, including the WebSocket upgrade request. A token stays valid until the device logs out or is revoked; it is not tied to the password, so changing your own password keeps your devices signed in. When the owner resets a person's password or removes them, though, all that person's tokens are revoked (see [Changing the password](self-hosting.md#changing-the-password)).
+
+Everyone signed in shares one history. A person other than the owner only sees and revokes their own devices, and clearing the history and changing settings are the owner's alone (marked "owner" below).
 
 The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` calls must also send the antiforgery token in a `RequestVerificationToken` header; bearer-authenticated calls don't need it.
 
@@ -17,8 +19,8 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` c
 | `GET` | `/health` | none | Health check. |
 | `POST` | `/api/auth/login` | none | Body `{username, password, deviceName, platform}` (device name 1-50 chars; `username` is matched case-insensitively). Returns `{deviceId, token}`. 400 with detail `Update PrivatePaste to sign in.` when `username` is missing or blank (apps from before there were people), 401 with detail `Wrong name or password.` for an unknown name or a wrong password, 429 when rate-limited or too many logins are being checked at once. |
 | `POST` | `/api/auth/logout` | bearer | Revokes the calling device's token and closes its WebSockets. 204. |
-| `GET` | `/api/devices` | bearer | Lists devices: `[{id, name, platform, createdAt, lastSeenAt, isCurrent}]`. |
-| `DELETE` | `/api/devices/{id}` | bearer | Revokes a device and closes its WebSockets. 204, or 404. |
+| `GET` | `/api/devices` | bearer | Lists devices: `[{id, name, platform, createdAt, lastSeenAt, isCurrent}]`. The owner gets every person's devices; anyone else only their own. |
+| `DELETE` | `/api/devices/{id}` | bearer | Revokes a device and closes its WebSockets. 204, or 404 when there is no such device or it belongs to someone else (the owner can revoke anyone's). |
 | `POST` | `/api/clips/text` | bearer | Body `{text, copiedAt?, backfill}`. Returns the clip. 400 if empty, 413 if over `PP_MAX_TEXT_KB`. |
 | `POST` | `/api/clips/image` | bearer | `multipart/form-data` (see below). Returns the clip. 400 for an invalid image or body, 413 if over `PP_MAX_IMAGE_MB` or 50 megapixels. |
 | `GET` | `/api/clips?q=&cursor=&limit=&pinned=` | bearer | History, newest first (`lastCopiedAt` desc). `q` searches text; `limit` defaults to 50 (max 200). With `pinned=true`, only pinned clips, most recently pinned first. Returns `{items, nextCursor}`; pass `nextCursor` back as `cursor` for the next page. |
@@ -29,9 +31,9 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`DELETE` c
 | `POST` | `/api/clips/{id}/pin` | bearer | Pins a clip: it survives clearing and auto-delete. Doesn't change `lastCopiedAt`. Returns the clip, or 404. Pinning a pinned clip changes nothing. |
 | `DELETE` | `/api/clips/{id}/pin` | bearer | Unpins a clip. Returns the clip, or 404. |
 | `DELETE` | `/api/clips/{id}` | bearer | Deletes a clip (and its image), pinned or not. 204, or 404. |
-| `POST` | `/api/history/clear` | bearer | Deletes every unpinned clip copied (or unpinned) before now, with their images, and remembers that time. Returns `{deleted}`, the count. |
+| `POST` | `/api/history/clear` | bearer, owner | Deletes every unpinned clip copied (or unpinned) before now, with their images, and remembers that time. Returns `{deleted}`, the count. 403 for anyone but the owner. |
 | `GET` | `/api/settings` | bearer | Returns `{autoDeleteDays}`: `null` (keep everything), `7`, `30` or `90`. |
-| `PUT` | `/api/settings` | bearer | Body `{autoDeleteDays}` as above. Returns the saved settings; 400 for any other value. |
+| `PUT` | `/api/settings` | bearer, owner | Body `{autoDeleteDays}` as above. Returns the saved settings; 400 for any other value, 403 for anyone but the owner. |
 | `GET` | `/api/sync?afterSeq=&limit=` | bearer | Changes after a sequence number, in `seq` order: `{clips, deletedIds, latestSeq, hasMore}`. `limit` defaults to 200 (max 500). |
 | `GET` | `/ws` | bearer | WebSocket for live updates (see below). |
 

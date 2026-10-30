@@ -89,7 +89,7 @@ All settings, backups and proxy notes are in [Self-hosting](docs/self-hosting.md
 Install an app, then enter your server URL, your name and password, and a name for the device. On a new server the name is `owner` and the password is `PP_PASSWORD`. That's it: from then on the device stays signed in and in sync. Add the other people on the **People** page of the web UI, where you can also see and sign out devices.
 
 > [!NOTE]
-> **Upgrading a server that several people already share?** Every existing device becomes the owner's and keeps working. Sign the devices that belong to someone else out on the **People** page; each person then signs in again with their own account. Apps from before this version can't sign in until they are updated. Back up `/data` before upgrading. [Details](docs/self-hosting.md#upgrading-to-multiple-people)
+> **Upgrading a server that several people already share?** First, right after upgrading, change the owner's password (**Settings > Change password**, or set a new `PP_PASSWORD` and restart): anyone who knew the old shared password may be signed in on the web as `owner`, and this ends those sessions. Every existing device becomes the owner's and keeps working. Sign the devices that belong to someone else out on the **People** page; each person then signs in again with their own account. Apps from before this version can't sign in until they are updated. Back up `/data` before upgrading. [Details](docs/self-hosting.md#upgrading-to-multiple-people)
 
 ## How it works
 
@@ -106,7 +106,7 @@ Each device signs in with a person's name and password once and gets its own dev
 
 - The database and image files are encrypted at rest with `PP_DB_KEY`.
 - Passwords are hashed with Argon2id. Sign-in is rate-limited per client IP.
-- Every device has its own token. Sign out a lost device from the People page and it is out at once. Removing a person or resetting their password signs out all their devices and web sessions.
+- Every device has its own token. Sign out a lost device from the People page and it is out at once. Removing a person or resetting their password signs out all their devices and web sessions. Changing your own password signs you out of your other browsers and keeps your devices signed in.
 - Only the owner can add or remove people, clear the history or change auto-delete.
 - Only HTTPS servers are accepted by the apps (plain HTTP only for localhost).
 - On the desktop apps, copies that password managers mark as private, and copies from apps on the blocklist, are never uploaded. This depends on the app marking its copies; see [Private copies](docs/desktop.md#private-copies) for what is covered. Android sends only what you send or share yourself.
