@@ -35,6 +35,7 @@ public sealed class PeopleService(
     public const string ResetOwnerError = "Use Change password in Settings.";
     public const string RemoveOwnerError = "The owner can't be removed.";
     public const string UnknownPersonError = "That person no longer exists.";
+    public const string PasswordResetMeanwhileError = "Your password was just reset. Sign in again with the new one.";
 
     // Serializes changes that count people, so two of them can't both miss the 1 <-> 2 crossing.
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -130,9 +131,17 @@ public sealed class PeopleService(
 
             var before = await users.CountCurrentAsync();
             await users.MarkRemovedAsync(id);
-            await SignOutDevicesAsync(id);
-            if (before == 2 && await users.CountCurrentAsync() == 1)
-                await clips.ResendAsync(null);
+            try
+            {
+                await SignOutDevicesAsync(id);
+            }
+            finally
+            {
+                // The person is removed either way (their tokens already fail), so names must go even if closing
+                // their sockets failed.
+                if (before == 2 && await users.CountCurrentAsync() == 1)
+                    await clips.ResendAsync(null);
+            }
             return PeopleResult.Success;
         }
         finally
@@ -161,7 +170,10 @@ public sealed class PeopleService(
         if (await verifier.HashAsync(newPassword!) is not { } hash)
             return PeopleResult.Fail(BusyError);
 
-        await users.SetPasswordAsync(id, hash, newSecurityStamp: false);
+        // The current password was checked against what was read above; if a reset or removal landed during the
+        // hashing, that wins and this change is refused.
+        if (!await users.ChangeOwnPasswordAsync(id, hash, user.SecurityStamp))
+            return PeopleResult.Fail(PasswordResetMeanwhileError);
         // Cookies from before there were people may be held by anyone the old shared password was given to; the
         // owner changing their password is how those end.
         if (user.IsOwner)

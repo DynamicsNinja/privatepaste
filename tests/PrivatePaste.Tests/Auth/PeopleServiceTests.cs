@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.WebSockets;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using PrivatePaste.Protocol;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Storage;
@@ -346,6 +349,115 @@ public class PeopleServiceTests
         var after = await SyncAsync(owner, beforeBo.LatestSeq);
         Assert.Equal([anaClip.Id, ownerClip.Id], after.Clips.Select(c => c.Id));
         Assert.All(after.Clips, c => Assert.Null(c.SourceUserName));
+    }
+
+    [Fact]
+    public async Task ResetPassword_EndsTheirWebSessions()
+    {
+        using var f = new PrivatePasteFactory();
+        var id = await AddAsync(f, "Ana");
+        var web = await f.LoginWebAsync("Ana", AnaPassword);
+        Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/")).StatusCode);
+
+        Assert.True((await People(f).ResetPasswordAsync(id, "brand-new-pass")).Ok);
+
+        var response = await web.GetAsync("/");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.StartsWith("/login", response.Headers.Location?.PathAndQuery ?? response.Headers.Location?.OriginalString);
+    }
+
+    [Fact]
+    public async Task RemovePerson_EndsTheirWebSessions()
+    {
+        using var f = new PrivatePasteFactory();
+        var id = await AddAsync(f, "Ana");
+        var web = await f.LoginWebAsync("Ana", AnaPassword);
+        Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/")).StatusCode);
+
+        Assert.True((await People(f).RemoveAsync(id)).Ok);
+
+        var response = await web.GetAsync("/");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.StartsWith("/login", response.Headers.Location?.PathAndQuery ?? response.Headers.Location?.OriginalString);
+    }
+
+    /// <summary>
+    /// The app with every hash going through <paramref name="gate"/>, and Ana added. Hold the gate's one slot to stop
+    /// a sign-in or password change between reading the person and checking the password.
+    /// </summary>
+    private static async Task<(WebApplicationFactory<Program> App, Guid AnaId)> GatedAppAsync(PrivatePasteFactory f,
+        ConcurrencyGate gate)
+    {
+        var app = f.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<PasswordVerifier>();
+            s.AddSingleton(new PasswordVerifier(gate));
+        }));
+        Assert.True((await app.Services.GetRequiredService<PeopleService>().AddAsync("Ana", AnaPassword)).Ok);
+        var id = (await app.Services.GetRequiredService<UserRepository>().FindCurrentByNameAsync("Ana"))!.Id;
+        return (app, id);
+    }
+
+    /// <summary>A PeopleService whose hashes don't wait on the held gate, standing in for the owner's reset request.</summary>
+    private static PeopleService UngatedPeople(WebApplicationFactory<Program> app) =>
+        ActivatorUtilities.CreateInstance<PeopleService>(app.Services, new PasswordVerifier());
+
+    private static async Task WaitForWaitersAsync(ConcurrencyGate gate, int pending)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (gate.Pending < pending)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Nothing queued at the gate.");
+            await Task.Delay(10);
+        }
+    }
+
+    [Fact]
+    public async Task SignInRacingReset_OldPassword_GetsNoDevice()
+    {
+        using var f = new PrivatePasteFactory();
+        var gate = new ConcurrencyGate(maxConcurrent: 1, maxQueued: 4);
+        var (app, id) = await GatedAppAsync(f, gate);
+        using var _ = app;
+        var client = app.CreateClient();
+
+        Task<HttpResponseMessage> signIn;
+        using (await gate.TryEnterAsync())
+        {
+            // The sign-in has read Ana (and her stamp) and waits to check her old password.
+            signIn = client.PostAsJsonAsync("/api/auth/login",
+                new LoginRequest(AnaPassword, "Ana-phone", "android") { Username = "Ana" }, ProtocolJson.Options);
+            await WaitForWaitersAsync(gate, 2);
+            Assert.True((await UngatedPeople(app).ResetPasswordAsync(id, "brand-new-pass")).Ok);
+        }
+
+        var response = await signIn;
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Contains("Wrong name or password.", await response.Content.ReadAsStringAsync());
+        Assert.Empty(await app.Services.GetRequiredService<DeviceRepository>().ListAsync(null, id));
+    }
+
+    [Fact]
+    public async Task OwnPasswordChangeRacingReset_ResetStands()
+    {
+        using var f = new PrivatePasteFactory();
+        var gate = new ConcurrencyGate(maxConcurrent: 1, maxQueued: 4);
+        var (app, id) = await GatedAppAsync(f, gate);
+        using var _ = app;
+        var people = app.Services.GetRequiredService<PeopleService>();
+
+        Task<PeopleResult> change;
+        using (await gate.TryEnterAsync())
+        {
+            change = people.ChangeOwnPasswordAsync(id, AnaPassword, "changed-pass-1", "changed-pass-1");
+            await WaitForWaitersAsync(gate, 2);
+            Assert.True((await UngatedPeople(app).ResetPasswordAsync(id, "brand-new-pass")).Ok);
+        }
+
+        Assert.Equal(new PeopleResult(false, PeopleService.PasswordResetMeanwhileError), await change);
+        var stored = (await app.Services.GetRequiredService<UserRepository>().GetAsync(id))!.PasswordHash;
+        Assert.Equal(PasswordCheck.Valid, await new PasswordVerifier().VerifyAsync("brand-new-pass", stored));
+        Assert.Equal(PasswordCheck.Invalid, await new PasswordVerifier().VerifyAsync("changed-pass-1", stored));
     }
 
     [Fact]

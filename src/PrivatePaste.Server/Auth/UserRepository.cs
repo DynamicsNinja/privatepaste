@@ -79,6 +79,24 @@ public sealed class UserRepository(PrivatePasteDb db, TimeProvider time)
                 : "UPDATE users SET password_hash = @hash WHERE id = @id",
             ("@id", id.ToString()), ("@hash", passwordHash), ("@stamp", NewStamp()));
 
+    /// <summary>
+    /// A person's own password change: sets the hash, keeping the stamp, only while the stamp is still
+    /// <paramref name="expectedStamp"/> and they are not removed. False when a reset or removal got there first.
+    /// </summary>
+    public async Task<bool> ChangeOwnPasswordAsync(Guid id, string passwordHash, string expectedStamp)
+    {
+        await using var conn = db.Open();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE users SET password_hash = @hash
+            WHERE id = @id AND security_stamp = @stamp AND removed_at IS NULL
+            """;
+        cmd.Parameters.AddWithValue("@id", id.ToString());
+        cmd.Parameters.AddWithValue("@hash", passwordHash);
+        cmd.Parameters.AddWithValue("@stamp", expectedStamp);
+        return await cmd.ExecuteNonQueryAsync() > 0;
+    }
+
     /// <summary>Frees the name and, with a new security stamp, ends the person's web sessions.</summary>
     public Task MarkRemovedAsync(Guid id) =>
         ExecuteAsync("UPDATE users SET removed_at = @at, security_stamp = @stamp WHERE id = @id AND removed_at IS NULL",

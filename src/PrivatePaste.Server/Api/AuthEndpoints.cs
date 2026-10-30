@@ -37,7 +37,9 @@ public static class AuthEndpoints
             if (platform.Length == 0) platform = "unknown";
             if (platform.Length > MaxDeviceNameLength) platform = platform[..MaxDeviceNameLength];
 
-            var (device, token) = await devices.CreateAsync(name, platform, user!.Id);
+            // Tied to the stamp read before the (possibly queued) hash, so a reset or removal in between wins.
+            if (await devices.CreateAsync(name, platform, user!.Id, user.SecurityStamp) is not (var device, var token))
+                return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, detail: "Wrong name or password.");
             return Results.Ok(new LoginResponse(device.Id, token));
         }).RequireRateLimiting("login").AllowAnonymous();
 

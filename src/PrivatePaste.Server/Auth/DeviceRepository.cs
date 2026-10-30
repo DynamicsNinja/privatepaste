@@ -15,7 +15,13 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
 {
     private static readonly TimeSpan LastSeenInterval = TimeSpan.FromMinutes(1);
 
-    public async Task<(DeviceDto Device, string Token)> CreateAsync(string name, string platform, Guid userId)
+    /// <summary>
+    /// Adds a device for the person, but only while their security stamp is still <paramref name="securityStamp"/>
+    /// (the one read when their password was checked) and they are not removed. Null otherwise: a reset or removal
+    /// that landed after the check must not be outlived by a device signed in with the old password.
+    /// </summary>
+    public async Task<(DeviceDto Device, string Token)?> CreateAsync(string name, string platform, Guid userId,
+        string securityStamp)
     {
         var id = Guid.NewGuid();
         var token = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
@@ -25,7 +31,8 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT INTO devices(id, name, platform, token_hash, created_at, user_id)
-            VALUES(@id, @name, @platform, @hash, @at, @user)
+            SELECT @id, @name, @platform, @hash, @at, id FROM users
+            WHERE id = @user AND security_stamp = @stamp AND removed_at IS NULL
             """;
         cmd.Parameters.AddWithValue("@id", id.ToString());
         cmd.Parameters.AddWithValue("@name", name);
@@ -33,7 +40,9 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         cmd.Parameters.AddWithValue("@hash", HashToken(token));
         cmd.Parameters.AddWithValue("@at", Format(now));
         cmd.Parameters.AddWithValue("@user", userId.ToString());
-        await cmd.ExecuteNonQueryAsync();
+        cmd.Parameters.AddWithValue("@stamp", securityStamp);
+        if (await cmd.ExecuteNonQueryAsync() == 0)
+            return null;
 
         return (new DeviceDto(id, name, platform, now, null, false), token);
     }
