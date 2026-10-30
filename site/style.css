@@ -68,7 +68,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
 /* Top bar */
-.top { display: flex; align-items: center; gap: 12px; padding-top: 18px; padding-bottom: 18px; }
+.top { display: flex; align-items: center; gap: 12px; padding-top: 18px; padding-bottom: 18px; position: relative; z-index: 2; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
 .word { font-weight: 600; font-size: 20px; letter-spacing: -.2px; }
 .word span { color: var(--accent); font-weight: 400; }
@@ -80,7 +80,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .hero { text-align: center; padding-top: 48px; position: relative; isolation: isolate; }
 .hero::before {
     content: ""; position: absolute; left: 50%; top: -60px; width: min(900px, 100%); height: 460px; transform: translateX(-50%);
-    background: radial-gradient(closest-side, var(--glow), transparent); z-index: -1;
+    background: radial-gradient(closest-side, var(--glow), transparent); z-index: -1; pointer-events: none;
 }
 .hero h1 { font-size: clamp(32px, 5.2vw, 54px); line-height: 1.12; letter-spacing: -.8px; margin: 0 0 18px; }
 .intro { color: var(--muted); font-size: clamp(16px, 2vw, 18px); max-width: 640px; margin: 0 auto 30px; }
@@ -183,14 +183,26 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
     .howto > li::before { top: 18px; }
 }
 
-/* Phones: one row with the logo and the two links that matter there; the sections are a scroll away. */
+/* Phones: the links fold into a menu under a button next to the logo. Without JavaScript they stay in a row. */
+.menu-button { display: none; }
 @media (max-width: 640px) {
-    .wide-only { display: none; }
-    .top nav a { padding: 6px 10px; }
     .hero { padding-top: 28px; }
 }
-
-/* The smallest phones: GitHub stays reachable from the footer. */
-@media (max-width: 380px) {
-    .roomy-only { display: none; }
+@media (max-width: 640px) and (scripting: enabled) {
+    .menu-button {
+        display: grid; place-items: center; margin-left: auto; width: 42px; height: 42px; padding: 0;
+        border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); cursor: pointer;
+    }
+    .menu-button svg { width: 22px; height: 22px; }
+    .menu-button .cross, .menu-button[aria-expanded="true"] .bars { display: none; }
+    .menu-button[aria-expanded="true"] .cross { display: inline; }
+    .top nav {
+        display: none; position: absolute; top: calc(100% - 6px); left: 20px; right: 20px; z-index: 10;
+        flex-direction: column; gap: 2px; padding: 8px; margin: 0;
+        background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, .28);
+    }
+    .top nav.open { display: flex; }
+    .top nav a { font-size: 16px; color: var(--text); padding: 12px 14px; border-radius: 10px; }
+    .top nav a:hover { background: var(--accent-soft); color: var(--accent); }
 }

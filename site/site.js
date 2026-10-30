@@ -1,5 +1,26 @@
 "use strict";
 
+// Phone menu: the button opens and closes the links; picking one, Escape or a tap elsewhere closes it.
+const menuButton = document.querySelector(".menu-button");
+const menu = document.getElementById("site-nav");
+
+function setMenu(open) {
+    menu.classList.toggle("open", open);
+    menuButton.setAttribute("aria-expanded", open);
+}
+
+menuButton.addEventListener("click", () => setMenu(!menu.classList.contains("open")));
+menu.addEventListener("click", (event) => { if (event.target.closest("a")) setMenu(false); });
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && menu.classList.contains("open")) {
+        setMenu(false);
+        menuButton.focus();
+    }
+});
+document.addEventListener("click", (event) => {
+    if (!event.target.closest(".top")) setMenu(false);
+});
+
 // Deploy tabs: buttons switch the panels; arrow keys move between tabs (WAI-ARIA tabs pattern).
 const tabs = [...document.querySelectorAll('[role="tab"]')];
 
