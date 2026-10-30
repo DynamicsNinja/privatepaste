@@ -54,6 +54,6 @@ public static class AuthEndpoints
                 await http.SignOutAsync(AuthSchemes.Cookies);
             }
             return Results.NoContent();
-        }).RequireAuthorization(AuthSchemes.OwnerPolicy).RequireAntiforgeryForCookieAuth();
+        }).RequireAuthorization(AuthSchemes.SignedInPolicy).RequireAntiforgeryForCookieAuth();
     }
 }

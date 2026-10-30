@@ -10,6 +10,7 @@ public static class AuthSchemes
 {
     public const string DeviceToken = "DeviceToken";
     public const string Cookies = "Cookies";
+    public const string SignedInPolicy = "SignedIn";
     public const string OwnerPolicy = "Owner";
 }
 

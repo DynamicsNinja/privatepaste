@@ -8,7 +8,7 @@ public static class SettingsEndpoints
 {
     public static void MapSettingsEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api").RequireAuthorization(AuthSchemes.OwnerPolicy).RequireAntiforgeryForCookieAuth();
+        var group = app.MapGroup("/api").RequireAuthorization(AuthSchemes.SignedInPolicy).RequireAntiforgeryForCookieAuth();
 
         group.MapGet("settings", async (SettingsRepository settings) =>
             Results.Ok(new SettingsDto(await settings.GetAutoDeleteDaysAsync())));
@@ -26,6 +26,6 @@ public static class SettingsEndpoints
             }
 
             return Results.Ok(new SettingsDto(await settings.GetAutoDeleteDaysAsync()));
-        });
+        }).RequireAuthorization(AuthSchemes.OwnerPolicy);
     }
 }

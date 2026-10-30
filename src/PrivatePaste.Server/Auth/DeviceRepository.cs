@@ -72,14 +72,16 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         return found;
     }
 
-    public async Task<IReadOnlyList<DeviceDto>> ListAsync(Guid? currentId)
+    /// <param name="userId">Only this person's devices; null lists everyone's.</param>
+    public async Task<IReadOnlyList<DeviceDto>> ListAsync(Guid? currentId, Guid? userId = null)
     {
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, name, platform, created_at, last_seen_at FROM devices
-            WHERE revoked_at IS NULL ORDER BY created_at, id
+            WHERE revoked_at IS NULL AND (@user IS NULL OR user_id = @user) ORDER BY created_at, id
             """;
+        cmd.Parameters.AddWithValue("@user", userId?.ToString() ?? (object)DBNull.Value);
         var list = new List<DeviceDto>();
         await using var r = await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
@@ -87,14 +89,36 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         return list;
     }
 
-    public async Task<bool> RevokeAsync(Guid id)
+    /// <param name="userId">Only revokes the device when it belongs to this person; null revokes any device.</param>
+    public async Task<bool> RevokeAsync(Guid id, Guid? userId = null)
     {
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE devices SET revoked_at = @at WHERE id = @id AND revoked_at IS NULL";
+        cmd.CommandText = """
+            UPDATE devices SET revoked_at = @at
+            WHERE id = @id AND revoked_at IS NULL AND (@user IS NULL OR user_id = @user)
+            """;
         cmd.Parameters.AddWithValue("@at", Format(time.GetUtcNow()));
         cmd.Parameters.AddWithValue("@id", id.ToString());
+        cmd.Parameters.AddWithValue("@user", userId?.ToString() ?? (object)DBNull.Value);
         return await cmd.ExecuteNonQueryAsync() > 0;
+    }
+
+    /// <summary>Revokes all of a person's devices and returns their ids (so their connections can be closed).</summary>
+    public async Task<IReadOnlyList<Guid>> RevokeAllForUserAsync(Guid userId)
+    {
+        await using var conn = db.Open();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE devices SET revoked_at = @at WHERE user_id = @user AND revoked_at IS NULL RETURNING id
+            """;
+        cmd.Parameters.AddWithValue("@at", Format(time.GetUtcNow()));
+        cmd.Parameters.AddWithValue("@user", userId.ToString());
+        var ids = new List<Guid>();
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            ids.Add(Guid.Parse(r.GetString(0)));
+        return ids;
     }
 
     public async Task<bool> IsActiveAsync(Guid id)

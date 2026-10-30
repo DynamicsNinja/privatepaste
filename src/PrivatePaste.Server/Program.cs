@@ -83,14 +83,21 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
             return Task.CompletedTask;
         };
     });
-builder.Services.AddAuthorization(o => o.AddPolicy(AuthSchemes.OwnerPolicy, p => p
-    .AddAuthenticationSchemes(AuthSchemes.DeviceToken, AuthSchemes.Cookies)
-    .RequireAuthenticatedUser()));
+builder.Services.AddAuthorization(o =>
+{
+    o.AddPolicy(AuthSchemes.SignedInPolicy, p => p
+        .AddAuthenticationSchemes(AuthSchemes.DeviceToken, AuthSchemes.Cookies)
+        .RequireAuthenticatedUser());
+    o.AddPolicy(AuthSchemes.OwnerPolicy, p => p
+        .AddAuthenticationSchemes(AuthSchemes.DeviceToken, AuthSchemes.Cookies)
+        .RequireAuthenticatedUser()
+        .RequireClaim(UserClaims.IsOwner, "true"));
+});
 
 builder.Services.AddAntiforgery(o => o.HeaderName = CookieAntiforgery.HeaderName);
 builder.Services.AddRazorPages(o =>
 {
-    o.Conventions.AuthorizeFolder("/", AuthSchemes.OwnerPolicy);
+    o.Conventions.AuthorizeFolder("/", AuthSchemes.SignedInPolicy);
     o.Conventions.AllowAnonymousToPage("/Login");
 });
 

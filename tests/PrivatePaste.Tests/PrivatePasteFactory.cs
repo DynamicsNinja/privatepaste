@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
 using PrivatePaste.Protocol;
+using PrivatePaste.Server.Auth;
 
 namespace PrivatePaste.Tests;
 
@@ -69,6 +70,13 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
         var login = (await response.Content.ReadFromJsonAsync<LoginResponse>(ProtocolJson.Options))!;
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.Token);
         return (client, login.DeviceId, login.Token);
+    }
+
+    /// <summary>Adds a regular person directly in storage; sign in as them with <c>LoginAsync(username: name, password: ...)</c>.</summary>
+    public async Task AddPersonAsync(string name, string password = "person-pass-1")
+    {
+        var hash = (await Services.GetRequiredService<PasswordVerifier>().HashAsync(password))!;
+        await Services.GetRequiredService<UserRepository>().CreateAsync(name, hash, isOwner: false);
     }
 
     /// <summary>
