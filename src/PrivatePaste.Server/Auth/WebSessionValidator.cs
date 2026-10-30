@@ -1,13 +1,15 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Server.Auth;
 
 /// <summary>Keeps web sessions tied to a current person: checked on every cookie-authenticated request.</summary>
 public static class WebSessionValidator
 {
-    // What every web session carried before there were people; only the owner could sign in then.
+    // What every web session carried before there were people; only the owner could sign in then. Honoured only
+    // while SettingsRepository allows legacy web sessions.
     private const string LegacyOwnerId = "web-owner";
 
     /// <summary>The cookie principal for <paramref name="user"/>.</summary>
@@ -30,14 +32,22 @@ public static class WebSessionValidator
         var principal = ctx.Principal;
         if (principal is null)
             return;
-        var users = ctx.HttpContext.RequestServices.GetRequiredService<UserRepository>();
+        var services = ctx.HttpContext.RequestServices;
+        var users = services.GetRequiredService<UserRepository>();
+
+        // A legacy session keeps its marker after the upgrade below, so turning legacy sessions off still ends it.
+        var legacy = principal.FindFirstValue(ClaimTypes.NameIdentifier) == LegacyOwnerId;
+        if (legacy && !await services.GetRequiredService<SettingsRepository>().GetLegacyWebSessionsAllowedAsync())
+        {
+            await RejectAsync(ctx);
+            return;
+        }
 
         if (principal.UserId() is not { } userId)
         {
-            if (principal.FindFirstValue(ClaimTypes.NameIdentifier) == LegacyOwnerId
-                && await users.GetOwnerAsync() is { } owner)
+            if (legacy && await users.GetOwnerAsync() is { } owner)
             {
-                ctx.ReplacePrincipal(CreatePrincipal(owner));
+                ctx.ReplacePrincipal(CreateLegacyOwnerPrincipal(owner));
                 ctx.ShouldRenew = true;
             }
             else
@@ -50,6 +60,13 @@ public static class WebSessionValidator
         var user = await users.GetAsync(userId);
         if (user is null || user.RemovedAt is not null || principal.FindFirstValue(UserClaims.Stamp) != user.SecurityStamp)
             await RejectAsync(ctx);
+    }
+
+    private static ClaimsPrincipal CreateLegacyOwnerPrincipal(UserRecord owner)
+    {
+        var principal = CreatePrincipal(owner);
+        ((ClaimsIdentity)principal.Identity!).AddClaim(new Claim(ClaimTypes.NameIdentifier, LegacyOwnerId));
+        return principal;
     }
 
     private static async Task RejectAsync(CookieValidatePrincipalContext ctx)

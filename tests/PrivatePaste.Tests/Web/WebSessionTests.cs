@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing.Handlers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using PrivatePaste.Server.Auth;
+using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Tests.Web;
 
@@ -45,13 +46,10 @@ public class WebSessionTests
         Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/")).StatusCode);
     }
 
-    [Fact]
-    public async Task LegacyWebOwnerCookie_StillSignedInAsOwner()
+    /// <summary>A client holding the cookie web sessions had before there were people: no person id, just "web-owner".</summary>
+    private static HttpClient LegacyWebOwnerClient(PrivatePasteFactory factory)
     {
-        using var factory = new PrivatePasteFactory();
         factory.Clock.SetUtcNow(DateTimeOffset.UtcNow);
-
-        // The principal web sessions carried before there were people: no person id, just "web-owner".
         var identity = new ClaimsIdentity(
             [
                 new Claim(ClaimTypes.NameIdentifier, "web-owner"),
@@ -68,7 +66,14 @@ public class WebSessionTests
         var cookies = new CookieContainer();
         cookies.Add(new Uri("http://localhost"),
             new Cookie(".AspNetCore.Cookies", cookieOptions.TicketDataFormat.Protect(ticket)));
-        var web = factory.CreateDefaultClient(new Uri("http://localhost"), new CookieContainerHandler(cookies));
+        return factory.CreateDefaultClient(new Uri("http://localhost"), new CookieContainerHandler(cookies));
+    }
+
+    [Fact]
+    public async Task LegacyWebOwnerCookie_StillSignedInAsOwner()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = LegacyWebOwnerClient(factory);
 
         var page = await web.GetAsync("/");
         Assert.Equal(HttpStatusCode.OK, page.StatusCode);
@@ -79,6 +84,32 @@ public class WebSessionTests
         using var clear = new HttpRequestMessage(HttpMethod.Post, "/api/history/clear");
         clear.Headers.Add("RequestVerificationToken", token);
         Assert.Equal(HttpStatusCode.OK, (await web.SendAsync(clear)).StatusCode);
+    }
+
+    [Fact]
+    public async Task LegacyWebOwnerCookie_AfterLegacySessionsTurnedOff_RedirectsToLogin()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = LegacyWebOwnerClient(factory);
+        // Upgraded and renewed first: the renewed cookie must still end with legacy sessions.
+        Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/")).StatusCode);
+
+        await factory.Services.GetRequiredService<SettingsRepository>().EndLegacyWebSessionsAsync();
+
+        var response = await web.GetAsync("/");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/login", response.Headers.Location!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task OwnerSignedInWithName_IsNotEndedWithLegacySessions()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = await factory.LoginWebAsync();
+
+        await factory.Services.GetRequiredService<SettingsRepository>().EndLegacyWebSessionsAsync();
+
+        Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/")).StatusCode);
     }
 
     [Fact]

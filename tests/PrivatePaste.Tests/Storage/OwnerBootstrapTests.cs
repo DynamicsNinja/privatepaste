@@ -2,7 +2,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Config;
 using PrivatePaste.Server.Storage;
@@ -16,6 +18,7 @@ public class OwnerBootstrapTests
 
     private static void DeleteDataDir(string dataDir)
     {
+        SqliteConnection.ClearAllPools();
         try { Directory.Delete(dataDir, recursive: true); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
@@ -119,6 +122,122 @@ public class OwnerBootstrapTests
             Assert.Equal(PasswordCheck.Valid, await verifier.VerifyAsync("recovered-pass", owner.PasswordHash));
             Assert.Equal(PasswordCheck.Invalid, await verifier.VerifyAsync(PrivatePasteFactory.Password, owner.PasswordHash));
             Assert.Equal(stamp, owner.SecurityStamp);
+        }
+        finally
+        {
+            DeleteDataDir(dataDir);
+        }
+    }
+
+    [Fact]
+    public async Task Restart_ChangedPpPassword_TurnsOffLegacyWebSessions()
+    {
+        var dataDir = NewDataDir();
+        try
+        {
+            using (var first = new PrivatePasteFactory(dataDir: dataDir))
+                Assert.True(await first.Services.GetRequiredService<SettingsRepository>()
+                    .GetLegacyWebSessionsAllowedAsync());
+
+            using (var same = new PrivatePasteFactory(dataDir: dataDir))
+                Assert.True(await same.Services.GetRequiredService<SettingsRepository>()
+                    .GetLegacyWebSessionsAllowedAsync());
+
+            using var changed = new PrivatePasteFactory(
+                new Dictionary<string, string> { ["PP_PASSWORD"] = "recovered-pass" }, dataDir);
+            Assert.False(await changed.Services.GetRequiredService<SettingsRepository>()
+                .GetLegacyWebSessionsAllowedAsync());
+        }
+        finally
+        {
+            DeleteDataDir(dataDir);
+        }
+    }
+
+    [Fact]
+    public async Task Restart_WhileHashGateIsFull_DoesNotResetOwnerPassword()
+    {
+        using var factory = new PrivatePasteFactory();
+        var services = factory.Services;
+        var users = services.GetRequiredService<UserRepository>();
+        var owner = (await users.GetOwnerAsync())!;
+        await users.SetPasswordAsync(owner.Id, (await new PasswordVerifier().HashAsync("new-web-pass"))!,
+            newSecurityStamp: false);
+
+        // A verifier whose gate is full: every check answers Busy until the slots are released.
+        var gate = new ConcurrencyGate(PasswordVerifier.MaxConcurrentHashes, PasswordVerifier.MaxQueuedHashes);
+        var held = Enumerable.Range(0, PasswordVerifier.MaxConcurrentHashes + PasswordVerifier.MaxQueuedHashes)
+            .Select(_ => gate.TryEnterAsync()).ToList();
+        var verifier = new PasswordVerifier(gate);
+        Assert.Equal(PasswordCheck.Busy, await verifier.VerifyAsync(PrivatePasteFactory.Password, owner.PasswordHash));
+
+        var bootstrap = new OwnerBootstrap(users, verifier, services.GetRequiredService<SettingsRepository>(),
+            services.GetRequiredService<PrivatePasteDb>(), services.GetRequiredService<ServerOptions>(),
+            services.GetRequiredService<ILogger<OwnerBootstrap>>());
+        var ensure = bootstrap.EnsureOwnerAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        Assert.False(ensure.IsCompleted);
+        foreach (var lease in held)
+            (await lease)!.Dispose();
+        await ensure;
+
+        var after = (await users.GetOwnerAsync())!;
+        Assert.Equal(PasswordCheck.Valid, await verifier.VerifyAsync("new-web-pass", after.PasswordHash));
+    }
+
+    [Fact]
+    public async Task Upgrade_FromOldSchema_AddsColumns_AndGivesRowsToOwner()
+    {
+        // A database as the previous release created it: no users table, no user columns.
+        var dataDir = NewDataDir();
+        const string token = "old-device-token";
+        try
+        {
+            Directory.CreateDirectory(dataDir);
+            var options = new ServerOptions(PrivatePasteFactory.DbKey, "unused", dataDir, 1024, 1024);
+            var db = new PrivatePasteDb(options);
+            using (var old = new SqliteConnection(new SqliteConnectionStringBuilder
+                   { DataSource = db.DbPath, Password = options.DbKey, Mode = SqliteOpenMode.ReadWriteCreate }.ToString()))
+            {
+                old.Open();
+                using var cmd = old.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL,
+                      token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT, revoked_at TEXT);
+                    CREATE TABLE clips(id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, kind TEXT NOT NULL, text TEXT,
+                      hash TEXT NOT NULL UNIQUE, width INTEGER, height INTEGER, size_bytes INTEGER NOT NULL,
+                      source_device_id TEXT, source_device_name TEXT NOT NULL, created_at TEXT NOT NULL,
+                      last_copied_at TEXT NOT NULL, source_device_platform TEXT, pinned_at TEXT, unpinned_at TEXT);
+                    INSERT INTO devices VALUES('11111111-1111-1111-1111-111111111111', 'Old PC', 'windows', @hash, '2025-01-01T00:00:00.0000000Z', NULL, NULL);
+                    INSERT INTO clips VALUES('22222222-2222-2222-2222-222222222222', 1, 'text', 'old', 'h1', NULL, NULL, 3, '11111111-1111-1111-1111-111111111111', 'Old PC',
+                      '2025-01-01T00:00:00.0000000Z', '2025-01-01T00:00:00.0000000Z', 'windows', NULL, NULL);
+                    """;
+                cmd.Parameters.AddWithValue("@hash",
+                    Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token))));
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            using var factory = new PrivatePasteFactory(dataDir: dataDir);
+            var client = factory.CreateClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/clips")).StatusCode);
+
+            var owner = (await factory.Services.GetRequiredService<UserRepository>().GetOwnerAsync())!;
+            await using var conn = factory.Services.GetRequiredService<PrivatePasteDb>().Open();
+            await using var q = conn.CreateCommand();
+            q.CommandText = """
+                SELECT (SELECT count(*) FROM pragma_table_info('devices') WHERE name = 'user_id'),
+                       (SELECT count(*) FROM pragma_table_info('clips') WHERE name = 'source_user_id'),
+                       (SELECT user_id FROM devices WHERE id = '11111111-1111-1111-1111-111111111111'),
+                       (SELECT source_user_id FROM clips WHERE id = '22222222-2222-2222-2222-222222222222')
+                """;
+            await using var r = await q.ExecuteReaderAsync();
+            Assert.True(await r.ReadAsync());
+            Assert.Equal(1, r.GetInt32(0));
+            Assert.Equal(1, r.GetInt32(1));
+            Assert.Equal(owner.Id.ToString(), r.GetString(2));
+            Assert.Equal(owner.Id.ToString(), r.GetString(3));
         }
         finally
         {

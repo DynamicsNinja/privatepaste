@@ -31,7 +31,11 @@ public sealed class PasswordVerifier
     // Hashed against when there is no stored hash (an unknown name), so that costs the same as a wrong password.
     private static readonly byte[] DummySalt = new byte[SaltBytes];
 
-    private readonly ConcurrencyGate _gate = new(MaxConcurrentHashes, MaxQueuedHashes);
+    private readonly ConcurrencyGate _gate;
+
+    /// <param name="gate">The gate every hash passes; a test can pass one whose slots it holds.</param>
+    public PasswordVerifier(ConcurrencyGate? gate = null) =>
+        _gate = gate ?? new ConcurrencyGate(MaxConcurrentHashes, MaxQueuedHashes);
 
     /// <summary>Returns <c>argon2id$&lt;salt&gt;$&lt;hash&gt;</c> (base64), or null when the gate is full.</summary>
     public async Task<string?> HashAsync(string password, CancellationToken ct = default)

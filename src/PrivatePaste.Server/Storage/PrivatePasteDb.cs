@@ -113,24 +113,24 @@ public sealed class PrivatePasteDb(ServerOptions options)
         }
 
         // Who each device and clip belongs to. Existing rows get the owner from OwnerBootstrap, which runs after this.
-        if (!HasColumn(conn, "devices", "user_id"))
-        {
-            using var tx = conn.BeginTransaction();
-            using var cmd = conn.CreateCommand();
-            cmd.Transaction = tx;
-            cmd.CommandText = """
-                ALTER TABLE devices ADD COLUMN user_id TEXT;
-                ALTER TABLE clips ADD COLUMN source_user_id TEXT;
-                """;
-            cmd.ExecuteNonQuery();
-            tx.Commit();
-        }
+        AddColumnIfMissing(conn, "devices", "user_id");
+        AddColumnIfMissing(conn, "clips", "source_user_id");
 
         // Here, not in Schema.sql: that script runs before this method, when an old database has no pinned_at yet.
         using var index = conn.CreateCommand();
         index.CommandText = "CREATE INDEX IF NOT EXISTS ix_clips_pinned ON clips(pinned_at DESC, seq DESC) " +
                             "WHERE pinned_at IS NOT NULL";
         index.ExecuteNonQuery();
+    }
+
+    // For a nullable TEXT column with no backfill; table and column are constants, never input.
+    private static void AddColumnIfMissing(SqliteConnection conn, string table, string column)
+    {
+        if (HasColumn(conn, table, column))
+            return;
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} TEXT";
+        cmd.ExecuteNonQuery();
     }
 
     private static bool HasColumn(SqliteConnection conn, string table, string column)

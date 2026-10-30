@@ -21,10 +21,18 @@ public sealed class OwnerBootstrap(
     // A hash of the PP_PASSWORD the owner's password last came from, to tell a changed PP_PASSWORD from a restart.
     private const string FingerprintSetting = "pp_password_hash";
 
+    private static readonly TimeSpan GateRetryDelay = TimeSpan.FromMilliseconds(100);
+
     public async Task EnsureOwnerAsync()
     {
-        var owner = await users.GetOwnerAsync()
-                    ?? await users.CreateAsync(OwnerName, await HashAsync(options.Password), isOwner: true);
+        var owner = await users.GetOwnerAsync();
+        if (owner is null)
+        {
+            owner = await users.CreateAsync(OwnerName, await HashAsync(options.Password), isOwner: true);
+            // Browsers signed in with the old shared password stay signed in, as the owner, until the owner's
+            // password changes.
+            await settings.AllowLegacyWebSessionsAsync();
+        }
 
         var fingerprint = await settings.GetAsync(FingerprintSetting);
         if (fingerprint is null)
@@ -32,14 +40,16 @@ public sealed class OwnerBootstrap(
             // The owner was just created, or a first start stopped before the fingerprint was stored.
             await GiveUnownedRowsToAsync(owner.Id);
         }
-        else if (await verifier.VerifyAsync(options.Password, fingerprint) == PasswordCheck.Valid)
+        else if (await VerifyAsync(options.Password, fingerprint) == PasswordCheck.Valid)
         {
             return;
         }
         else
         {
-            // Not a new stamp: the owner's own devices and sessions stay signed in.
+            // Not a new stamp: the owner's own devices and sessions stay signed in. Sessions from the old shared
+            // password end, though: a reset means the password may have been known to someone else.
             await users.SetPasswordAsync(owner.Id, await HashAsync(options.Password), newSecurityStamp: false);
+            await settings.EndLegacyWebSessionsAsync();
             logger.LogWarning("The owner's password was reset from PP_PASSWORD.");
         }
 
@@ -61,14 +71,26 @@ public sealed class OwnerBootstrap(
         await tx.CommitAsync();
     }
 
-    // Nothing else hashes during startup, so a full gate only means a moment's wait.
+    // Nothing else hashes during startup, so a full gate only means a moment's wait. Busy must never pass for a
+    // changed PP_PASSWORD: that would reset the owner's password.
     private async Task<string> HashAsync(string password)
     {
         while (true)
         {
             if (await verifier.HashAsync(password) is { } hash)
                 return hash;
-            await Task.Delay(TimeSpan.FromMilliseconds(100));
+            await Task.Delay(GateRetryDelay);
+        }
+    }
+
+    private async Task<PasswordCheck> VerifyAsync(string password, string stored)
+    {
+        while (true)
+        {
+            var check = await verifier.VerifyAsync(password, stored);
+            if (check != PasswordCheck.Busy)
+                return check;
+            await Task.Delay(GateRetryDelay);
         }
     }
 }
