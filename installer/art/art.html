@@ -1,0 +1,74 @@
+<!doctype html>
+<!--
+  Source of the Windows installer artwork (Night vault, dark). scripts/make-installer-art.ps1 screenshots
+  #banner and #dialog at exactly their CSS size and saves them as 24-bit BMPs next to this file:
+    #dialog -> dialog.bmp (WixUIDialogBmp, 493x312): Welcome, Finished and the other full-page dialogs.
+    #banner -> banner.bmp (WixUIBannerBmp, 493x58): the strip at the top of Progress, Ready to remove, ...
+  MSI draws the dialog text on top. On the full-page dialogs it starts at X=135 dialog units (about 180 px), so the
+  brand column must stay narrower than that; in the banner the title and description sit on the left, the logo right.
+  Colors are the dark DESIGN.md tokens; the wordmark comes from branding/lockup-on-dark.svg (outlined, no font needed).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Installer art</title>
+<style>
+  :root {
+    --night: #15122B;
+    --surface: #1D1838;
+    --line: #2E2756;
+    --glow: rgba(183, 165, 255, .22);
+    --glow-0: rgba(183, 165, 255, 0);
+  }
+  html, body { margin: 0; padding: 0; background: #000; }
+  body { display: flex; flex-direction: column; align-items: flex-start; gap: 20px; padding: 20px; }
+  .art { position: relative; overflow: hidden; background: var(--night); }
+
+  #dialog { width: 493px; height: 312px; }
+  #dialog .glow { position: absolute; left: -161px; top: -115px; width: 400px; height: 400px;
+                  background: radial-gradient(closest-side, var(--glow), var(--glow-0)); }
+  /* 160 px plus its 1 px edge: ends well before the dialog text column at ~180 px. */
+  #dialog .brand { position: absolute; left: 0; top: 0; bottom: 0; width: 160px; background: var(--surface);
+                   border-right: 1px solid var(--line); display: flex; flex-direction: column;
+                   align-items: center; justify-content: center; gap: 12px; }
+  #dialog .brand .tile { width: 64px; height: 64px; display: block; }
+  #dialog .brand .word { width: 124px; height: 20px; display: block; }
+
+  #banner { width: 493px; height: 58px; }
+  /* The 1 px bottom edge, drawn above the glow. */
+  #banner::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); }
+  #banner .glow { position: absolute; left: 309px; top: -92px; width: 230px; height: 230px;
+                  background: radial-gradient(closest-side, rgba(183, 165, 255, .2), var(--glow-0)); }
+  #banner .tile { position: absolute; right: 14px; top: 8px; width: 40px; height: 40px; display: block; }
+</style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <!-- branding/logo.svg -->
+      <symbol id="logo" viewBox="0 0 64 64">
+        <rect x="2" y="2" width="60" height="60" rx="18" fill="#221D40"/>
+        <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="17.25" fill="none" stroke="#B7A5FF" stroke-opacity=".35" stroke-width="1.5"/>
+        <circle cx="32" cy="26" r="9" fill="#B7A5FF"/>
+        <path d="M27.5 31.5h9l3 17.5h-15z" fill="#B7A5FF"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div id="dialog" class="art">
+    <div class="glow"></div>
+    <div class="brand">
+      <svg class="tile" viewBox="0 0 64 64"><use href="#logo"/></svg>
+      <!-- Just the wordmark of the lockup: its letters span x 84..328, y 15..54 of the 330x64 viewBox. -->
+      <svg class="word" viewBox="84 15 244 39.4" preserveAspectRatio="xMidYMid meet">
+        <image href="../../branding/lockup-on-dark.svg" x="0" y="0" width="330" height="64"/>
+      </svg>
+    </div>
+  </div>
+
+  <div id="banner" class="art">
+    <div class="glow"></div>
+    <svg class="tile" viewBox="0 0 64 64"><use href="#logo"/></svg>
+  </div>
+</body>
+</html>

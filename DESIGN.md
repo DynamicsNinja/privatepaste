@@ -72,6 +72,7 @@ Plain, sentence case, says what happens. Buttons name the action ("Copy", "Delet
 | Desktop | `src/PrivatePaste.Desktop/Theme/NightVault.axaml` (`Pp*Color` / `Pp*` brushes, per theme variant) | `NightVault.axaml` StreamGeometry resources, `Theme/PlatformIcons.cs` | bundled in `Assets/` |
 | Android | `android/app/src/main/java/xyz/ficdev/privatepaste/ui/theme/Color.kt`, `Theme.kt`, `Type.kt` | `res/drawable/ic_platform_*.xml`, `ic_kind_*.xml`, `ui/history/PlatformIcon.kt` | `res/font/` |
 | README | `scripts/readme/hero.html` | — | outlined lockups |
+| Windows installer | `installer/PrivatePasteUI.wxs` (light text styles over the dark artwork) and `installer/art/art.html`, rendered to `dialog.bmp` / `banner.bmp` by `scripts/make-installer-art.ps1` | logo tile in the artwork | Tahoma (MSI can't load Sora); wordmark outlined in the artwork |
 
 ## Checking a UI change
 

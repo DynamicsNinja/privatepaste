@@ -4,6 +4,8 @@
     -d Version=x.y.z         MSI ProductVersion (prerelease suffix already stripped)
     -d ExePath=<path>        the single-file PrivatePaste.exe from publish-windows.ps1
     -d IconPath=<path>       src/PrivatePaste.Desktop/Assets/app.ico
+    -d ArtDir=<folder>       installer/art (dialog.bmp, banner.bmp)
+  together with PrivatePasteUI.wxs, the dialogs (PrivatePaste_UI).
 
   Installs to %LOCALAPPDATA%\Programs\PrivatePaste\PrivatePaste.exe. That path is fixed: the
   autostart value the app writes and managed PCs' Defender ASR exclusions point at it.
@@ -99,41 +101,8 @@
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch PrivatePaste" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
+    <!-- Night vault dialogs: installer/PrivatePasteUI.wxs. -->
     <UIRef Id="PrivatePaste_UI" />
   </Package>
 
-  <!-- WixUI_Minimal without the licence page (the MIT licence needs no click-through): Welcome, progress, finish. -->
-  <Fragment>
-    <UI Id="PrivatePaste_UI">
-      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
-      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
-      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
-      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
-
-      <DialogRef Id="ErrorDlg" />
-      <DialogRef Id="FatalError" />
-      <DialogRef Id="FilesInUse" />
-      <DialogRef Id="MsiRMFilesInUse" />
-      <DialogRef Id="PrepareDlg" />
-      <DialogRef Id="ProgressDlg" />
-      <DialogRef Id="ResumeDlg" />
-      <DialogRef Id="UserExit" />
-      <DialogRef Id="WelcomeDlg" />
-
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="EndDialog" Value="Return" Condition="NOT Installed" />
-
-      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="1"
-               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
-      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
-
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" />
-      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
-      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
-      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
-      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
-
-      <Property Id="ARPNOMODIFY" Value="1" />
-    </UI>
-    <UIRef Id="WixUI_Common" />
-  </Fragment>
 </Wix>

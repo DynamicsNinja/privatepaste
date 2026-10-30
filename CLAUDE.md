@@ -12,7 +12,7 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 | `src/PrivatePaste.Desktop` | Avalonia app: tray, popup, toast, settings; theme in `Theme/NightVault.axaml`; OS specifics in `Platform/`. |
 | `tests/PrivatePaste.Tests` | xUnit tests for all .NET projects, including headless Avalonia renders (`Client/DesktopRenderTests.cs`). |
 | `android/` | Gradle project, package `xyz.ficdev.privatepaste` (`api`, `sync`, `service`, `clipboard`, `send`, `storage`, `ui`). Port of the desktop sync engine. |
-| `installer/PrivatePaste.wxs` | Per-user WiX MSI. |
+| `installer/PrivatePaste.wxs` | Per-user WiX MSI. Dialogs in `PrivatePasteUI.wxs` (Night vault copies of the WixUI dialogs), artwork in `art/` (`scripts/make-installer-art.ps1`), UI preview MSI in `preview/`. |
 | `branding/` | Logo, lockups, app icon, platform icons, brand guide. |
 | `scripts/` | Publish, installer, Android keystore, lockup and README-image scripts. |
 
@@ -36,7 +36,7 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 - Platform strings are `windows`, `macos`, `linux`, `android`, `web`; anything else is shown as an unknown device.
 - **Keep the README in step with the apps.** A change is not done until the README matches it (details in `scripts/readme/README.md`):
   - Changed how the web history page, the desktop history popup or the Android history screen looks (layout, colors, type, icons, row content, top bar)? Run `powershell -File scripts/readme/build.ps1`, look at both `docs/images/hero-*.png` and commit them with the change.
-  - Changed the logo, wordmark or brand colors? Also run `python scripts/make-lockup.py .` and update `DESIGN.md` and `branding/README.md`.
+  - Changed the logo, wordmark or brand colors? Also run `python scripts/make-lockup.py .` and `powershell -File scripts/make-installer-art.ps1`, and update `DESIGN.md` and `branding/README.md`.
   - Changed features, platforms, release file names, environment variables, the port, security behaviour or install steps? Update the matching README text and `docs/` page; the list of facts to check is under "Text to keep in step" in `scripts/readme/README.md`.
   - If the build can't run (no JDK, no Node), say so in your summary instead of leaving the old images silently.
 
