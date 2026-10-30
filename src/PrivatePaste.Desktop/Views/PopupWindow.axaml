@@ -165,7 +165,7 @@
                 </Border>
                 <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
                   <TextBlock Text="{Binding Preview}" TextTrimming="CharacterEllipsis" MaxLines="1" />
-                  <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="5">
+                  <Grid ColumnDefinitions="Auto,Auto,Auto,*" ColumnSpacing="5">
                     <!-- Source device platform, about the cap height of the 12px meta text. -->
                     <Viewbox x:Name="PlatformIcon" Width="13" Height="13" VerticalAlignment="Center"
                              AutomationProperties.Name="{Binding Platform.Label}" ToolTip.Tip="{Binding Platform.Label}">
@@ -180,7 +180,14 @@
                         <Path Classes="pinicon pinned" Data="{StaticResource PpIconPin}" />
                       </Canvas>
                     </Viewbox>
-                    <TextBlock Grid.Column="2" Text="{Binding Meta}" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                    <!-- Who copied it; a plain Border so nothing in the popup can take the focus. -->
+                    <Border Grid.Column="2" x:Name="PersonChip" Background="{DynamicResource PpChipBackground}"
+                            CornerRadius="9" Padding="7,1" VerticalAlignment="Center"
+                            IsVisible="{Binding Person, Converter={x:Static ObjectConverters.IsNotNull}}">
+                      <TextBlock Text="{Binding Person}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource PpText}"
+                                 MaxLines="1" TextTrimming="CharacterEllipsis" MaxWidth="110" />
+                    </Border>
+                    <TextBlock Grid.Column="3" Text="{Binding Meta}" FontSize="12" Foreground="{DynamicResource PpMuted}"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                   </Grid>
                 </StackPanel>

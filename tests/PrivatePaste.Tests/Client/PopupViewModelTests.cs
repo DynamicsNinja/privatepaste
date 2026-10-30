@@ -341,4 +341,15 @@ public class PopupViewModelTests
         Assert.Equal(["new pin", "cached pin", "trimmed pin"], vm.Items.Select(i => i.Clip.Text));
         await Task.CompletedTask;
     }
+
+    [Fact]
+    public void PopupItem_PersonFromSourceUserName()
+    {
+        var withPerson = Text("a", 1, 1) with { SourceUserName = "Ana" };
+        var cache = CacheWith(withPerson, Text("b", 2, 2));
+        var vm = Create(cache);
+        vm.Query = "";
+        Assert.Equal("Ana", vm.Items.Single(i => i.Clip.Text == "a").Person);
+        Assert.Null(vm.Items.Single(i => i.Clip.Text == "b").Person);
+    }
 }

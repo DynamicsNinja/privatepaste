@@ -16,6 +16,28 @@ public class ApiClientTests
         return api;
     }
 
+    private sealed class Capture : HttpMessageHandler
+    {
+        public string? Body;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Body = await request.Content!.ReadAsStringAsync(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new LoginResponse(Guid.NewGuid(), "t"), options: ProtocolJson.Options),
+            };
+        }
+    }
+
+    [Fact]
+    public async Task Login_SendsUsername()
+    {
+        var capture = new Capture();
+        var api = new PrivatePasteApi(new HttpClient(capture) { BaseAddress = new Uri("http://localhost") });
+        await api.LoginAsync("Ana", "pw", "PC", "windows");
+        Assert.Contains("\"username\":\"Ana\"", capture.Body);
+    }
+
     [Fact]
     public async Task Login_then_upload_and_list()
     {

@@ -104,7 +104,7 @@ public partial class App : Application
             _signIn.Activate();
             return;
         }
-        var vm = new SignInViewModel(_host.SignInAsync);
+        var vm = new SignInViewModel(_host.SignInAsync, _host.Settings.Username);
         if (_host.Settings.ServerUrl is { } last) vm.ServerUrl = last.TrimEnd('/');
         if (_host.Settings.DeviceName is { Length: > 0 } device) vm.DeviceName = device;
         var window = new SignInWindow { DataContext = vm };

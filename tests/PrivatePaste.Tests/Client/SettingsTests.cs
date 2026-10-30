@@ -47,6 +47,18 @@ public class SettingsTests
         Assert.True(s.NotifyOnClipArrival);
     }
 
+    [Fact]
+    public void Settings_OldFileWithoutUsername_LoadsEmpty()
+    {
+        var dir = TempDir();
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "settings.json"), """{"serverUrl":"https://x.io/","deviceName":"Laptop"}""");
+        var store = new SettingsStore(dir);
+        Assert.Equal("", store.Load().Username);
+        store.Save(store.Load() with { Username = "Ana" });
+        Assert.Equal("Ana", new SettingsStore(dir).Load().Username);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

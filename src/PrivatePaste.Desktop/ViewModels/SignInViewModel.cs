@@ -3,23 +3,26 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace PrivatePaste.Desktop.ViewModels;
 
-public enum SignInResult { Ok, WrongPassword, InvalidUrl, Unreachable, RateLimited }
+public enum SignInResult { Ok, WrongPassword, InvalidUrl, Unreachable, RateLimited, UpdateNeeded }
 
 /// <summary>Result of a sign-in attempt. <see cref="Message"/> carries the <c>ServerUrl.Normalize</c> text for InvalidUrl.</summary>
 public sealed record SignInOutcome(SignInResult Result, string? Message);
 
 public sealed partial class SignInViewModel : ObservableObject
 {
-    public const string WrongPasswordMessage = "Wrong password.";
+    public const string WrongPasswordMessage = "Wrong name or password.";
+    public const string UpdateNeededMessage = "Update PrivatePaste to sign in.";
     public const string UnreachableMessage = "Can't reach the server.";
     public const string RateLimitedMessage = "Too many attempts. Wait a minute and try again.";
 
-    private readonly Func<string, string, string, Task<SignInOutcome>> _signIn;
+    private readonly Func<string, string, string, string, Task<SignInOutcome>> _signIn;
 
-    /// <param name="signIn">(serverUrl, password, deviceName) → outcome.</param>
-    public SignInViewModel(Func<string, string, string, Task<SignInOutcome>> signIn)
+    /// <param name="signIn">(serverUrl, username, password, deviceName) → outcome.</param>
+    /// <param name="lastUsername">The name last signed in with, to prefill the Name field.</param>
+    public SignInViewModel(Func<string, string, string, string, Task<SignInOutcome>> signIn, string lastUsername = "")
     {
         _signIn = signIn;
+        _username = lastUsername;
         _deviceName = Environment.MachineName;
     }
 
@@ -28,6 +31,9 @@ public sealed partial class SignInViewModel : ObservableObject
 
     [ObservableProperty, NotifyCanExecuteChangedFor(nameof(SignInCommand))]
     private string _serverUrl = "https://";
+
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(SignInCommand))]
+    private string _username;
 
     [ObservableProperty, NotifyCanExecuteChangedFor(nameof(SignInCommand))]
     private string _password = "";
@@ -42,7 +48,7 @@ public sealed partial class SignInViewModel : ObservableObject
     private bool _isBusy;
 
     private bool CanSignIn() =>
-        !IsBusy && !string.IsNullOrWhiteSpace(ServerUrl) && !string.IsNullOrEmpty(Password) && !string.IsNullOrWhiteSpace(DeviceName);
+        !IsBusy && !string.IsNullOrWhiteSpace(ServerUrl) && !string.IsNullOrWhiteSpace(Username) && !string.IsNullOrEmpty(Password) && !string.IsNullOrWhiteSpace(DeviceName);
 
     [RelayCommand(CanExecute = nameof(CanSignIn))]
     private async Task SignInAsync()
@@ -52,7 +58,7 @@ public sealed partial class SignInViewModel : ObservableObject
         SignInOutcome outcome;
         try
         {
-            outcome = await _signIn(ServerUrl.Trim(), Password, DeviceName.Trim());
+            outcome = await _signIn(ServerUrl.Trim(), Username.Trim(), Password, DeviceName.Trim());
         }
         catch (Exception)
         {
@@ -69,6 +75,7 @@ public sealed partial class SignInViewModel : ObservableObject
             SignInResult.WrongPassword => WrongPasswordMessage,
             SignInResult.InvalidUrl => outcome.Message ?? "Enter a full server address starting with https://",
             SignInResult.RateLimited => RateLimitedMessage,
+            SignInResult.UpdateNeeded => outcome.Message ?? UpdateNeededMessage,
             _ => UnreachableMessage,
         };
         if (outcome.Result == SignInResult.Ok)

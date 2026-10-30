@@ -81,7 +81,7 @@ public class DesktopHostTests : IAsyncLifetime
     private async Task<DesktopHost> SignedInHostAsync()
     {
         var host = NewHost();
-        var outcome = await host.SignInAsync(ServerUrl, PrivatePasteFactory.Password, "PC-host");
+        var outcome = await host.SignInAsync(ServerUrl, PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "PC-host");
         Assert.Equal(SignInResult.Ok, outcome.Result);
         await WaitUntilAsync(() => host.State == SyncState.Connected);
         return host;
@@ -92,15 +92,22 @@ public class DesktopHostTests : IAsyncLifetime
     [InlineData("http://example.com", "The server address must use https:// (http:// is only allowed for localhost).")]
     public async Task Invalid_url_returns_the_normalize_message(string url, string message)
     {
-        var outcome = await NewHost().SignInAsync(url, "x", "PC");
+        var outcome = await NewHost().SignInAsync(url, "owner", "x", "PC");
         Assert.Equal(new SignInOutcome(SignInResult.InvalidUrl, message), outcome);
+    }
+
+    [Fact]
+    public async Task Sign_in_remembers_the_name()
+    {
+        var host = await SignedInHostAsync();
+        Assert.Equal(PrivatePasteFactory.OwnerName, host.Settings.Username);
     }
 
     [Fact]
     public async Task Wrong_password()
     {
         var host = NewHost();
-        Assert.Equal(SignInResult.WrongPassword, (await host.SignInAsync(ServerUrl, "nope", "PC")).Result);
+        Assert.Equal(SignInResult.WrongPassword, (await host.SignInAsync(ServerUrl, "owner", "nope", "PC")).Result);
         Assert.False(host.IsSignedIn);
         Assert.False(File.Exists(TokenPath));
     }
@@ -109,10 +116,10 @@ public class DesktopHostTests : IAsyncLifetime
     public async Task Rate_limited_and_unreachable()
     {
         var limited = NewHost(handler: () => new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)));
-        Assert.Equal(SignInResult.RateLimited, (await limited.SignInAsync(ServerUrl, "x", "PC")).Result);
+        Assert.Equal(SignInResult.RateLimited, (await limited.SignInAsync(ServerUrl, "owner", "x", "PC")).Result);
 
         var offline = NewHost(handler: () => new StubHandler(_ => throw new HttpRequestException("offline")));
-        Assert.Equal(new SignInOutcome(SignInResult.Unreachable, null), await offline.SignInAsync(ServerUrl, "x", "PC"));
+        Assert.Equal(new SignInOutcome(SignInResult.Unreachable, null), await offline.SignInAsync(ServerUrl, "owner", "x", "PC"));
     }
 
     [Fact]
@@ -253,7 +260,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Contains("Local history is unavailable this session.", _notes.Messages);
 
         // Signing in starts a new device identity (cache and queue are cleared anyway): a fresh key leaves ephemeral mode.
-        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.Password, "PC")).Result);
+        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "PC")).Result);
         Assert.NotEqual(foreign, File.ReadAllBytes(keyPath));
         await WaitUntilAsync(() => host.State == SyncState.Connected);
         var other = await _server.LoginAsync("Phone");
@@ -347,7 +354,7 @@ public class DesktopHostTests : IAsyncLifetime
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var host = NewHost(handler: () => new HoldUploads(_server.Server.CreateHandler(), entered, release.Task));
-        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.Password, "PC-host")).Result);
+        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "PC-host")).Result);
         await WaitUntilAsync(() => host.State == SyncState.Connected);
 
         _clipboard.Current = new ClipboardContent.Text("in flight");
