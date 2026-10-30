@@ -12,6 +12,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import androidx.test.core.app.ApplicationProvider
+import xyz.ficdev.privatepaste.storage.SettingsStore
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
@@ -94,9 +96,9 @@ class SessionManagerTest {
     fun wrongPasswordAndRateLimit(): Unit = runBlocking {
         val m = manager()
         server.enqueue(MockResponse().setResponseCode(401))
-        assertEquals(SignInResult.WrongPassword, m.signIn(url, "nope", "Pixel"))
+        assertEquals(SignInResult.WrongPassword, m.signIn(url, "Ana", "nope", "Pixel"))
         server.enqueue(MockResponse().setResponseCode(429))
-        assertEquals(SignInResult.RateLimited, m.signIn(url, "nope", "Pixel"))
+        assertEquals(SignInResult.RateLimited, m.signIn(url, "Ana", "nope", "Pixel"))
         assertNull(m.session.value)
         assertNull(store.load())
     }
@@ -105,19 +107,19 @@ class SessionManagerTest {
     fun rejectedAndUnreachable(): Unit = runBlocking {
         val m = manager()
         server.enqueue(json("""{"title":"Bad request","detail":"Device name too long"}""", code = 400))
-        assertEquals(SignInResult.Failed("Device name too long"), m.signIn(url, "dev", "x".repeat(60)))
+        assertEquals(SignInResult.Failed("Device name too long"), m.signIn(url, "Ana", "dev", "x".repeat(60)))
 
         server.shutdown()
         assertEquals(
             SignInResult.Unreachable("Can't reach the server. Check the address and your connection."),
-            m.signIn(url, "dev", "Pixel"),
+            m.signIn(url, "Ana", "dev", "Pixel"),
         )
     }
 
     @Test
     fun plainHttpIsInvalidUrl(): Unit = runBlocking {
         seedLocalData()
-        val result = manager().signIn("http://example.com", "dev", "Pixel")
+        val result = manager().signIn("http://example.com", "Ana", "dev", "Pixel")
 
         assertEquals(SignInResult.InvalidUrl("Use an https:// address (http:// is only allowed for localhost)."), result)
         assertEquals(0, server.requestCount)
@@ -130,7 +132,7 @@ class SessionManagerTest {
         val m = manager()
         server.enqueue(json("""{"deviceId":"dev-1","token":"tok-1"}"""))
 
-        assertEquals(SignInResult.Ok, m.signIn("  ${url.removeSuffix("/")}  ", "dev", "Pixel 9"))
+        assertEquals(SignInResult.Ok, m.signIn("  ${url.removeSuffix("/")}  ", "Ana", "dev", "Pixel 9"))
 
         val expected = StoredSession(url, "dev-1", "Pixel 9", "tok-1")
         assertEquals(expected, m.session.value)
@@ -140,6 +142,22 @@ class SessionManagerTest {
         assertTrue(body, body.contains("\"platform\":\"android\"") && body.contains("\"deviceName\":\"Pixel 9\""))
         assertEquals(url, m.lastServerUrl)
         assertEquals("Pixel 9", m.lastDeviceName)
+    }
+
+    @Test
+    fun signInRemembersTheLastUsername(): Unit = runBlocking {
+        server.enqueue(json("""{"deviceId":"dev-1","token":"tok-1"}"""))
+        val settings = SettingsStore(ApplicationProvider.getApplicationContext())
+        val m = SessionManager(
+            store, cache, thumbs, queue,
+            apiFactory = { baseUrl, token -> PrivatePasteApi(baseUrl, token, client) },
+            settings = settings,
+        )
+        assertEquals(null, m.lastUsername)
+        assertEquals(SignInResult.Ok, m.signIn(url, "Ana", "dev", "Pixel 9"))
+        assertEquals("Ana", m.lastUsername)
+        assertEquals("Ana", SettingsStore(ApplicationProvider.getApplicationContext()).lastUsername)
+        assertTrue(server.takeRequest().body.readUtf8().contains("\"username\":\"Ana\""))
     }
 
     @Test
@@ -154,7 +172,7 @@ class SessionManagerTest {
         val hints = InMemorySignInHints()
         val m = manager(hints)
         server.enqueue(json("""{"deviceId":"dev-1","token":"tok-1"}"""))
-        assertEquals(SignInResult.Ok, m.signIn(url, "dev", "Pixel 9"))
+        assertEquals(SignInResult.Ok, m.signIn(url, "Ana", "dev", "Pixel 9"))
         seedLocalData()
 
         m.onRevoked()
@@ -173,7 +191,7 @@ class SessionManagerTest {
     fun signOutLogsOutBestEffortAndClearsEverything(): Unit = runBlocking {
         val m = manager()
         server.enqueue(json("""{"deviceId":"dev-1","token":"tok-1"}"""))
-        assertEquals(SignInResult.Ok, m.signIn(url, "dev", "Pixel 9"))
+        assertEquals(SignInResult.Ok, m.signIn(url, "Ana", "dev", "Pixel 9"))
         seedLocalData()
         server.enqueue(MockResponse().setResponseCode(500))
 

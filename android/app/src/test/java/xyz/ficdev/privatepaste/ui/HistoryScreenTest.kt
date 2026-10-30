@@ -108,6 +108,18 @@ class HistoryScreenTest {
     }
 
     @Test
+    fun clipRow_showsPersonChip_whenNamePresent() {
+        show(HistoryState(items = listOf(clip.copy(sourceUserName = "Ana")), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("Ana").assertIsDisplayed()
+    }
+
+    @Test
+    fun clipRow_noChip_whenNameNull() {
+        show(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("Ana").assertDoesNotExist()
+    }
+
+    @Test
     fun rowShowsPreviewDeviceAndTime() {
         show(HistoryState(items = listOf(clip), liveClipId = "a", syncState = SyncState.OFFLINE))
         compose.onNodeWithText("hello from the desk").assertIsDisplayed()

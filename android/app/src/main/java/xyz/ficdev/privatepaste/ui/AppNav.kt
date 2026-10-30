@@ -63,6 +63,7 @@ private fun SignInRoute(deps: UiDeps) {
             initializer {
                 SignInViewModel(
                     initialUrl = deps.lastServerUrl,
+                    initialUsername = deps.lastUsername,
                     defaultDeviceName = deps.lastDeviceName ?: Build.MODEL.orEmpty(),
                     signIn = deps::signIn,
                     onSignedIn = deps.startService,

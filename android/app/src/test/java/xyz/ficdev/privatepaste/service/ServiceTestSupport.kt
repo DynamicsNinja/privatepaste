@@ -110,7 +110,7 @@ class FakeServer {
 
 /** Signs in through the app's session manager (the UiDeps path the sign-in screen uses). */
 fun PrivatePasteApp.signInTo(server: FakeServer) {
-    val result = runBlocking { uiDeps.signIn(server.url, "dev", "Pixel Test") }
+    val result = runBlocking { uiDeps.signIn(server.url, "owner", "dev", "Pixel Test") }
     assertEquals(SignInResult.Ok, result)
 }
 

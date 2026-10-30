@@ -93,6 +93,14 @@ class ServiceClipApplierTest {
     }
 
     @Test
+    fun notificationTitleNamesThePersonWhenKnown() = runBlocking {
+        mode = DeliveryMode.NOTIFICATION
+        assertTrue(applier().apply(text("c2", "hi").copy(sourceUserName = "Ana")))
+        val n = shadowOf(nm).getNotification(Notifications.ID_CLIP) ?: throw AssertionError("no clip notification")
+        assertEquals("New clip from Ana · Laptop", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+    }
+
+    @Test
     fun notificationModePostsCopyAction() = runBlocking {
         val applier = applier()
         mode = DeliveryMode.NOTIFICATION   // read on every apply

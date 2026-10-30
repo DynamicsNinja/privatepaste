@@ -48,7 +48,7 @@ class FakeUiDeps(app: Application) : UiDeps {
     var servicesStarted = 0
 
     override val session: StateFlow<StoredSession?> = sessionFlow
-    override suspend fun signIn(url: String, password: String, deviceName: String): SignInResult = SignInResult.WrongPassword
+    override suspend fun signIn(url: String, username: String, password: String, deviceName: String): SignInResult = SignInResult.WrongPassword
     override suspend fun signOut() {
         signOuts++
         sessionFlow.value = null
@@ -94,23 +94,24 @@ class AppNavTest {
     fun signedOutShowsSignInPrefilled() {
         launch()
         compose.onNodeWithText("Server address").assertIsDisplayed()
+        compose.onNodeWithText("Name").assertIsDisplayed()
         compose.onNodeWithText("Password").assertIsDisplayed()
-        compose.onNodeWithText("Device name").assertIsDisplayed()
+        compose.onNodeWithText("Device name").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("https://paste.example.com").assertIsDisplayed()
-        compose.onNodeWithText("Sign in").performScrollTo().assertIsDisplayed().assertIsNotEnabled()   // no password yet
+        compose.onNodeWithText("Sign in").performScrollTo().assertIsDisplayed().assertIsNotEnabled()   // no name or password yet
     }
 
     @Test
     fun signInPrefillsThePreviousDeviceName() {
         deps.previousDeviceName = "Ivan's phone"
         launch()
-        compose.onNodeWithText("Ivan's phone").assertIsDisplayed()
+        compose.onNodeWithText("Ivan's phone").performScrollTo().assertIsDisplayed()
     }
 
     @Test
     fun signInFallsBackToTheModelName() {
         launch()
-        compose.onNodeWithText(android.os.Build.MODEL).assertIsDisplayed()
+        compose.onNodeWithText(android.os.Build.MODEL).performScrollTo().assertIsDisplayed()
     }
 
     @Test

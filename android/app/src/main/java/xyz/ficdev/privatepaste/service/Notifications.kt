@@ -94,7 +94,10 @@ object Notifications {
      * not allowed, so the engine does not record the clip as applied.
      */
     fun postClip(context: Context, clip: ClipDto): Boolean {
-        val title = "New clip from ${clip.sourceDeviceName ?: "another device"}"
+        val device = clip.sourceDeviceName ?: "another device"
+        val title = clip.sourceUserName?.takeIf { it.isNotBlank() }
+            ?.let { context.getString(R.string.notification_new_clip_from_person, it, device) }
+            ?: "New clip from $device"
         val body = when (clip.kind) {
             ClipKind.IMAGE -> if (clip.width != null && clip.height != null) "Image ${clip.width}×${clip.height}" else "Image"
             ClipKind.TEXT, ClipKind.LINK -> preview(clip.text.orEmpty())

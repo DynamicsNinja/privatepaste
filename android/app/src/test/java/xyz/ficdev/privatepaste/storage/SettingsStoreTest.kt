@@ -28,6 +28,15 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun lastUsernamePersists() {
+        assertEquals(null, SettingsStore(context).lastUsername)
+        SettingsStore(context).lastUsername = "Ana"
+        assertEquals("Ana", SettingsStore(context).lastUsername)
+        SettingsStore(context).lastUsername = null
+        assertEquals(null, SettingsStore(context).lastUsername)
+    }
+
+    @Test
     fun unknownDeliveryModeFallsBackToAutomatic() {
         context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
             .edit().putString("deliveryMode", "SOMETHING_ELSE").commit()

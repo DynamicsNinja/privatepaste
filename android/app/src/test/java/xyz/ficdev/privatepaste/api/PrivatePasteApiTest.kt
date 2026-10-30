@@ -65,16 +65,30 @@ class PrivatePasteApiTest {
 
     @Test fun loginSendsBodyWithoutBearer() = runBlocking<Unit> {
         server.enqueue(json("""{"deviceId":"d1","token":"t1"}"""))
-        val r = api().login("pw", "Pixel")
+        val r = api().login("Ana", "pw", "Pixel")
         assertEquals("t1", r.token)
         val req = take()
         assertEquals("/api/auth/login", req.path)
         assertEquals("POST", req.method)
         assertNull(req.getHeader("Authorization"))
         val body = Json.parseToJsonElement(req.body.readUtf8()).jsonObject
+        assertEquals("Ana", body["username"]!!.jsonPrimitive.content)
         assertEquals("pw", body["password"]!!.jsonPrimitive.content)
         assertEquals("Pixel", body["deviceName"]!!.jsonPrimitive.content)
         assertEquals("android", body["platform"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun login_sendsUsername() = runBlocking<Unit> {
+        server.enqueue(json("""{"deviceId":"d1","token":"t1"}"""))
+        api().login("Ana", "pw", "Pixel")
+        val body = Json.parseToJsonElement(take().body.readUtf8()).jsonObject
+        assertEquals("Ana", body["username"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun login400CarriesTheServersDetail() = runBlocking<Unit> {
+        server.enqueue(problem(400, "Update PrivatePaste to sign in."))
+        val e = assertThrowsApi<ApiException.Rejected> { api().login("", "pw", "Pixel") }
+        assertEquals("Update PrivatePaste to sign in.", e.message)
     }
 
     @Test fun bearerOnOtherCalls() = runBlocking<Unit> {
@@ -150,14 +164,14 @@ class PrivatePasteApiTest {
 
     @Test fun status429() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(429))
-        assertThrowsApi<ApiException.RateLimited> { api().login("p", "d") }
+        assertThrowsApi<ApiException.RateLimited> { api().login("n", "p", "d") }
         server.enqueue(MockResponse().setResponseCode(429))
         assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
     }
 
     @Test fun loginWrongPasswordIsUnauthorized() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(401))
-        assertThrowsApi<ApiException.Unauthorized> { api().login("p", "d") }
+        assertThrowsApi<ApiException.Unauthorized> { api().login("n", "p", "d") }
     }
 
     @Test fun undecodable2xxBodiesAreTransient() = runBlocking<Unit> {
