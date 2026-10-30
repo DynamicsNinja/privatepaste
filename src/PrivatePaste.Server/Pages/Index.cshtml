@@ -57,7 +57,7 @@
             {
                 <pre class="text">@IndexModel.Preview(clip.Text)</pre>
             }
-            <div class="meta">@if (isPinned && !Model.PinnedTab) {<span class="pin-marker" title="Pinned">@UiIcons.Pin("pin-icon")<span class="sr-only">Pinned</span></span>}@PlatformIcons.Svg(clip.SourceDevicePlatform)@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
+            <div class="meta">@if (isPinned && !Model.PinnedTab) {<span class="pin-marker" title="Pinned">@UiIcons.Pin("pin-icon")<span class="sr-only">Pinned</span></span>}@if (clip.SourceUserName is not null) {<span class="person-chip">@clip.SourceUserName</span>}@PlatformIcons.Svg(clip.SourceDevicePlatform)@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
         </div>
         <div class="actions">
             <button type="button" class="copy">Copy</button>

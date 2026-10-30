@@ -1,0 +1,107 @@
+@page
+@model PeopleModel
+@{
+    ViewData["Title"] = "People";
+}
+<h1>People</h1>
+
+<div class="people">
+@foreach (var card in Model.Cards)
+{
+    var person = card.Person;
+    var renaming = Model.IsOwner && Model.RenameId == person.Id;
+    var resetting = Model.IsOwner && !person.IsOwner && Model.ResetId == person.Id;
+    <section class="person-card" id="person-@person.Id" aria-label="@person.Name">
+        <div class="person-head">
+            <span class="person-chip">@person.Name</span>
+            @if (person.IsOwner)
+            {
+                <span class="role">owner</span>
+            }
+            @if (Model.IsOwner)
+            {
+                <div class="person-actions">
+                    <a class="button ghost" href="/people?rename=@person.Id#person-@person.Id" aria-current="@(renaming ? "true" : null)">Rename</a>
+                    @if (!person.IsOwner)
+                    {
+                        <a class="button ghost" href="/people?reset=@person.Id#person-@person.Id" aria-current="@(resetting ? "true" : null)">Reset password</a>
+                        <form method="post" asp-page-handler="Remove" data-confirm="Remove @person.Name? Their devices are signed out. Their clips stay in history.">
+                            <input type="hidden" name="id" value="@person.Id">
+                            <button type="submit" class="ghost">Remove</button>
+                        </form>
+                    }
+                </div>
+            }
+        </div>
+
+        @if (Model.CardError is { } error && error.PersonId == person.Id)
+        {
+            <p class="error" role="alert">@error.Message</p>
+        }
+
+        @if (renaming)
+        {
+            <form method="post" asp-page-handler="Rename" class="person-edit">
+                <input type="hidden" name="id" value="@person.Id">
+                <label for="rename-name">Name</label>
+                <div class="field">
+                    <input type="text" id="rename-name" name="name" value="@(Model.TypedName ?? person.Name)" maxlength="32" autocomplete="off" spellcheck="false" required autofocus>
+                    <button type="submit" class="primary">Rename</button>
+                    <a href="/people">Cancel</a>
+                </div>
+            </form>
+        }
+        else if (resetting)
+        {
+            <form method="post" asp-page-handler="ResetPassword" class="person-edit" data-confirm="Reset @person.Name's password? Their devices are signed out.">
+                <input type="hidden" name="id" value="@person.Id">
+                <label for="reset-password">New password for @person.Name</label>
+                <div class="field">
+                    <input type="password" id="reset-password" name="password" minlength="8" autocomplete="new-password" required autofocus>
+                    <button type="submit" class="danger">Reset password</button>
+                    <a href="/people">Cancel</a>
+                </div>
+            </form>
+        }
+
+        @if (card.Devices.Count == 0)
+        {
+            <p class="muted no-devices">No devices signed in.</p>
+        }
+        else
+        {
+            <ul class="person-devices">
+            @foreach (var d in card.Devices)
+            {
+                <li>
+                    <span class="device-text"><span class="device-name">@PlatformIcons.Svg(d.Platform)@d.Name</span><span class="muted"> · @PlatformIcons.For(d.Platform).Label · @Model.Seen(d)</span></span>
+                    <form method="post" asp-page-handler="SignOutDevice">
+                        <input type="hidden" name="id" value="@d.Id">
+                        <button type="submit" class="ghost">Sign out</button>
+                    </form>
+                </li>
+            }
+            </ul>
+        }
+    </section>
+}
+</div>
+
+@if (Model.IsOwner)
+{
+    <section class="panel add-person">
+        <h2>Add person</h2>
+        <p class="muted hint">They sign in on their devices with this name and password. Tell them both yourself.</p>
+        @if (Model.AddError is not null)
+        {
+            <p class="error" role="alert">@Model.AddError</p>
+        }
+        <form method="post" asp-page-handler="Add" class="add-form">
+            <div class="add-fields">
+                <label>Name<input type="text" name="name" value="@(Model.AddError is null ? null : Model.TypedName)" maxlength="32" autocomplete="off" spellcheck="false" required></label>
+                <label>Password<input type="password" name="password" minlength="8" autocomplete="new-password" required></label>
+            </div>
+            <button type="submit" class="primary">Add person</button>
+        </form>
+    </section>
+}

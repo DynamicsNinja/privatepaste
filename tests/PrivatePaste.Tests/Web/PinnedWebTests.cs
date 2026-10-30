@@ -106,15 +106,15 @@ public class PinnedWebTests
     }
 
     [Fact]
-    public async Task Nav_has_settings_between_devices_and_sign_out()
+    public async Task Nav_has_settings_between_people_and_sign_out()
     {
         using var factory = new PrivatePasteFactory();
         var web = await WebLoginAsync(factory);
         var html = await web.GetStringAsync("/");
-        var devices = html.IndexOf(">Devices</a>", StringComparison.Ordinal);
+        var people = html.IndexOf(">People</a>", StringComparison.Ordinal);
         var settings = html.IndexOf(">Settings</a>", StringComparison.Ordinal);
         var signOut = html.IndexOf(">Sign out</button>", StringComparison.Ordinal);
-        Assert.True(devices > 0 && devices < settings && settings < signOut);
+        Assert.True(people > 0 && people < settings && settings < signOut);
     }
 
     [Fact]

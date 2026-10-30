@@ -161,6 +161,8 @@ app.MapDeviceEndpoints();
 app.MapClipEndpoints();
 app.MapSettingsEndpoints();
 app.MapWebSocketEndpoint();
+// The People page replaced Devices; old bookmarks still land somewhere.
+app.MapGet("/devices", () => Results.Redirect("/people", permanent: true));
 app.MapRazorPages();
 
 app.Run();

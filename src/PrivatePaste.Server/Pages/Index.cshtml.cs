@@ -72,13 +72,5 @@ public class IndexModel(ClipRepository clips, ClipService service, TimeProvider 
     public static bool IsSafeUrl(string? text) =>
         Uri.TryCreate(text, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
 
-    public string Ago(DateTimeOffset at)
-    {
-        var span = time.GetUtcNow() - at;
-        if (span < TimeSpan.FromMinutes(1)) return "just now";
-        if (span < TimeSpan.FromHours(1)) return $"{(int)span.TotalMinutes} min ago";
-        if (span < TimeSpan.FromDays(1)) return $"{(int)span.TotalHours} h ago";
-        if (span < TimeSpan.FromDays(30)) return $"{(int)span.TotalDays} d ago";
-        return at.ToString("yyyy-MM-dd");
-    }
+    public string Ago(DateTimeOffset at) => TimeAgo.Format(at, time.GetUtcNow());
 }
