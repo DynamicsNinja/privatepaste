@@ -60,14 +60,14 @@
             <div class="meta">@if (isPinned && !Model.PinnedTab) {<span class="pin-marker" title="Pinned">@UiIcons.Pin("pin-icon")<span class="sr-only">Pinned</span></span>}@if (clip.SourceUserName is not null) {<span class="person-chip">@clip.SourceUserName</span>}@PlatformIcons.Svg(clip.SourceDevicePlatform)@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
         </div>
         <div class="actions">
-            <button type="button" class="copy">Copy</button>
+            <button type="button" class="copy icon-button" aria-label="Copy" title="Copy">@UiIcons.Copy("btn-icon idle-icon")@UiIcons.Check("btn-icon done-icon")</button>
             <form method="post" asp-page-handler="@(isPinned ? "Unpin" : "Pin")" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute">
                 <input type="hidden" name="id" value="@clip.Id">
                 <button type="submit" class="ghost pin-toggle" aria-pressed="@(isPinned ? "true" : "false")">@UiIcons.Pin("pin-icon")<span class="sr-only">@(isPinned ? "Unpin" : "Pin")</span></button>
             </form>
             <form method="post" asp-page-handler="Delete" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute">
                 <input type="hidden" name="id" value="@clip.Id">
-                <button type="submit" class="ghost">Delete</button>
+                <button type="submit" class="ghost delete icon-button" aria-label="Delete" title="Delete">@UiIcons.Trash("btn-icon")</button>
             </form>
         </div>
     </li>

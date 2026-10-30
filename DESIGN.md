@@ -47,7 +47,7 @@ The logo is fixed in both modes: tile `#221D40`, keyhole `#B7A5FF`, hairline edg
 
 - **Kind icons** (text, link, image) sit in a `raised` tile with a 10px radius, stroked in `accent`.
 - **Platform icons** (`branding/platform-icons/`) are 24×24 single stroked paths (stroke 2, round caps and joins), drawn at 14px (web) / small inline size (apps) in `muted`, before the device name: `windows` (four squares), `macos` (⌘, not the Apple logo), `linux` (`>_`), `android` (robot head), `web` (globe), `unknown` (monitor, labelled "Unknown device") for any other or missing platform.
-- **UI icons** (`branding/ui-icons/`): `pin.svg`, a 24×24 single stroked path like the platform icons. The Pin/Unpin control shows it as a ghost icon button (filled, in `accent`, when the clip is pinned; the text label is for screen readers only); pinned rows in History also carry a small `accent` pin before the device name.
+- **UI icons** (`branding/ui-icons/`): `pin.svg`, `copy.svg`, `trash.svg` and `check.svg`, each a 24×24 single stroked path like the platform icons. A web history row's actions are compact icon buttons with the name in `aria-label` and the tooltip: Copy (in `accent` on an `accent`-soft fill; the check replaces the copy icon for a moment once it worked), Pin/Unpin (ghost; filled, in `accent`, when the clip is pinned) and Delete (ghost trash; `danger` on hover). Pinned rows in History also carry a small `accent` pin before the device name.
 - The SVG files are the source; each platform carries a copy of the path data, and tests fail if a copy drifts.
 
 ## Components

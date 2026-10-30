@@ -111,6 +111,13 @@ button.ghost:hover, button.ghost:focus-visible { color: var(--danger); backgroun
 button.copy { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
 button.copy:hover { border-color: var(--accent); }
 button.copy.done { background: var(--accent); color: var(--accent-ink); }
+button.copy.failed { background: var(--danger-soft); color: var(--danger); }
+
+/* Row actions (Copy, Pin, Delete) are compact icon buttons; the name is in aria-label and the tooltip. */
+button.icon-button { padding: .5rem .6rem; line-height: 0; }
+.btn-icon { width: 18px; height: 18px; flex: none; }
+button.copy .done-icon, button.copy.done .idle-icon { display: none; }
+button.copy.done .done-icon { display: inline; }
 
 /* Sign in */
 .signin { max-width: 22rem; margin: 10vh auto 0; display: grid; gap: .75rem; }
