@@ -315,6 +315,7 @@ public class DesktopRenderTests
                 null, c.GetProperty("device").GetString()!, now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32()))
             {
                 SourceDevicePlatform = c.GetProperty("platform").GetString(),
+                SourceUserName = c.TryGetProperty("user", out var user) ? user.GetString() : null,
                 PinnedAt = c.TryGetProperty("pinned", out var pinned) && pinned.GetBoolean()
                     ? now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32() + 1) : null,
             });

@@ -7,7 +7,7 @@ Running the PrivatePaste server: deployment, configuration, keys, backups and lo
 1. Create a **Compose** application from this repository (it uses `docker-compose.yml`).
 2. Set the environment variables:
    - `PP_DB_KEY` (required, at least 16 characters): encryption key for the database and blobs. It must be a high-entropy random value (see [Generating keys](#generating-keys)), not a memorable passphrase.
-   - `PP_PASSWORD` (required): the login password.
+   - `PP_PASSWORD` (required): the owner's password. It creates the owner (named `owner`) on first start; changing it later resets the owner's password, see [Changing the password](#changing-the-password).
    - `PP_MAX_IMAGE_MB` (optional, default 20) and `PP_MAX_TEXT_KB` (optional, default 1024).
    - `PP_TRUST_CLOUDFLARE` (optional, default false). Set to `true` when the server sits behind a Cloudflare tunnel, so the login limit uses the visitor IP from `CF-Connecting-IP` and session cookies are marked Secure (scheme from `Cf-Visitor`). Only enable it if the server is reachable exclusively through Cloudflare; otherwise anyone can set these headers.
 3. Add a domain pointing to service `privatepaste`, port **8080**, with HTTPS enabled. Traefik passes WebSockets through by default.
@@ -25,11 +25,35 @@ Use the output for `PP_DB_KEY` (and a strong, separate value for `PP_PASSWORD`).
 
 **Back up `PP_DB_KEY`. Without it the data is unrecoverable.**
 
+## People
+
+A server has people, who share one history. Each signs in with a name and a password. The owner is the person created on first start, named `owner` (rename it from the **People** page), with `PP_PASSWORD` as the password. There is exactly one owner.
+
+The owner manages people on the **People** page of the web UI (History, People, Settings in the top bar):
+
+- **Add person**: a name (1-32 characters, unique, not case-sensitive) and a first password (at least 8 characters). Hand them over yourself; there is no self sign-up, invite or email.
+- **Rename**: clips show the person's current name everywhere.
+- **Reset password**: sets a new password and signs out all that person's devices and web sessions.
+- **Remove**: signs out all their devices and web sessions at once. Their past clips stay in the history under their name. The name can be reused later.
+- **Sign out** a single device, for any person.
+
+Anyone changes their own password under **Settings > Change password** (their devices stay signed in) and signs out their own devices on the People page. Only the owner sees auto-delete and Clear history, and the server refuses them to anyone else. History rows show a name chip once the server has more than one person.
+
 ## Changing the password
 
-Edit `PP_PASSWORD` in the environment and redeploy. The password is hashed with Argon2id at startup.
+- **Your own password** (owner or anyone): **Settings > Change password** in the web UI. When the owner does this, web sessions from before the upgrade to people end too.
+- **Forgot the owner's password**: set a new `PP_PASSWORD` and redeploy. When the server starts with a different `PP_PASSWORD` than last time (it remembers a hash, never the value), it resets the owner's password to it. This does not sign out the owner's devices. If `PP_PASSWORD` is unchanged, a password the owner set on the web stays in force. Web sessions from before the upgrade to people also end then.
+- **Another person's password**: the owner resets it on the People page.
+- If a password leaked, reset it: the person's devices are signed out. Passwords are hashed with Argon2id.
 
-Existing device tokens keep working after a password change: changing the password does not log devices out. If you are changing it because it leaked, open the **Devices** page in the web UI and revoke every device you don't recognize.
+## Upgrading to multiple people
+
+**Back up `/data` before upgrading**: the first start migrates the database.
+
+- The owner account is created from your existing setup (name `owner`, password `PP_PASSWORD`). Every existing device becomes the owner's and keeps working without signing in again; clips copied so far are the owner's.
+- On a server that several people already shared, the devices that belong to someone else are not moved. The owner signs them out on the People page; each person then signs in again with their own account, which the owner adds there.
+- Apps from before this version can't sign in: they get "Update PrivatePaste to sign in." Update them (release the server first, then the desktop and Android apps). Devices already signed in with an old app keep syncing.
+- New apps still sign in to an old server.
 
 ## Backups
 
@@ -38,7 +62,7 @@ Existing device tokens keep working after a password change: changing the passwo
 
 ## Clearing history and auto-delete
 
-Clips are kept until someone deletes them. The **Settings** page of the web UI has two ways to clean up, both for every device:
+Clips are kept until someone deletes them. The **Settings** page of the web UI has two ways to clean up, both for every device and for the owner only:
 
 - **Clear history** deletes every clip that is not pinned, after a confirmation that says how many clips go. Devices that were offline remove them when they reconnect.
 - **Auto-delete history** (Off, or after 7, 30 or 90 days; off by default) deletes unpinned clips once they are that old. The server checks at startup and then every hour. A clip's age counts from the later of its last copy and its unpin.
@@ -47,12 +71,14 @@ Pinned clips are never cleared or auto-deleted. Cleared stays cleared: a device 
 
 ## Proxy and forwarded headers
 
-Login is rate-limited to 5 attempts per minute per client IP (IPv6 clients per /64 prefix). The server trusts `X-Forwarded-For` from the reverse proxy to identify the client IP, so only expose the container through the proxy (Traefik). Do not publish port 8080 directly to the internet, or clients could spoof their IP and bypass the limit.
+Sign-in is rate-limited to 5 attempts per minute per client IP (IPv6 clients per /64 prefix). The server trusts `X-Forwarded-For` from the reverse proxy to identify the client IP, so only expose the container through the proxy (Traefik). Do not publish port 8080 directly to the internet, or clients could spoof their IP and bypass the limit.
 
 ## Local development
 
 ```
 PP_DB_KEY=0123456789abcdef0123 PP_PASSWORD=dev PP_DATA_DIR=./data dotnet run --project src/PrivatePaste.Server
 ```
+
+Sign in as `owner` with the password `dev`.
 
 Run the tests with `dotnet test`.
