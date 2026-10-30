@@ -68,11 +68,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
 /* Top bar */
-.top { display: flex; align-items: center; gap: 16px; padding-top: 20px; padding-bottom: 20px; flex-wrap: wrap; }
+.top { display: flex; align-items: center; gap: 12px; padding-top: 18px; padding-bottom: 18px; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
 .word { font-weight: 600; font-size: 20px; letter-spacing: -.2px; }
 .word span { color: var(--accent); font-weight: 400; }
-.top nav { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+.top nav { margin-left: auto; display: flex; gap: 2px; }
 .top nav a { color: var(--muted); text-decoration: none; font-size: 14px; padding: 6px 12px; border-radius: 99px; }
 .top nav a:hover { color: var(--accent); background: var(--accent-soft); }
 
@@ -179,7 +179,18 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
 
 @media (max-width: 800px) {
     .how { grid-template-columns: 1fr; }
-    .top nav { margin-left: 0; width: 100%; }
     .howto > li { padding-left: 20px; padding-top: 58px; }
     .howto > li::before { top: 18px; }
+}
+
+/* Phones: one row with the logo and the two links that matter there; the sections are a scroll away. */
+@media (max-width: 640px) {
+    .wide-only { display: none; }
+    .top nav a { padding: 6px 10px; }
+    .hero { padding-top: 28px; }
+}
+
+/* The smallest phones: GitHub stays reachable from the footer. */
+@media (max-width: 380px) {
+    .roomy-only { display: none; }
 }
