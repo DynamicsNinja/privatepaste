@@ -12,7 +12,7 @@ Your own vault for everything you copy. Deep violet night with a soft lilac glow
 | `lockup-on-dark.svg`, `lockup-on-light.svg` | Logo plus wordmark (outlined, so no font is needed) for dark and light backgrounds. README header and anywhere the font can't load. |
 | `platform-icons/` | 24×24 stroked icons for a clip's source device platform: `windows`, `macos` (⌘), `linux` (>_), `android`, `web` (globe), and `unknown` ("Unknown device", a monitor) for anything else or no platform. |
 | `../installer/art/` | The Windows installer's dark (Night vault) artwork: `dialog.bmp` (brand column with logo and wordmark) and `banner.bmp` (logo at the right), drawn in `art.html`. Rebuild with `powershell -File scripts/make-installer-art.ps1` after changing the logo, wordmark or colors. |
-| `ui-icons/` | 24×24 stroked interface icons: `pin` (a pushpin, used for the Pin/Unpin control and the pinned marker on the web history page). |
+| `ui-icons/` | 24×24 stroked interface icons for the web history page: `pin` (the Pin/Unpin control and the pinned marker), `copy` (Copy), `check` (shown once a copy worked) and `trash` (Delete). |
 
 ## Wordmark
 

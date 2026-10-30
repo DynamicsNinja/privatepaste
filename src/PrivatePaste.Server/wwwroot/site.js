@@ -10,7 +10,12 @@ document.addEventListener("click", (event) => {
     const row = button.closest(".clip");
     const id = row.dataset.id;
     const isImage = row.dataset.kind === "image";
-    const label = button.textContent;
+    // An icon button: the result shows as an icon change (CSS) and in its accessible name and tooltip.
+    const label = button.getAttribute("aria-label");
+    const setLabel = (text) => {
+        button.setAttribute("aria-label", text);
+        button.title = text;
+    };
     const token = document.querySelector('meta[name="csrf-token"]')?.content ?? "";
     button.disabled = true;
 
@@ -44,17 +49,18 @@ document.addEventListener("click", (event) => {
     }
 
     done.then(() => {
-        button.textContent = "Copied";
+        setLabel("Copied");
         button.classList.add("done");
     })
         .catch((error) => {
             console.error(error);
-            button.textContent = "Failed";
+            setLabel("Copy failed");
+            button.classList.add("failed");
         })
         .finally(() => {
             setTimeout(() => {
-                button.textContent = label;
-                button.classList.remove("done");
+                setLabel(label);
+                button.classList.remove("done", "failed");
                 button.disabled = false;
             }, 1500);
         });
