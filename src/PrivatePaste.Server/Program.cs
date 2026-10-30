@@ -40,6 +40,7 @@ builder.Services.AddSingleton<DeviceRepository>();
 builder.Services.AddSingleton<ConnectionHub>();
 builder.Services.AddSingleton<IClipBroadcaster>(sp => sp.GetRequiredService<ConnectionHub>());
 builder.Services.AddSingleton<ClipService>();
+builder.Services.AddSingleton<PeopleService>();
 builder.Services.AddHostedService<AutoDeleteService>();
 builder.Services.AddHealthChecks();
 

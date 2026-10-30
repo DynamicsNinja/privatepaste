@@ -21,7 +21,7 @@ public class WebSocketTests
     /// Connects and, unless <paramref name="sync"/> is false, does a ping/pong round trip so the server has
     /// certainly registered the socket before the test acts.
     /// </summary>
-    private static async Task<WebSocket> ConnectAsync(PrivatePasteFactory factory, string? token, bool sync = true)
+    internal static async Task<WebSocket> ConnectAsync(PrivatePasteFactory factory, string? token, bool sync = true)
     {
         var ws = factory.Server.CreateWebSocketClient();
         if (token is not null)
@@ -36,7 +36,7 @@ public class WebSocketTests
         return socket;
     }
 
-    private static async Task<(WebSocketReceiveResult Result, string Text)> ReceiveAsync(WebSocket socket)
+    internal static async Task<(WebSocketReceiveResult Result, string Text)> ReceiveAsync(WebSocket socket)
     {
         using var cts = new CancellationTokenSource(ReceiveTimeout);
         var buffer = new byte[16 * 1024];

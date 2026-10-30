@@ -72,11 +72,15 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
         return (client, login.DeviceId, login.Token);
     }
 
-    /// <summary>Adds a regular person directly in storage; sign in as them with <c>LoginAsync(username: name, password: ...)</c>.</summary>
-    public async Task AddPersonAsync(string name, string password = "person-pass-1")
+    /// <summary>
+    /// Adds a regular person, as the owner would, and returns their id; sign in as them with
+    /// <c>LoginAsync(username: name, password: ...)</c>.
+    /// </summary>
+    public async Task<Guid> AddPersonAsync(string name, string password = "person-pass-1")
     {
-        var hash = (await Services.GetRequiredService<PasswordVerifier>().HashAsync(password))!;
-        await Services.GetRequiredService<UserRepository>().CreateAsync(name, hash, isOwner: false);
+        var result = await Services.GetRequiredService<PeopleService>().AddAsync(name, password);
+        Assert.True(result.Ok, result.Error);
+        return (await Services.GetRequiredService<UserRepository>().FindCurrentByNameAsync(name))!.Id;
     }
 
     /// <summary>

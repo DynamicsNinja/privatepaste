@@ -270,29 +270,29 @@ public sealed class ClipRepository(PrivatePasteDb db)
             await using var conn = db.Open();
             await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
 
-            var sql = "SELECT id FROM clips";
-            var args = new List<(string, object?)>();
-            if (userId is { } uid)
-            {
-                sql += " WHERE source_user_id = @user";
-                args.Add(("@user", uid.ToString()));
-            }
+            // Set-based: one UPDATE gives the matching clips base+1, base+2, ... in their current seq order, the
+            // counter moves once, and nothing else can hold a seq above the old counter.
+            var seqBase = await ScalarAsync<long?>(conn, tx, "SELECT value FROM counters WHERE name = 'seq'") ?? 0;
+            var moved = await ExecAsync(conn, tx, """
+                WITH ordered AS (
+                    SELECT id, row_number() OVER (ORDER BY seq) AS n FROM clips
+                    WHERE @user IS NULL OR source_user_id = @user
+                )
+                UPDATE clips SET seq = @base + ordered.n FROM ordered WHERE clips.id = ordered.id
+                """,
+                ("@user", userId?.ToString()), ("@base", seqBase));
+            if (moved == 0)
+                return [];
+            await ExecAsync(conn, tx, """
+                INSERT INTO counters(name, value) VALUES('seq', @value)
+                ON CONFLICT(name) DO UPDATE SET value = excluded.value
+                """,
+                ("@value", seqBase + moved));
 
-            var ids = new List<Guid>();
-            await using (var select = Command(conn, tx, sql + " ORDER BY seq ASC", args.ToArray()))
-            await using (var reader = await select.ExecuteReaderAsync())
-            {
-                while (await reader.ReadAsync())
-                    ids.Add(Guid.Parse(reader.GetString(0)));
-            }
-
-            var result = new List<ClipDto>(ids.Count);
-            foreach (var id in ids)
-            {
-                var seq = await NextSeqAsync(conn, tx);
-                await ExecAsync(conn, tx, "UPDATE clips SET seq = @seq WHERE id = @id", ("@seq", seq), ("@id", id.ToString()));
-                result.Add(await GetCoreAsync(conn, tx, id) ?? throw new InvalidOperationException());
-            }
+            List<ClipDto> result;
+            await using (var select = Command(conn, tx, $"SELECT {Columns} FROM {From} WHERE c.seq > @base ORDER BY c.seq ASC",
+                             [("@base", seqBase)]))
+                result = await ReadClipsAsync(select);
 
             await tx.CommitAsync();
             return result;

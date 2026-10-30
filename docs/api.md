@@ -63,7 +63,7 @@ The server closes the socket with status 1008 (`revoked`) when the device is rev
 
 ## Client rules
 
-- Ignore `clip.created` messages whose `clip.sourceDeviceId` is your own device id; you already have that clip.
+- Never apply a `clip.created` message whose `clip.sourceDeviceId` is your own device id to the clipboard; you copied it. Still replace your stored copy of the clip with it: a pin or a re-send changes the clip without a new copy.
 - Only apply `live: true` clips to the clipboard. Backfilled clips go into history only.
 - Order by `seq` (or `lastCopiedAt` for display), not by arrival order: broadcasts can arrive out of `seq` order.
 - On every (re)connect, catch up with `GET /api/sync?afterSeq=<highest seq you have seen>`, repeating while `hasMore` is true, then continue from `latestSeq`. Apply at most the newest caught-up clip to the clipboard, and only if it is newer than what you last applied.
