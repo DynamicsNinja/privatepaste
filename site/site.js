@@ -143,6 +143,8 @@ for (const pre of document.querySelectorAll("pre[data-copy]")) {
 
 // Download buttons: release files carry the version in their names, so look up the newest desktop and Android
 // releases (GitHub's release list, cached by this site's nginx as /releases.json) and link straight to the files.
+// The links go through this site's /download/ (nginx fetches the file from GitHub), because a browser only
+// honours the download attribute on a same-origin link: a phone saves the file instead of opening GitHub.
 // Until that answers, or if it can't, they open the Releases page.
 const assetFor = {
     windows: /-win-x64\.msi$/,
@@ -161,7 +163,8 @@ fetch("/releases.json")
             const release = releases.find((r) => !r.draft && !r.prerelease && r.tag_name.startsWith(tagFor[platform]));
             const asset = release?.assets.find((a) => assetFor[platform].test(a.name));
             if (asset) {
-                link.href = asset.browser_download_url;
+                link.href = `/download/${encodeURIComponent(release.tag_name)}/${encodeURIComponent(asset.name)}`;
+                link.download = asset.name;
                 link.title = `${asset.name} (${release.tag_name.replace(/^\w+-v/, "version ")})`;
             }
         }
