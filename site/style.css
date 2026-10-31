@@ -209,10 +209,9 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
 .apps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
 .apps > li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
 .apps p { margin: 12px 0 0; color: var(--muted); font-size: 14px; }
-.apps .web { display: flex; align-items: center; gap: 14px; }
-.apps .web .ico { margin: 0; flex: none; }
-.apps .web p { margin: 0; }
-.apps .web b { color: var(--text); }
+/* Web has nothing to download: same badge as the download buttons, without the button behaviour. */
+.pill.static { cursor: default; }
+.pill.static:hover { background: var(--accent-soft); color: var(--accent); }
 
 /* FAQ: plain <details>, so the answers open without JavaScript. */
 .faq { display: grid; gap: 10px; margin-top: 22px; }
