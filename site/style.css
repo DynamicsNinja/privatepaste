@@ -30,6 +30,8 @@
     --danger-soft: rgba(255, 143, 163, .08);
     --code: #100E22;
     --glow: rgba(183, 165, 255, .18);
+    /* Outlines that must stand out from the surface (at least 3:1). */
+    --edge: #6A62A0;
     --radius: 16px;
 }
 
@@ -49,6 +51,7 @@
         --danger-soft: rgba(194, 54, 74, .06);
         --code: #F1EEFC;
         --glow: rgba(91, 69, 214, .12);
+        --edge: #7E76B0;
     }
 }
 
@@ -80,7 +83,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
 .word { font-weight: 600; font-size: 20px; letter-spacing: -.2px; }
 .word span { color: var(--accent); font-weight: 400; }
-.top nav { margin-left: auto; display: flex; gap: 2px; }
+.top nav { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
 .top nav a { color: var(--muted); text-decoration: none; font-size: 14px; padding: 6px 12px; border-radius: 99px; }
 .top nav a:hover { color: var(--accent); background: var(--accent-soft); }
 
@@ -99,9 +102,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .btn.soft { background: var(--accent-soft); color: var(--accent); }
 .btn.soft:hover { background: var(--raised); }
 
-.hero-apps { margin-top: 34px; }
-.label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin-bottom: 12px; }
-.pills { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.trust { margin: 18px auto 0; color: var(--muted); font-size: 13px; max-width: 640px; }
+
+.pills { display: flex; flex-wrap: wrap; gap: 10px; }
 .pill {
     display: inline-flex; align-items: center; gap: 10px; padding: 11px 18px; border-radius: 12px;
     background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 15px; text-decoration: none;
@@ -110,7 +113,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .pill svg { width: 20px; height: 20px; flex: none; }
 .pill:hover { background: var(--accent); color: var(--accent-ink); }
 
-.shot { display: block; margin: 48px auto 0; max-width: 1000px; }
+.shot { display: block; margin: 36px auto 0; max-width: 1000px; }
 /* The screenshot carries its own rounded frame and backdrop. */
 .shot img { display: block; width: 100%; height: auto; }
 
@@ -138,13 +141,20 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
 .diagram { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
 .diagram svg { display: block; width: 100%; height: auto; stroke-linecap: round; }
 .d-server { fill: var(--raised); stroke: var(--accent); stroke-width: 1.5; }
-.d-box { fill: var(--night); stroke: var(--line); stroke-width: 1.5; }
+.d-box { fill: var(--night); stroke: var(--edge); stroke-width: 1.5; }
 .d-line { stroke: var(--accent); stroke-width: 2; fill: none; }
 .d-arrow { fill: var(--accent); stroke: none; }
 .diagram text { stroke: none; font-family: inherit; }
 .d-title { fill: var(--text); font-size: 15px; font-weight: 600; }
 .d-label { fill: var(--text); font-size: 13px; }
 .d-sub { fill: var(--muted); font-size: 11.5px; }
+
+/* Security */
+.facts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.facts li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 20px; color: var(--muted); font-size: 14px; }
+.facts b { display: block; color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+.facts .caution { border-color: var(--danger); background: var(--danger-soft); }
+.facts .caution b { color: var(--danger); }
 
 /* Deploy tabs */
 .tabs { display: inline-flex; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 13px; margin-bottom: 18px; }
@@ -166,19 +176,58 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
 .howto ul { padding-left: 18px; margin-top: 6px; }
 .howto ul li { margin: 4px 0; }
 
-.code { position: relative; margin-top: 12px; }
-.code pre {
-    margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
-    font: 12.5px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; color: var(--text); overflow-x: auto;
+.howto .after { margin-top: 10px; }
+
+/* A code block: a strip with what it is and the Copy button (added by site.js), so the button never covers code. */
+.code { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--code); overflow: hidden; }
+.code-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 4px 6px 4px 16px;
+    border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px;
 }
+.code pre {
+    margin: 0; padding: 12px 16px 14px; color: var(--text); overflow-x: auto;
+    font: 12.5px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; tab-size: 4;
+}
+/* Lines as site.js splits them: an empty one keeps its height, a wrapped one hangs under its own text. */
+.code pre .line { display: block; padding-left: var(--hang, 0); text-indent: calc(-1 * var(--hang, 0)); }
+.code pre .line:empty::after { content: " "; }
 .copy {
-    position: absolute; top: 8px; right: 8px; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px;
+    font: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px;
     border-radius: 8px; border: 0; background: var(--accent-soft); color: var(--accent); cursor: pointer;
 }
 .copy:hover { background: var(--accent); color: var(--accent-ink); }
 
+.aside { margin-top: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.aside h3 { margin: 0 0 4px; font-size: 16px; }
+.aside p { margin: 0; color: var(--muted); font-size: 14px; }
+.note { margin: 16px 0 0; color: var(--muted); font-size: 14px; }
+
 .warn { margin: 16px 0 0; background: var(--danger-soft); border: 1px solid var(--danger); border-radius: 12px; padding: 12px 16px; font-size: 14px; }
 .warn b { color: var(--danger); }
+
+/* Apps */
+.apps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.apps > li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.apps p { margin: 12px 0 0; color: var(--muted); font-size: 14px; }
+.apps .web { display: flex; align-items: center; gap: 14px; }
+.apps .web .ico { margin: 0; flex: none; }
+.apps .web p { margin: 0; }
+.apps .web b { color: var(--text); }
+
+/* FAQ: plain <details>, so the answers open without JavaScript. */
+.faq { display: grid; gap: 10px; margin-top: 22px; }
+.faq details { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.faq summary {
+    cursor: pointer; list-style: none; padding: 16px 20px 16px 48px; position: relative; font-weight: 600; font-size: 15px;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::before {
+    content: "+"; position: absolute; left: 20px; top: 15px; width: 18px; text-align: center; color: var(--accent); font-weight: 700;
+}
+.faq details[open] summary::before { content: "\2212"; }
+.faq summary:hover { color: var(--accent); }
+.faq summary:focus-visible { outline-offset: -2px; border-radius: var(--radius); }
+.faq details p { margin: 0; padding: 0 20px 18px 48px; color: var(--muted); font-size: 14px; }
 
 /* Footer */
 .bottom { margin-top: 96px; padding-top: 26px; padding-bottom: 40px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--muted); font-size: 13px; }
@@ -191,12 +240,23 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
     .howto > li::before { top: 18px; }
 }
 
-/* Phones: the links fold into a menu under a button next to the logo. Without JavaScript they stay in a row. */
 .menu-button { display: none; }
 @media (max-width: 640px) {
     .hero { padding-top: 28px; }
+    /* The phone picture from the hero instead of the whole wide one. */
+    .shot { max-width: 240px; }
+    /* Long lines wrap (keeping their indentation) instead of hiding off the side; Copy still copies them as they are. */
+    .code pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; padding-left: 14px; padding-right: 14px; }
+    .howto > li, .apps > li, .facts li, .aside { padding-left: 16px; padding-right: 16px; }
+    .facts, .apps { grid-template-columns: minmax(0, 1fr); }
 }
-@media (max-width: 640px) and (scripting: enabled) {
+@media (max-width: 380px) {
+    .wrap { padding-left: 16px; padding-right: 16px; }
+    .howto > li, .apps > li, .facts li, .aside { padding-left: 12px; padding-right: 12px; }
+}
+
+/* Narrow screens: the links fold into a menu under a button next to the logo. Without JavaScript they wrap. */
+@media (max-width: 900px) and (scripting: enabled) {
     .menu-button {
         display: grid; place-items: center; margin-left: auto; width: 42px; height: 42px; padding: 0;
         border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); cursor: pointer;
