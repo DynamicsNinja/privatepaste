@@ -1,5 +1,11 @@
 "use strict";
 
+// A hairline under the sticky top bar once the page has scrolled.
+const bar = document.querySelector(".bar");
+const markScrolled = () => bar.classList.toggle("scrolled", window.scrollY > 4);
+window.addEventListener("scroll", markScrolled, { passive: true });
+markScrolled();
+
 // Phone menu: the button opens and closes the links; picking one, Escape or a tap elsewhere closes it.
 const menuButton = document.querySelector(".menu-button");
 const menu = document.getElementById("site-nav");

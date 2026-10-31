@@ -53,7 +53,8 @@
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+/* No scroll padding: a section's own top padding keeps its heading just below the sticky top bar. */
+html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
 
 body {
@@ -68,7 +69,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
 /* Top bar */
-.top { display: flex; align-items: center; gap: 12px; padding-top: 18px; padding-bottom: 18px; position: relative; z-index: 2; }
+/* The top bar stays on screen, so the menu is always one tap away. */
+.bar {
+    position: sticky; top: 0; z-index: 20;
+    background: var(--night); background: color-mix(in srgb, var(--night) 88%, transparent); border-bottom: 1px solid transparent;
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.bar.scrolled { border-bottom-color: var(--line); }
+.top { display: flex; align-items: center; gap: 12px; padding-top: 14px; padding-bottom: 14px; position: relative; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
 .word { font-weight: 600; font-size: 20px; letter-spacing: -.2px; }
 .word span { color: var(--accent); font-weight: 400; }
