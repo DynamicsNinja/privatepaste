@@ -122,16 +122,11 @@ Each device signs in with a person's name and password once and gets its own dev
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 
-## Code signing policy
+## Code signing
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+The Windows app and installer are not code-signed yet, so Windows SmartScreen asks before running them the first time: click **More info**, then **Run anyway** (details in [Desktop app](docs/desktop.md)). The macOS build isn't notarized either. Download the apps only from this repository's [Releases](https://github.com/DynamicsNinja/privatepaste/releases), where GitHub Actions builds them from this source.
 
-> Being set up; until it is in place, the Windows downloads are unsigned (see [SmartScreen](docs/desktop.md)).
-
-- What is signed: the Windows app (`PrivatePaste.exe`) and its installer (`PrivatePaste-<version>-win-x64.msi`), built from this repository by the [desktop release workflow](.github/workflows/desktop.yml) on GitHub-hosted runners. Nothing built elsewhere is signed.
-- Committers and reviewers: [Ivan Ficko](https://github.com/DynamicsNinja). Changes from anyone else come in as pull requests and are reviewed before they are merged.
-- Approvers: [Ivan Ficko](https://github.com/DynamicsNinja). Every release is approved by hand before it is signed.
-- Privacy: PrivatePaste sends data only to the PrivatePaste server you enter when you sign in, which you or someone you trust runs. It sends nothing to the authors or to any other system.
+PrivatePaste sends data only to the PrivatePaste server you enter when you sign in, which you or someone you trust runs. It sends nothing to the authors or to any other system.
 
 ## Built with
 

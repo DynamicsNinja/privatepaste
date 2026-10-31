@@ -39,8 +39,8 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           ./scripts/publish-windows.ps1 -Version $version
 
-      # Code signing through SignPath (see .signpath/ and "Code signing policy" in the README). Off until the
-      # repository variable SIGNPATH_ORGANIZATION_ID is set; the release is then built unsigned, as before.
+      # Code signing through SignPath (see .signpath/). Off until the repository variable SIGNPATH_ORGANIZATION_ID
+      # is set; until then the release is built unsigned (README "Code signing").
       # Each signing request waits for a manual approval in SignPath.
       - name: Upload the unsigned exe
         id: unsigned-exe
@@ -165,7 +165,5 @@ jobs:
           else
             flags=""
             case "$version" in *-*) flags="--prerelease" ;; esac
-            # SignPath Foundation asks for the term "Code signing policy" on the download page.
-            gh release create "$GITHUB_REF_NAME" dist/* --title "PrivatePaste $version" --generate-notes $flags \
-              --notes "Code signing policy: https://github.com/$GH_REPO#code-signing-policy"
+            gh release create "$GITHUB_REF_NAME" dist/* --title "PrivatePaste $version" --generate-notes $flags
           fi
