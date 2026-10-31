@@ -50,27 +50,35 @@ for (const tab of tabs) {
     });
 }
 
-// The hero's "Deploy on Dokploy" / "Run it with Docker" buttons open the matching tab.
-for (const link of document.querySelectorAll("[data-tab]")) {
-    link.addEventListener("click", () => selectTab(document.getElementById(`tab-${link.dataset.tab}`), false));
-}
-
-// Copy buttons on every code block.
+// Copy buttons on every code block, in its header strip so they never cover the code. They copy the text exactly
+// as written, even where a narrow screen wraps the lines.
 for (const pre of document.querySelectorAll("pre[data-copy]")) {
+    const text = pre.textContent;
+    // One block per line with a hanging indent, so a line that wraps on a narrow screen continues under its own
+    // text instead of at the left edge (where YAML would look like it changed level).
+    if (text.includes("\n")) {
+        pre.replaceChildren(...text.split("\n").map((line) => {
+            const span = document.createElement("span");
+            span.className = "line";
+            span.textContent = line;
+            span.style.setProperty("--hang", `${line.match(/^ */)[0].length + 2}ch`);
+            return span;
+        }));
+    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "copy";
     button.textContent = "Copy";
     button.addEventListener("click", async () => {
         try {
-            await navigator.clipboard.writeText(pre.textContent);
+            await navigator.clipboard.writeText(text);
             button.textContent = "Copied";
         } catch {
             button.textContent = "Select and copy";
         }
         setTimeout(() => { button.textContent = "Copy"; }, 1500);
     });
-    pre.parentElement.append(button);
+    pre.parentElement.querySelector(".code-head").append(button);
 }
 
 // Download buttons: release files carry the version in their names, so look up the newest desktop and Android
@@ -79,10 +87,11 @@ for (const pre of document.querySelectorAll("pre[data-copy]")) {
 const assetFor = {
     windows: /-win-x64\.msi$/,
     macos: /-osx-arm64\.zip$/,
+    "macos-x64": /-osx-x64\.zip$/,
     linux: /-linux-x64\.tar\.gz$/,
     android: /\.apk$/,
 };
-const tagFor = { windows: "desktop-v", macos: "desktop-v", linux: "desktop-v", android: "android-v" };
+const tagFor = { windows: "desktop-v", macos: "desktop-v", "macos-x64": "desktop-v", linux: "desktop-v", android: "android-v" };
 
 fetch("/releases.json")
     .then((response) => (response.ok ? response.json() : []))

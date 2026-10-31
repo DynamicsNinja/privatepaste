@@ -3,7 +3,6 @@
 *
 !site/
 !branding/logo.svg
-!docs/images/hero-dark.png
-!docs/images/hero-light.png
+!deploy/dokploy/privatepaste/docker-compose.yml
 !src/PrivatePaste.Server/wwwroot/fonts/sora-latin.woff2
 !src/PrivatePaste.Server/wwwroot/fonts/sora-latin-ext.woff2

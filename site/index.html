@@ -8,15 +8,40 @@
     <meta name="color-scheme" content="dark light">
     <meta name="theme-color" content="#15122B" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#F6F4FD" media="(prefers-color-scheme: light)">
+    <link rel="canonical" href="https://privatepaste.ficdev.xyz/">
     <meta property="og:type" content="website">
+    <meta property="og:site_name" content="PrivatePaste">
     <meta property="og:url" content="https://privatepaste.ficdev.xyz/">
     <meta property="og:title" content="PrivatePaste: your clipboard on every device, kept on your own server">
     <meta property="og:description" content="Self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
-    <meta property="og:image" content="https://privatepaste.ficdev.xyz/images/hero-dark.png">
+    <meta property="og:image" content="https://privatepaste.ficdev.xyz/images/og-card.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The PrivatePaste logo and the line: Your clipboard on every device, kept on your own server.">
     <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="PrivatePaste: your clipboard on every device, kept on your own server">
+    <meta name="twitter:description" content="Self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
+    <meta name="twitter:image" content="https://privatepaste.ficdev.xyz/images/og-card.png">
+    <meta name="twitter:image:alt" content="The PrivatePaste logo and the line: Your clipboard on every device, kept on your own server.">
+    <link rel="icon" href="/favicon.ico" sizes="32x32">
     <link rel="icon" href="/logo.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="preload" href="/fonts/sora-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/style.css">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "PrivatePaste",
+        "description": "Self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Windows, macOS, Linux, Android",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "license": "https://opensource.org/licenses/MIT",
+        "url": "https://privatepaste.ficdev.xyz/",
+        "downloadUrl": "https://github.com/DynamicsNinja/privatepaste/releases"
+    }
+    </script>
 </head>
 <body>
 <header class="bar">
@@ -31,7 +56,10 @@
     <nav id="site-nav" aria-label="Sections">
         <a href="#features">Features</a>
         <a href="#how">How it works</a>
+        <a href="#security">Security</a>
         <a href="#deploy">Deploy</a>
+        <a href="#apps">Apps</a>
+        <a href="#faq">FAQ</a>
         <a href="https://github.com/DynamicsNinja/privatepaste">GitHub</a>
     </nav>
 </div>
@@ -42,29 +70,23 @@
         <h1>Your clipboard on every device,<br>kept on your own server.</h1>
         <p class="intro">Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.</p>
         <div class="cta">
-            <a class="btn primary" href="#deploy" data-tab="dokploy">Deploy on Dokploy</a>
-            <a class="btn soft" href="#deploy" data-tab="docker">Run it with Docker</a>
+            <a class="btn primary" href="#deploy">Deploy your server</a>
+            <a class="btn soft" href="https://github.com/DynamicsNinja/privatepaste">View on GitHub</a>
         </div>
+        <p class="trust">Free and open source (MIT) · v__SERVER_VERSION__ · Windows, macOS, Linux, Android and web · no iOS yet</p>
 
-        <div class="hero-apps" id="apps">
-            <span class="label">Get the apps</span>
-            <div class="pills">
-                <a class="pill" data-platform="windows" href="https://github.com/DynamicsNinja/privatepaste/releases">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>Windows</a>
-                <a class="pill" data-platform="macos" href="https://github.com/DynamicsNinja/privatepaste/releases">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h6v6H9zM9 9V6a3 3 0 1 0-3 3h3M15 9V6a3 3 0 1 1 3 3h-3M15 15v3a3 3 0 1 0 3-3h-3M9 15v3a3 3 0 1 1-3-3h3"/></svg>macOS</a>
-                <a class="pill" data-platform="linux" href="https://github.com/DynamicsNinja/privatepaste/releases">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6l6 6-6 6M12 18h8"/></svg>Linux</a>
-                <a class="pill" data-platform="android" href="https://github.com/DynamicsNinja/privatepaste/releases">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18.5a9 9 0 0 1 18 0zM7.5 10.7 5.5 7.2M16.5 10.7 18.5 7.2M8.5 14.5h.01M15.5 14.5h.01"/></svg>Android</a>
-                <a class="pill" href="#deploy" title="The web app comes with your server">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM3 12h18M12 3c-2.5 2.4-3.8 5.4-3.8 9s1.3 6.6 3.8 9M12 3c2.5 2.4 3.8 5.4 3.8 9s-1.3 6.6-3.8 9"/></svg>Web</a>
-            </div>
-        </div>
-
+        <!-- Phones get just the Android phone from the hero; wider screens the whole hero. Made by scripts/make-site-images.py. -->
         <picture class="shot">
-            <source media="(prefers-color-scheme: light)" srcset="/images/hero-light.png">
-            <img src="/images/hero-dark.png" width="2400" height="1500"
+            <source media="(max-width: 640px) and (prefers-color-scheme: light)" type="image/webp" width="594" height="1245" sizes="240px"
+                    srcset="/images/phone-light-300.webp 300w, /images/phone-light-594.webp 594w">
+            <source media="(max-width: 640px)" type="image/webp" width="594" height="1245" sizes="240px"
+                    srcset="/images/phone-dark-300.webp 300w, /images/phone-dark-594.webp 594w">
+            <source media="(prefers-color-scheme: light)" type="image/webp" width="2400" height="1431" sizes="(max-width: 1040px) calc(100vw - 40px), 1000px"
+                    srcset="/images/hero-light-800.webp 800w, /images/hero-light-1200.webp 1200w, /images/hero-light-2000.webp 2000w">
+            <source type="image/webp" width="2400" height="1431" sizes="(max-width: 1040px) calc(100vw - 40px), 1000px"
+                    srcset="/images/hero-dark-800.webp 800w, /images/hero-dark-1200.webp 1200w, /images/hero-dark-2000.webp 2000w">
+            <source media="(prefers-color-scheme: light)" width="2400" height="1431" srcset="/images/hero-light.png">
+            <img src="/images/hero-dark.png" width="2400" height="1431" fetchpriority="high" decoding="async"
                  alt="The PrivatePaste web history, the desktop history popup and the Android app showing the same clips, each marked with the person and device it came from">
         </picture>
     </section>
@@ -86,7 +108,7 @@
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
                 <h3>Private copies stay private</h3>
-                <p>A copy your password manager marks as private never leaves your computer. You can block other apps too.</p>
+                <p>On the desktop apps, copies your password manager marks as private are never uploaded, and you can block other apps too. Android only sends what you share.</p>
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6zM9 12l2 2 4-4"/></svg></span>
@@ -117,21 +139,37 @@
                 <li><b>Everything stays searchable</b> in the history on every device and in the web app, until you delete it or clear it.</li>
             </ol>
             <div class="diagram">
-                <svg viewBox="0 0 420 260" role="img" aria-label="A laptop, a phone and a browser, each connected only to your server">
-                    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" class="d-arrow"/></marker></defs>
+                <svg viewBox="0 0 420 260" role="img" aria-label="A laptop, a phone and a browser, each sending clips to your server and getting clips from it, over HTTPS with live updates">
+                    <defs>
+                        <marker id="arrow-end" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" class="d-arrow"/></marker>
+                        <marker id="arrow-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10 0L0 5L10 10z" class="d-arrow"/></marker>
+                    </defs>
                     <rect x="140" y="95" width="140" height="70" rx="14" class="d-server"/>
                     <text x="210" y="125" text-anchor="middle" class="d-title">Your server</text>
                     <text x="210" y="145" text-anchor="middle" class="d-sub">encrypted history</text>
                     <rect x="20" y="20" width="100" height="44" rx="10" class="d-box"/><text x="70" y="47" text-anchor="middle" class="d-label">Laptop</text>
                     <rect x="300" y="20" width="100" height="44" rx="10" class="d-box"/><text x="350" y="47" text-anchor="middle" class="d-label">Phone</text>
                     <rect x="160" y="200" width="100" height="44" rx="10" class="d-box"/><text x="210" y="227" text-anchor="middle" class="d-label">Browser</text>
-                    <path d="M115 64 L160 98" class="d-line" marker-end="url(#arrow)"/>
-                    <path d="M260 98 L305 64" class="d-line" marker-end="url(#arrow)"/>
-                    <path d="M210 165 L210 198" class="d-line" marker-end="url(#arrow)"/>
-                    <text x="96" y="92" class="d-sub">copy</text><text x="300" y="92" class="d-sub">paste</text>
+                    <path d="M108 68 L158 98" class="d-line" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+                    <path d="M312 68 L262 98" class="d-line" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+                    <path d="M210 168 L210 197" class="d-line" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+                    <text x="222" y="187" class="d-sub">HTTPS + live updates</text>
                 </svg>
             </div>
         </div>
+    </section>
+
+    <section class="wrap" id="security">
+        <h2>Security</h2>
+        <p class="lead">What protects your clips, and what doesn't.</p>
+        <ul class="facts">
+            <li><b>Encrypted at rest.</b> The database (SQLite3 Multiple Ciphers) and the stored image files are encrypted with <code>PP_DB_KEY</code>, a key only you hold.</li>
+            <li class="caution"><b>Not end-to-end encrypted.</b> The server can read your clips, so run it on a machine you trust.</li>
+            <li><b>HTTPS only.</b> The apps accept only HTTPS servers. Plain HTTP works only for localhost.</li>
+            <li><b>Hashed passwords.</b> Passwords are hashed with Argon2id, and sign-in is rate-limited per IP.</li>
+            <li><b>A token per device.</b> Every device has its own token. Sign out a lost one on the People page and it is out at once.</li>
+            <li><b>No telemetry.</b> No analytics, no third-party requests. The apps send data only to your server.</li>
+        </ul>
     </section>
 
     <section class="wrap" id="deploy">
@@ -152,10 +190,11 @@
                 <li>
                     <h3>Paste the compose file</h3>
                     <p>Paste this into the editor and save.</p>
-                    <div class="code"><pre data-copy>services:
+                    <div class="code"><div class="code-head"><span>docker-compose.yml</span></div><pre data-copy>services:
   privatepaste:
-    image: ghcr.io/dynamicsninja/privatepaste:latest
+    image: ghcr.io/dynamicsninja/privatepaste:__SERVER_VERSION__
     restart: unless-stopped
+    stop_grace_period: 15s
     environment:
       PP_DB_KEY: ${PP_DB_KEY}
       PP_PASSWORD: ${PP_PASSWORD}
@@ -169,13 +208,13 @@ volumes:
                 </li>
                 <li>
                     <h3>Set the environment</h3>
-                    <p>On the <b>Environment</b> tab, add two variables:</p>
+                    <p>On the <b>Environment</b> tab, paste these two lines and fill them in:</p>
                     <ul>
                         <li><code>PP_DB_KEY</code>: a random key that encrypts everything. Generate one with <code>openssl rand -base64 32</code>.</li>
-                        <li><code>PP_PASSWORD</code>: the password you'll sign in with.</li>
+                        <li><code>PP_PASSWORD</code>: a strong password you'll sign in with.</li>
                     </ul>
-                    <div class="code"><pre data-copy>PP_DB_KEY=paste-the-generated-key-here
-PP_PASSWORD=choose-a-strong-password</pre></div>
+                    <div class="code"><div class="code-head"><span>Environment</span></div><pre data-copy>PP_DB_KEY=
+PP_PASSWORD=</pre></div>
                 </li>
                 <li>
                     <h3>Add your domain</h3>
@@ -183,7 +222,7 @@ PP_PASSWORD=choose-a-strong-password</pre></div>
                 </li>
                 <li>
                     <h3>Deploy and sign in</h3>
-                    <p>Click <b>Deploy</b>. Open your domain and sign in with the name <code>owner</code> and your <code>PP_PASSWORD</code>. Then install the apps and sign in the same way.</p>
+                    <p>Click <b>Deploy</b>. Open your domain and sign in with the name <code>owner</code> and your <code>PP_PASSWORD</code>.</p>
                 </li>
             </ol>
         </div>
@@ -192,15 +231,17 @@ PP_PASSWORD=choose-a-strong-password</pre></div>
             <ol class="howto">
                 <li>
                     <h3>Make a folder</h3>
-                    <p>On any machine with Docker and Docker Compose, for example a VPS, Coolify, Portainer or CapRover.</p>
-                    <div class="code"><pre data-copy>mkdir privatepaste &amp;&amp; cd privatepaste</pre></div>
+                    <p>On a server with Docker and Docker Compose, for example a VPS.</p>
+                    <div class="code"><div class="code-head"><span>Shell</span></div><pre data-copy>mkdir privatepaste &amp;&amp; cd privatepaste</pre></div>
                 </li>
                 <li>
                     <h3>Create <code>docker-compose.yml</code></h3>
-                    <div class="code"><pre data-copy>services:
+                    <p>PrivatePaste, with Caddy in front for HTTPS. Caddy gets a certificate for your domain by itself.</p>
+                    <div class="code"><div class="code-head"><span>docker-compose.yml</span></div><pre data-copy>services:
   privatepaste:
-    image: ghcr.io/dynamicsninja/privatepaste:latest
+    image: ghcr.io/dynamicsninja/privatepaste:__SERVER_VERSION__
     restart: unless-stopped
+    stop_grace_period: 15s
     environment:
       PP_DB_KEY: ${PP_DB_KEY}
       PP_PASSWORD: ${PP_PASSWORD}
@@ -209,36 +250,143 @@ PP_PASSWORD=choose-a-strong-password</pre></div>
     expose:
       - 8080
 
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PP_DOMAIN: ${PP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - privatepaste
+
 volumes:
-  privatepaste-data:</pre></div>
+  privatepaste-data:
+  caddy-data:
+  caddy-config:</pre></div>
                 </li>
                 <li>
-                    <h3>Create <code>.env</code> with your keys</h3>
-                    <p><code>PP_DB_KEY</code> encrypts everything, and <code>PP_PASSWORD</code> is your sign-in password.</p>
-                    <div class="code"><pre data-copy>cat &gt; .env &lt;&lt;EOF
-PP_DB_KEY=$(openssl rand -base64 32)
-PP_PASSWORD=choose-a-strong-password
-EOF</pre></div>
-                </li>
-                <li>
-                    <h3>Start it</h3>
-                    <div class="code"><pre data-copy>docker compose up -d</pre></div>
-                </li>
-                <li>
-                    <h3>Put HTTPS in front</h3>
-                    <p>Route your domain to the container's port <code>8080</code> through a reverse proxy with HTTPS, such as Caddy, Traefik or nginx. The port isn't published on purpose: the sign-in rate limit trusts the proxy. With Caddy on the same Docker network:</p>
-                    <div class="code"><pre data-copy>paste.example.com {
+                    <h3>Create the <code>Caddyfile</code></h3>
+                    <p>Caddy reads your domain from <code>PP_DOMAIN</code> and passes everything to PrivatePaste.</p>
+                    <div class="code"><div class="code-head"><span>Caddyfile</span></div><pre data-copy>{$PP_DOMAIN} {
     reverse_proxy privatepaste:8080
 }</pre></div>
                 </li>
                 <li>
-                    <h3>Sign in</h3>
-                    <p>Open your domain and sign in with the name <code>owner</code> and your <code>PP_PASSWORD</code>. Then install the apps and sign in the same way.</p>
+                    <h3>Create <code>.env</code> with your domain and keys</h3>
+                    <p>Put your domain in the second line. This generates the key that encrypts everything (<code>PP_DB_KEY</code>) and your sign-in password (<code>PP_PASSWORD</code>), then shows the password.</p>
+                    <div class="code"><div class="code-head"><span>Shell</span></div><pre data-copy>cat &gt; .env &lt;&lt;EOF
+PP_DOMAIN=paste.example.com
+PP_DB_KEY=$(openssl rand -base64 32)
+PP_PASSWORD=$(openssl rand -base64 18)
+EOF
+grep PP_PASSWORD .env</pre></div>
+                </li>
+                <li>
+                    <h3>Point your domain at the server</h3>
+                    <p>Add an A record (and an AAAA record for IPv6) for your domain with the server's address, and open ports <code>80</code> and <code>443</code> in its firewall.</p>
+                </li>
+                <li>
+                    <h3>Start it and sign in</h3>
+                    <div class="code"><div class="code-head"><span>Shell</span></div><pre data-copy>docker compose up -d</pre></div>
+                    <p class="after">Open your domain with <code>https://</code> and sign in with the name <code>owner</code> and the password from <code>.env</code>.</p>
                 </li>
             </ol>
+
+            <div class="aside">
+                <h3>Already run Traefik, nginx or another proxy?</h3>
+                <p>Leave out the <code>caddy</code> service and the <code>Caddyfile</code>. Attach <code>privatepaste</code> to your proxy's Docker network (called <code>proxy</code> here; use its real name) and route your domain to port <code>8080</code>. Don't publish the port: the sign-in rate limit trusts the client IP your proxy forwards, so the server must be reachable only through the proxy.</p>
+                <div class="code"><div class="code-head"><span>docker-compose.yml</span></div><pre data-copy>services:
+  privatepaste:
+    # ... as above, plus:
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true</pre></div>
+            </div>
         </div>
 
+        <p class="note">To upgrade, back up <code>/data</code>, change the image tag to the new version and redeploy. See <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/self-hosting.md#backups">Backups</a> in the self-hosting guide.</p>
         <p class="warn"><b>Keep <code>PP_DB_KEY</code> safe</b>, apart from your backups. Without it the data can't be recovered. More settings, backups and proxy notes are in the <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/self-hosting.md">self-hosting guide</a>.</p>
+    </section>
+
+    <section class="wrap" id="apps">
+        <h2>Then connect your devices</h2>
+        <p class="lead">Install an app and sign in with your server's address, the name <code>owner</code> and your password. Add the other people on the web app's <b>People</b> page.</p>
+        <ul class="apps">
+            <li>
+                <div class="pills">
+                    <a class="pill" data-platform="windows" href="https://github.com/DynamicsNinja/privatepaste/releases">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>Windows</a>
+                </div>
+                <p>An installer (MSI) for your user, no admin prompt. It isn't code-signed yet, so SmartScreen asks first: click <b>More info</b>, then <b>Run anyway</b>.</p>
+            </li>
+            <li>
+                <div class="pills">
+                    <a class="pill" data-platform="macos" href="https://github.com/DynamicsNinja/privatepaste/releases">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h6v6H9zM9 9V6a3 3 0 1 0-3 3h3M15 9V6a3 3 0 1 1 3 3h-3M15 15v3a3 3 0 1 0 3-3h-3M9 15v3a3 3 0 1 1-3-3h3"/></svg>macOS, Apple Silicon</a>
+                    <a class="pill" data-platform="macos-x64" href="https://github.com/DynamicsNinja/privatepaste/releases">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h6v6H9zM9 9V6a3 3 0 1 0-3 3h3M15 9V6a3 3 0 1 1 3 3h-3M15 15v3a3 3 0 1 0 3-3h-3M9 15v3a3 3 0 1 1-3-3h3"/></svg>macOS, Intel</a>
+                </div>
+                <p>A zip with the app. It isn't notarized yet: right-click <code>PrivatePaste.app</code> and choose <b>Open</b>.</p>
+            </li>
+            <li>
+                <div class="pills">
+                    <a class="pill" data-platform="linux" href="https://github.com/DynamicsNinja/privatepaste/releases">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6l6 6-6 6M12 18h8"/></svg>Linux</a>
+                </div>
+                <p>A tar.gz for x64. Works best in an X11 session; on Wayland the clipboard and hotkey are limited.</p>
+            </li>
+            <li>
+                <div class="pills">
+                    <a class="pill" data-platform="android" href="https://github.com/DynamicsNinja/privatepaste/releases">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18.5a9 9 0 0 1 18 0zM7.5 10.7 5.5 7.2M16.5 10.7 18.5 7.2M8.5 14.5h.01M15.5 14.5h.01"/></svg>Android</a>
+                </div>
+                <p>An APK for Android 10 or newer. Download it on the phone, open it and allow <b>Install unknown apps</b> for your browser when Android asks.</p>
+            </li>
+            <li class="web">
+                <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM3 12h18M12 3c-2.5 2.4-3.8 5.4-3.8 9s1.3 6.6 3.8 9M12 3c2.5 2.4 3.8 5.4 3.8 9s-1.3 6.6-3.8 9"/></svg></span>
+                <p><b>Web</b>: the web app is built into your server. Open your domain in any modern browser.</p>
+            </li>
+        </ul>
+        <p class="note">All files, and older versions, are on <a href="https://github.com/DynamicsNinja/privatepaste/releases">GitHub Releases</a>. More in the <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/desktop.md">desktop</a> and <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/android.md">Android</a> guides.</p>
+    </section>
+
+    <section class="wrap" id="faq">
+        <h2>Questions</h2>
+        <div class="faq">
+            <details>
+                <summary>Is it end-to-end encrypted?</summary>
+                <p>No. Your server stores clips encrypted at rest with <code>PP_DB_KEY</code>, but it can read them while it runs. Run it on a machine you trust.</p>
+            </details>
+            <details>
+                <summary>Is there an iPhone app?</summary>
+                <p>Not yet. On an iPhone or iPad you can use the web app in the browser.</p>
+            </details>
+            <details>
+                <summary>Does it run on a Raspberry Pi?</summary>
+                <p>The image is built for amd64 and arm64, so on a Raspberry Pi it needs a 64-bit OS.</p>
+            </details>
+            <details>
+                <summary>What does it cost?</summary>
+                <p>Nothing. It's free and open source under the MIT licence, with no paid tier. You only pay for the machine you run it on.</p>
+            </details>
+            <details>
+                <summary>How is it different from KDE Connect or the Windows and Apple clipboards?</summary>
+                <p>PrivatePaste runs on a server you own, keeps a searchable history, and works across networks and platforms, the web included. KDE Connect sends from device to device on your local network. The Windows cloud clipboard and Apple's Universal Clipboard go through your Microsoft or Apple account and stay inside their own ecosystems.</p>
+            </details>
+            <details>
+                <summary>What if I lose <code>PP_DB_KEY</code>?</summary>
+                <p>Then the data can't be recovered: everything is encrypted with it. Keep it somewhere safe, for example in a password manager, apart from your backups.</p>
+            </details>
+        </div>
     </section>
 </main>
 
