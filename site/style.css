@@ -117,6 +117,31 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 /* The screenshot carries its own rounded frame and backdrop. */
 .shot img { display: block; width: 100%; height: auto; }
 
+/* Phones: a carousel with one app per slide instead of the wide hero. Native swipe with scroll snap; site.js adds
+   the dots and arrow keys. Each slide image carries its own frame and shadow on a transparent background. */
+.carousel { display: none; }
+.slides {
+    --slide: min(78%, 320px);
+    display: flex; gap: 12px; position: relative; overflow-x: auto; overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory; scrollbar-width: none; border-radius: var(--radius);
+}
+.slides::-webkit-scrollbar { display: none; }
+/* Room before the first slide and after the last, so they too can sit in the middle. */
+.slides::before, .slides::after { content: ""; flex: 0 0 calc((100% - var(--slide)) / 2 - 12px); }
+.slides:focus-visible { outline-offset: -2px; }
+/* Captions at the bottom, also on a slide whose picture site.js hasn't put in yet. */
+.slide {
+    flex: 0 0 var(--slide); margin: 0; scroll-snap-align: center; scroll-snap-stop: always;
+    display: flex; flex-direction: column; justify-content: flex-end;
+}
+.slide img { display: block; width: 100%; height: auto; }
+.slide figcaption { margin-top: 4px; font-weight: 600; font-size: 15px; }
+.slide figcaption span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 4px; }
+.dots { display: none; }
+.dots button { width: 32px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; }
+.dots button::before { content: ""; width: 8px; height: 8px; border-radius: 99px; background: var(--edge); transition: width .15s, background .15s; }
+.dots button[aria-current="true"]::before { width: 22px; background: var(--accent); }
+
 /* Sections */
 section[id] { padding-top: 88px; }
 h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; }
@@ -209,10 +234,9 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
 .apps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
 .apps > li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
 .apps p { margin: 12px 0 0; color: var(--muted); font-size: 14px; }
-.apps .web { display: flex; align-items: center; gap: 14px; }
-.apps .web .ico { margin: 0; flex: none; }
-.apps .web p { margin: 0; }
-.apps .web b { color: var(--text); }
+/* Web has nothing to download: same badge as the download buttons, without the button behaviour. */
+.pill.static { cursor: default; }
+.pill.static:hover { background: var(--accent-soft); color: var(--accent); }
 
 /* FAQ: plain <details>, so the answers open without JavaScript. */
 .faq { display: grid; gap: 10px; margin-top: 22px; }
@@ -243,15 +267,20 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
 .menu-button { display: none; }
 @media (max-width: 640px) {
     .hero { padding-top: 28px; }
-    /* The phone picture from the hero instead of the whole wide one. */
-    .shot { max-width: 240px; }
+    .shot { display: none; }
+    /* Edge to edge, so the neighbouring slides peek in from the sides of the screen. */
+    .carousel { display: block; margin: 28px -20px 0; }
     /* Long lines wrap (keeping their indentation) instead of hiding off the side; Copy still copies them as they are. */
     .code pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; padding-left: 14px; padding-right: 14px; }
     .howto > li, .apps > li, .facts li, .aside { padding-left: 16px; padding-right: 16px; }
     .facts, .apps { grid-template-columns: minmax(0, 1fr); }
 }
+@media (max-width: 640px) and (scripting: enabled) {
+    .dots { display: flex; justify-content: center; margin-top: 6px; }
+}
 @media (max-width: 380px) {
     .wrap { padding-left: 16px; padding-right: 16px; }
+    .carousel { margin-left: -16px; margin-right: -16px; }
     .howto > li, .apps > li, .facts li, .aside { padding-left: 12px; padding-right: 12px; }
 }
 

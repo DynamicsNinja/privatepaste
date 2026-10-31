@@ -292,7 +292,8 @@ public class DesktopRenderTests
 
     /// <summary>
     /// The README hero's popup, from the demo history in scripts/readme/demo.json (see scripts/readme/README.md).
-    /// Runs only when PP_README_DEMO names that file; saves readme-popup-{theme}.png into PP_SCREENSHOT_DIR.
+    /// Runs only when PP_README_DEMO names that file; saves readme-popup-{theme}.png into PP_SCREENSHOT_DIR at 2x
+    /// (840x960), so the homepage can show it sharp on high-density screens.
     /// </summary>
     [Theory]
     [InlineData("dark")]
@@ -323,7 +324,7 @@ public class DesktopRenderTests
         var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
             _ => Task.CompletedTask, TimeProvider.System);
         vm.MoveSelection(1);
-        Render(new PopupWindow { DataContext = vm }, theme, "readme-popup");
+        Render(new PopupWindow { DataContext = vm }, theme, "readme-popup", scale: 2);
     }, CancellationToken.None);
 
     [Theory]
@@ -478,9 +479,21 @@ public class DesktopRenderTests
         finally { w.Close(); }
     }, CancellationToken.None);
 
-    private static void Render(Window window, string theme, string name, Action<Window>? inspect = null)
+    /// <param name="scale">Pixel density of the saved PNG (the window is laid out at its normal size, then drawn scaled).</param>
+    private static void Render(Window window, string theme, string name, Action<Window>? inspect = null, int scale = 1)
     {
         window.RequestedThemeVariant = theme == "dark" ? ThemeVariant.Dark : ThemeVariant.Light;
+        if (scale != 1)
+        {
+            // The headless window renders at 1x, so draw its content scaled up in a window that much larger: text and
+            // shapes stay sharp, unlike an upscaled 1x picture. (A RenderTargetBitmap at a higher DPI drops the content of
+            // a row with a box shadow.)
+            var content = (Control)window.Content!;
+            window.Content = null;
+            window.Content = new LayoutTransformControl { LayoutTransform = new ScaleTransform(scale, scale), Child = content };
+            window.Width *= scale;
+            window.Height *= scale;
+        }
         window.Show();
         try
         {

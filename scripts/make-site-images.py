@@ -1,15 +1,17 @@
-"""Writes the homepage's images (site/) from the README hero and the branding:
+"""Writes the homepage's images (site/) from the README hero, the README shots and the branding:
 
   site/images/hero-{dark,light}-{800,1200,2000}.webp  the hero, its empty top backdrop cropped away
   site/images/hero-{dark,light}.png                   1200 px PNG fallback for browsers without WebP
-  site/images/phone-{dark,light}-{300,594}.webp       just the Android phone from the hero, shown on phones
+  site/images/slide-{android,desktop,web}-{dark,light}-{320,640}.webp
+                                                      the phone carousel: one app per slide (scripts/site/carousel.html)
   site/images/og-card.png                             1200x630 social card (scripts/site/og-card.html)
   site/favicon.ico, site/apple-touch-icon.png         from branding/app-icon-512.png
 
-Run it after the README hero (docs/images/hero-*.png), the logo or the card changes, then look at the files and
-commit them:
+The carousel slides are made from the separate shots in scripts/readme/out/ (git-ignored), so run this right after
+`powershell -File scripts/readme/build.ps1` (which also remakes the hero), or after the logo or the card changes;
+then look at the files and commit them:
   python scripts/make-site-images.py
-Needs Pillow; the social card also needs Node.js and Playwright (`npm ci` in scripts/readme, as for the README).
+Needs Pillow, Node.js and Playwright (`npm ci` in scripts/readme, as for the README).
 """
 import os
 import subprocess
@@ -27,9 +29,9 @@ IMAGES = os.path.join(SITE, "images")
 SCALE = 1.5
 STAGE_RADIUS = 28
 HERO_TOP = 46          # the browser window starts at 70: keep a little of the backdrop above it
-PHONE = (1150, 110, 396, 830, 52)   # left, top, outer width, outer height (372x806 + 12 padding), corner radius
 HERO_WIDTHS = (800, 1200, 2000)
-PHONE_WIDTHS = (300, 594)
+# Slides are 320x480 CSS px (carousel.html) rendered at 2x; the page shows them at most 320 px wide.
+SLIDE_WIDTHS = (320, 640)
 
 
 def px(v):
@@ -58,12 +60,18 @@ def hero(theme):
     for width in HERO_WIDTHS:
         resized(full, width).save(os.path.join(IMAGES, f"hero-{theme}-{width}.webp"), quality=82, method=6)
     resized(full, 1200).save(os.path.join(IMAGES, f"hero-{theme}.png"), optimize=True)
+    return full.size
 
-    left, top, width, height, radius = PHONE
-    phone = rounded(src.crop((px(left), px(top), px(left + width), px(top + height))), px(radius))
-    for w in PHONE_WIDTHS:
-        resized(phone, w).save(os.path.join(IMAGES, f"phone-{theme}-{w}.webp"), quality=82, method=6)
-    return full.size, phone.size
+
+def carousel():
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["node", os.path.join(REPO, "scripts", "site", "make-carousel.mjs"), tmp], check=True)
+        for name in sorted(os.listdir(tmp)):
+            slide = Image.open(os.path.join(tmp, name)).convert("RGBA")
+            if slide.size != (640, 960):
+                sys.exit(f"{name} is {slide.size}, expected 640x960")
+            for width in SLIDE_WIDTHS:
+                resized(slide, width).save(os.path.join(IMAGES, f"{name[:-4]}-{width}.webp"), quality=80, method=6)
 
 
 def icons():
@@ -91,8 +99,9 @@ def og_card():
 def main():
     os.makedirs(IMAGES, exist_ok=True)
     for theme in ("dark", "light"):
-        full, phone = hero(theme)
-    print(f"hero {full[0]}x{full[1]}, phone {phone[0]}x{phone[1]} (at full size)")
+        full = hero(theme)
+    print(f"hero {full[0]}x{full[1]} (at full size)")
+    carousel()
     icons()
     og_card()
     for folder in (IMAGES, SITE):
