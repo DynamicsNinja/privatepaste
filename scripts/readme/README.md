@@ -8,6 +8,7 @@ How the pictures in the project README are made, and how to remake them when the
 |---|---|
 | The web history page, the desktop history popup or the Android history screen looks different | The hero: `docs/images/hero-dark.png`, `hero-light.png` |
 | The demo clips should say something else | Edit `demo.json`, then the hero |
+| The hero changed (either row above), the logo, or `scripts/site/og-card.html` | The homepage images: `python scripts/make-site-images.py` (see [The homepage images](#the-homepage-images)) |
 | The logo, wordmark or its colors | The lockups: `branding/lockup-on-dark.svg`, `lockup-on-light.svg` |
 | App features, platforms, settings or install steps | The text: see [Text to keep in step](#text-to-keep-in-step) |
 
@@ -45,6 +46,21 @@ Then look at both PNGs and commit them. The README shows the dark one in dark mo
 - *HTTP 429 on sign-in*: too many sign-ins within a minute (more than 4 devices in `demo.json`, or a rerun straight after a run). Wait a minute and rerun.
 - *No JDK found*: set `JAVA_HOME` to a JDK 21.
 - *Browser launch fails*: without Edge, run `npx playwright install chromium` in this folder once.
+
+## The homepage images
+
+```
+python scripts/make-site-images.py
+```
+
+The homepage (`site/`) doesn't serve the 2400 px hero PNGs: this script writes web-sized copies to `site/images/` (committed) and the site Dockerfile copies that folder. It needs Pillow, plus Node.js and Playwright from this folder for the social card.
+
+- `hero-{dark,light}-{800,1200,2000}.webp` and a 1200 px PNG fallback: the hero with its empty top backdrop cropped away.
+- `phone-{dark,light}-{300,594}.webp`: just the Android phone, which phones get instead of the wide hero.
+- `og-card.png`: the 1200×630 social card, a screenshot of `scripts/site/og-card.html`.
+- `site/favicon.ico` and `site/apple-touch-icon.png`, from `branding/app-icon-512.png`.
+
+The crop positions are CSS pixels of `hero.html`'s stage; if you move the phone or change the stage size there, update them at the top of the script. Look at the images, then commit them with the hero.
 
 ## The lockups
 
