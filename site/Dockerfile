@@ -12,4 +12,13 @@ COPY branding/logo.svg /usr/share/nginx/html/logo.svg
 COPY docs/images/hero-dark.png docs/images/hero-light.png /usr/share/nginx/html/images/
 COPY src/PrivatePaste.Server/wwwroot/fonts/sora-latin.woff2 src/PrivatePaste.Server/wwwroot/fonts/sora-latin-ext.woff2 /usr/share/nginx/html/fonts/
 
+# Browsers and Cloudflare cache CSS, JS and images for an hour (nginx.conf), so stamp each reference with the
+# file's content hash: a changed file gets a new URL and a deploy shows up at once.
+RUN cd /usr/share/nginx/html \
+ && for f in style.css site.js logo.svg images/hero-dark.png images/hero-light.png; do \
+        v=$(md5sum "$f" | cut -c1-10); \
+        sed -i "s#\"/$f\"#\"/$f?v=$v\"#g" index.html; \
+    done \
+ && grep -c '?v=' index.html
+
 EXPOSE 80
