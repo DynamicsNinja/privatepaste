@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- One slide of the homepage's phone carousel: an app on a transparent 320x480 CSS px stage, framed like the README
+     hero (scripts/readme/hero.html): the web page in a browser window, the desktop popup as a floating window, the
+     Android history in a phone. Rendered at 2x by make-carousel.mjs from the shots in scripts/readme/out/.
+     carousel.html?app=android|desktop|web&t=dark|light -->
+<html><head><meta charset="utf-8"><style>
+:root{--frame:#1D1838;--line:#2E2756;--muted:#9A94BD;--bg:#15122B;--dot:#3a3366;--shadow:rgba(0,0,0,.42)}
+.light{--frame:#FFFFFF;--line:#E1DBF7;--muted:#625C88;--bg:#F6F4FD;--dot:#d9d2f5;--shadow:rgba(40,30,90,.20)}
+html,body{margin:0;background:transparent}
+/* Every frame keeps at least its shadow's reach (20 px blur + 8 px drop) from the edges, so no shadow is cut off. */
+#stage{width:320px;height:480px;display:grid;place-items:center;font-family:system-ui,sans-serif}
+/* Web: the top of the history page (content column only), in a browser window. */
+.win{width:276px;border-radius:12px;overflow:hidden;background:var(--frame);border:1px solid var(--line);
+ box-shadow:0 8px 20px var(--shadow)}
+.bar{height:24px;display:flex;align-items:center;gap:5px;padding:0 10px;border-bottom:1px solid var(--line)}
+.bar i{width:7px;height:7px;border-radius:50%;background:var(--dot);display:block}
+.bar span{margin-left:8px;font-size:8.5px;color:var(--muted);background:var(--bg);padding:2px 9px;border-radius:999px}
+/* web-*.png is 880x860 CSS px at 2x; show CSS x 80..800 and y 0..752 (down to the end of the fifth clip). */
+.crop{width:276px;height:calc(752px * 276 / 720);overflow:hidden;position:relative}
+.crop img{position:absolute;width:calc(880px * 276 / 720);left:calc(-80px * 276 / 720);top:0}
+/* Desktop: the popup at 2x (readme-popup-*.png is 840x960) as a floating window. The shot has its own border and
+   black corners outside its 14 px radius (9.2 px here), so round a hair wider to hide them. */
+.pop{width:276px;border-radius:10px;overflow:hidden;box-shadow:0 8px 20px var(--shadow)}
+.pop img{display:block;width:100%}
+/* Android: the phone from hero.html (372x806 screen, 12 px bezel) scaled to 423 px tall. */
+.phone{width:calc(372px * .51);height:calc(806px * .51);border-radius:27px;padding:6px;background:#0b0a18;
+ box-shadow:0 8px 20px var(--shadow),inset 0 0 0 1px #2a2547}
+.phone img{width:100%;height:100%;object-fit:cover;object-position:top;border-radius:21px;display:block}
+</style></head><body><div id="stage"></div><script>
+const q=new URLSearchParams(location.search), t=q.get('t')||'dark', app=q.get('app')||'android';
+if(t==='light')document.documentElement.classList.add('light');
+const out='../readme/out/';
+stage.innerHTML={
+ web:`<div class="win"><div class="bar"><i></i><i></i><i></i><span>paste.example.com</span></div><div class="crop"><img src="${out}web-${t}.png"></div></div>`,
+ desktop:`<div class="pop"><img src="${out}readme-popup-${t}.png"></div>`,
+ android:`<div class="phone"><img src="${out}readme-history-${t}.png"></div>`,
+}[app];
+</script></body></html>

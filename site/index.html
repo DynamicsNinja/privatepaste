@@ -75,12 +75,12 @@
         </div>
         <p class="trust">Free and open source (MIT) · v__SERVER_VERSION__ · Windows, macOS, Linux, Android and web · no iOS yet</p>
 
-        <!-- Phones get just the Android phone from the hero; wider screens the whole hero. Made by scripts/make-site-images.py. -->
+        <!-- Wider screens get the whole hero; phones a carousel with one app per slide instead. Each picture falls back
+             to a blank data: image outside its own width, so a device downloads only the one it shows. Slides 2 and 3
+             are in <noscript>: site.js puts them in when the carousel is first touched, scrolled or focused, so a
+             visitor who never swipes doesn't download them. Made by scripts/make-site-images.py. -->
         <picture class="shot">
-            <source media="(max-width: 640px) and (prefers-color-scheme: light)" type="image/webp" width="594" height="1245" sizes="240px"
-                    srcset="/images/phone-light-300.webp 300w, /images/phone-light-594.webp 594w">
-            <source media="(max-width: 640px)" type="image/webp" width="594" height="1245" sizes="240px"
-                    srcset="/images/phone-dark-300.webp 300w, /images/phone-dark-594.webp 594w">
+            <source media="(max-width: 640px)" srcset="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
             <source media="(prefers-color-scheme: light)" type="image/webp" width="2400" height="1431" sizes="(max-width: 1040px) calc(100vw - 40px), 1000px"
                     srcset="/images/hero-light-800.webp 800w, /images/hero-light-1200.webp 1200w, /images/hero-light-2000.webp 2000w">
             <source type="image/webp" width="2400" height="1431" sizes="(max-width: 1040px) calc(100vw - 40px), 1000px"
@@ -89,6 +89,52 @@
             <img src="/images/hero-dark.png" width="2400" height="1431" fetchpriority="high" decoding="async"
                  alt="The PrivatePaste web history, the desktop history popup and the Android app showing the same clips, each marked with the person and device it came from">
         </picture>
+        <div class="carousel" role="region" aria-roledescription="carousel" aria-label="The apps">
+            <div class="slides" tabindex="0">
+                <figure class="slide" role="group" aria-roledescription="slide" aria-label="1 of 3: Android">
+                    <picture>
+                        <source media="(max-width: 640px) and (prefers-color-scheme: light)" type="image/webp" width="640" height="960" sizes="(max-width: 400px) 78vw, 320px"
+                                srcset="/images/slide-android-light-320.webp 320w, /images/slide-android-light-640.webp 640w">
+                        <source media="(max-width: 640px)" type="image/webp" width="640" height="960" sizes="(max-width: 400px) 78vw, 320px"
+                                srcset="/images/slide-android-dark-320.webp 320w, /images/slide-android-dark-640.webp 640w">
+                        <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" width="640" height="960" fetchpriority="high" decoding="async"
+                             alt="The PrivatePaste Android app: the shared clip history, each clip marked with the person and device it came from">
+                    </picture>
+                    <figcaption>Android</figcaption>
+                </figure>
+                <figure class="slide" role="group" aria-roledescription="slide" aria-label="2 of 3: Desktop">
+                    <noscript>
+                        <picture>
+                            <source media="(max-width: 640px) and (prefers-color-scheme: light)" type="image/webp" width="640" height="960" sizes="(max-width: 400px) 78vw, 320px"
+                                    srcset="/images/slide-desktop-light-320.webp 320w, /images/slide-desktop-light-640.webp 640w">
+                            <source media="(max-width: 640px)" type="image/webp" width="640" height="960" sizes="(max-width: 400px) 78vw, 320px"
+                                    srcset="/images/slide-desktop-dark-320.webp 320w, /images/slide-desktop-dark-640.webp 640w">
+                            <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" width="640" height="960" decoding="async"
+                                 alt="The PrivatePaste desktop history popup, opened with Ctrl+Shift+V over any app, listing the same clips">
+                        </picture>
+                    </noscript>
+                    <figcaption>Desktop <span>Windows, macOS, Linux</span></figcaption>
+                </figure>
+                <figure class="slide" role="group" aria-roledescription="slide" aria-label="3 of 3: Web">
+                    <noscript>
+                        <picture>
+                            <source media="(max-width: 640px) and (prefers-color-scheme: light)" type="image/webp" width="640" height="960" sizes="(max-width: 400px) 78vw, 320px"
+                                    srcset="/images/slide-web-light-320.webp 320w, /images/slide-web-light-640.webp 640w">
+                            <source media="(max-width: 640px)" type="image/webp" width="640" height="960" sizes="(max-width: 400px) 78vw, 320px"
+                                    srcset="/images/slide-web-dark-320.webp 320w, /images/slide-web-dark-640.webp 640w">
+                            <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" width="640" height="960" decoding="async"
+                                 alt="The PrivatePaste web history in a browser, with copy, pin and delete buttons on each clip">
+                        </picture>
+                    </noscript>
+                    <figcaption>Web</figcaption>
+                </figure>
+            </div>
+            <div class="dots">
+                <button type="button" aria-label="Android" aria-current="true"></button>
+                <button type="button" aria-label="Desktop"></button>
+                <button type="button" aria-label="Web"></button>
+            </div>
+        </div>
     </section>
 
     <section class="wrap" id="features">

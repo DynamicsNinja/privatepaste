@@ -50,6 +50,66 @@ for (const tab of tabs) {
     });
 }
 
+// Phone carousel: the dots show the slide in the middle and scroll to theirs; arrow keys step through the slides
+// while the carousel has the focus. Without JavaScript it is a plain swipeable strip (the dots stay hidden).
+const carousel = document.querySelector(".carousel");
+const strip = carousel.querySelector(".slides");
+const slides = [...strip.querySelectorAll(".slide")];
+const dots = [...carousel.querySelectorAll(".dots button")];
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+let currentSlide = 0;
+// While a dot or arrow key scrolls the strip, the slides passed on the way don't take over the dots.
+let targetSlide = -1;
+
+function markSlide(index) {
+    currentSlide = index;
+    dots.forEach((dot, i) => {
+        if (i === index) dot.setAttribute("aria-current", "true");
+        else dot.removeAttribute("aria-current");
+    });
+}
+
+function showSlide(index) {
+    const slide = slides[index];
+    const left = slide.offsetLeft - (strip.clientWidth - slide.offsetWidth) / 2;
+    if (Math.abs(left - strip.scrollLeft) > 1) targetSlide = index;
+    strip.scrollTo({ left, behavior: reducedMotion.matches ? "auto" : "smooth" });
+    markSlide(index);
+}
+
+// Slides 2 and 3 wait in <noscript> until the carousel is first touched, scrolled or focused, so a visitor who
+// never swipes doesn't download them. (Listened for in the capture phase: a scroll on the strip doesn't bubble.)
+function loadSlides() {
+    for (const hidden of strip.querySelectorAll("noscript")) hidden.outerHTML = hidden.textContent;
+}
+for (const type of ["pointerdown", "touchstart", "scroll", "focusin"]) {
+    carousel.addEventListener(type, loadSlides, { once: true, passive: true, capture: true });
+}
+
+let slideFrame = 0;
+strip.addEventListener("scroll", () => {
+    cancelAnimationFrame(slideFrame);
+    slideFrame = requestAnimationFrame(() => {
+        const middle = strip.scrollLeft + strip.clientWidth / 2;
+        const distance = (slide) => Math.abs(slide.offsetLeft + slide.offsetWidth / 2 - middle);
+        const nearest = slides.reduce((best, slide, i) => (distance(slide) < distance(slides[best]) ? i : best), 0);
+        if (targetSlide >= 0) {
+            if (nearest === targetSlide) targetSlide = -1;
+            return;
+        }
+        if (nearest !== currentSlide) markSlide(nearest);
+    });
+}, { passive: true });
+strip.addEventListener("pointerdown", () => { targetSlide = -1; }, { passive: true });
+
+dots.forEach((dot, i) => dot.addEventListener("click", () => showSlide(i)));
+carousel.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    showSlide(Math.min(slides.length - 1, Math.max(0, currentSlide + step)));
+});
+
 // Copy buttons on every code block, in its header strip so they never cover the code. They copy the text exactly
 // as written, even where a narrow screen wraps the lines.
 for (const pre of document.querySelectorAll("pre[data-copy]")) {
