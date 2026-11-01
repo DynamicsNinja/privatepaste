@@ -1,20 +1,17 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using PrivatePaste.Protocol;
-using PrivatePaste.Server.Clips;
-using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Server.Pages;
 
-public class IndexModel(ClipRepository clips, ClipService service, TimeProvider time) : PageModel
+/// <summary>
+/// The history page is a shell: the browser fetches the clips, decrypts them with the vault key and builds the rows
+/// (wwwroot/js/history.js). The server only holds ciphertext, so it renders no clip data and has no row handlers;
+/// Pin and Delete go through the API.
+/// </summary>
+public class IndexModel : PageModel
 {
-    private const int PageSize = 50;
-    private const int PreviewLength = 200;
-
-    public IReadOnlyList<ClipDto> Items { get; private set; } = [];
-    public string? NextCursor { get; private set; }
-
-    // Accepted and ignored: search is client-side now.
+    /// <summary>The search box's starting text; the browser does the searching.</summary>
     [BindProperty(SupportsGet = true)]
     public string? Q { get; set; }
 
@@ -24,53 +21,15 @@ public class IndexModel(ClipRepository clips, ClipService service, TimeProvider 
 
     public bool PinnedTab => string.Equals(Tab, "pinned", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>The tab query value to carry through links and redirects (null for History, the default).</summary>
-    public string? TabRoute => PinnedTab ? "pinned" : null;
-
-    public async Task<IActionResult> OnGetAsync(string? cursor)
+    public void OnGet()
     {
-        try
-        {
-            var page = PinnedTab
-                ? await clips.ListPinnedAsync(cursor, PageSize)
-                : await clips.ListAsync(cursor, PageSize);
-            Items = page.Items;
-            NextCursor = page.NextCursor;
-        }
-        catch (ArgumentException)
-        {
-            return BadRequest("Invalid cursor.");
-        }
-        return Page();
     }
 
-    public async Task<IActionResult> OnPostDeleteAsync(Guid id)
+    // Razor Pages renders the page for a POST it has no handler for; a POST here (an old page's Pin or Delete form)
+    // gets a 404 instead of a page that looks as if it worked.
+    public override void OnPageHandlerExecuting(PageHandlerExecutingContext context)
     {
-        await service.DeleteAsync(id);
-        return Back();
+        if (!HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
+            context.Result = NotFound();
     }
-
-    public async Task<IActionResult> OnPostPinAsync(Guid id)
-    {
-        await service.SetPinnedAsync(id, true);
-        return Back();
-    }
-
-    public async Task<IActionResult> OnPostUnpinAsync(Guid id)
-    {
-        await service.SetPinnedAsync(id, false);
-        return Back();
-    }
-
-    private IActionResult Back() =>
-        RedirectToPage(new { q = string.IsNullOrWhiteSpace(Q) ? null : Q, tab = TabRoute });
-
-    public static string Preview(string? text) =>
-        text is null ? "" : text.Length <= PreviewLength ? text : text[..PreviewLength] + "...";
-
-    /// <summary>Only http(s) URLs become anchors; the classifier already guarantees this for link clips.</summary>
-    public static bool IsSafeUrl(string? text) =>
-        Uri.TryCreate(text, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
-
-    public string Ago(DateTimeOffset at) => TimeAgo.Format(at, time.GetUtcNow());
 }

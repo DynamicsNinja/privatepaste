@@ -160,6 +160,10 @@ test('passphrase wrap round-trips, rejects a wrong passphrase, and treats NFD an
   await assert.rejects(() => e2e.unwrapWithPassphrase(wrap, 'not the passphrase'), e2e.WrongPassphraseError);
   await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, keyId: '0000000000000000' }, nfc), e2e.WrongPassphraseError);
   await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, kdf: { ...wrap.kdf, memoryKiB: 1 << 30 } }, nfc), /Unsupported/);
+  // The project-wide bounds: weaker settings than the clients write are refused as well as heavier ones.
+  assert.equal(typeof e2e.UnsupportedWrapError, 'function');
+  for (const kdf of [{ memoryKiB: 65535 }, { memoryKiB: 262145 }, { iterations: 2 }, { iterations: 11 }, { parallelism: 0 }, { parallelism: 9 }])
+    await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, kdf: { ...wrap.kdf, ...kdf } }, nfc), e2e.UnsupportedWrapError);
   const b64 = n => Buffer.alloc(n, 1).toString('base64');
   await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, nonce: b64(11) }, nfc), /Unsupported/);
   await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, kdf: { ...wrap.kdf, salt: b64(15) } }, nfc), /Unsupported/);

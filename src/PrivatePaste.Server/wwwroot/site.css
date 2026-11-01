@@ -52,6 +52,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Scripts show and hide whole blocks with the hidden attribute; it wins over any display rule. */
+[hidden] { display: none !important; }
 
 body {
     margin: 0;
@@ -161,7 +163,8 @@ button.copy.done .done-icon { display: inline; }
 }
 .actions { flex: none; display: flex; gap: .3rem; align-items: center; }
 .actions form { margin: 0; }
-.more { display: inline-block; margin-top: 1.25rem; }
+.list-footer { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.25rem; }
+.list-footer:not(:has(button:not([hidden]))) { display: none; }
 .empty { text-align: center; padding: 3rem 1rem; border: 1px dashed var(--line); border-radius: var(--radius); }
 
 .sr-only {
@@ -184,6 +187,15 @@ button.pin-toggle .pin-icon { width: 18px; height: 18px; vertical-align: baselin
 button.pin-toggle[aria-pressed="true"] { color: var(--accent); }
 button.pin-toggle:hover, button.pin-toggle:focus-visible { color: var(--accent); background: var(--accent-soft); }
 button.pin-toggle[aria-pressed="true"] .pin-icon { fill: currentColor; }
+
+/* Unlock and first setup: one centered column, like Sign in. */
+.vault-panel { max-width: 24rem; margin: 8vh auto 0; }
+.vault-panel .hint { margin: -.75rem 0 1rem; }
+.passphrase-form { display: grid; gap: .3rem; }
+.passphrase-form label { font-size: .85rem; color: var(--muted); margin-top: .3rem; }
+.passphrase-form button { justify-self: start; margin-top: .6rem; }
+.passphrase-form .error { margin-bottom: .4rem; }
+form[aria-busy="true"] { cursor: progress; }
 
 /* Settings */
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.1rem; margin-bottom: .8rem; }
@@ -238,7 +250,8 @@ button.danger:hover { border-color: var(--danger); }
     .actions { width: 100%; justify-content: flex-end; }
     .bar .wordmark { display: none; }
     nav { gap: 0; }
-    nav a, nav button.link { padding: .4rem .55rem; }
+    /* Five items (with Lock) must fit a 360px phone next to the logo. */
+    nav a, nav button.link { padding: .4rem .3rem; font-size: .8rem; }
 
     .add-person .add-fields { grid-template-columns: 1fr; }
     /* Actions wrap under the name; the negative margin lines the first label up with the chip. */
