@@ -94,6 +94,11 @@ class SessionManager(
     private val hints: SignInHints = InMemorySignInHints(),
     private val settings: SettingsStore? = null,
     private val vaultKeys: VaultKeyStore? = null,
+    /**
+     * Called whenever local data is wiped (sign-in, sign-out, revoke, a key reset, a first-contact wipe), on [io] with
+     * the lock held: the host clears what this manager doesn't own (plaintext image copies, the clip notification).
+     */
+    private val onLocalDataCleared: () -> Unit = {},
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val cpu: CoroutineDispatcher = Dispatchers.Default,
 ) {
@@ -289,7 +294,7 @@ class SessionManager(
     suspend fun unlock(passphrase: String): UiText? = shown {
         val session = _session.value ?: return@shown null
         val api = api(session) ?: return@shown null
-        val wrap = ask(session) { api.vault() }
+        val wrap = ask(session, R.string.vault_unlock_failed) { api.vault() }
         if (wrap == null) {
             checkVault()   // the vault is gone: set up, or wait for the owner
             return@shown null
@@ -310,22 +315,22 @@ class SessionManager(
         try {
             val session = _session.value ?: return@shown null
             val api = api(session) ?: return@shown null
-            val blob = ask(session) { api.takeHandover(qr.id.toString()) }
+            // Asked first, so a failure here doesn't spend the single-use code.
+            val vault = ask(session, R.string.vault_unlock_failed) { api.vault() }
+            if (vault == null) {
+                checkVault()   // encryption isn't set up (any more): the state moves on
+                return@shown null
+            }
+            // A code made before the owner reset encryption holds the old key: don't take it.
+            if (vault.keyId != qr.keyId) return@shown UiText.Res(R.string.vault_code_expired)
+            val blob = ask(session, R.string.vault_unlock_failed) { api.takeHandover(qr.id.toString()) }
                 ?: return@shown UiText.Res(R.string.vault_code_expired)
             val key = try {
                 Handover.unwrap(qr.otk, blob, qr.keyId)
             } catch (e: GeneralSecurityException) {
                 return@shown UiText.Res(R.string.vault_not_a_code)
             }
-            var owned: VaultKey? = key
-            try {
-                // A code made before the owner reset encryption holds the old key.
-                if (ask(session) { api.vault() }?.keyId != key.keyId) return@shown UiText.Res(R.string.vault_code_expired)
-                owned = null
-                keep(session, key)
-            } finally {
-                owned?.close()
-            }
+            keep(session, key)
         } finally {
             qr.otk.fill(0)
         }
@@ -342,7 +347,10 @@ class SessionManager(
             val key = owned!!
             val wrap = withContext(cpu) { PassphraseWrap.wrap(key, passphrase) }
             try {
-                ask(session, forbidden = R.string.vault_waiting_for_owner) { api.putVault(wrap) }
+                ask(
+                    session, R.string.vault_setup_failed,
+                    forbidden = R.string.vault_waiting_for_owner, conflict = R.string.vault_set_up_elsewhere,
+                ) { api.putVault(wrap) }
             } catch (e: Shown) {
                 checkVault()   // set up meanwhile (409), or not the owner after all (403)
                 throw e
@@ -363,7 +371,7 @@ class SessionManager(
         if (next != repeat) return@shown UiText.Res(R.string.vault_mismatch)
         val session = _session.value ?: return@shown null
         val api = api(session) ?: return@shown null
-        val wrap = ask(session) { api.vault() } ?: return@shown UiText.Res(R.string.vault_change_failed)
+        val wrap = ask(session, R.string.vault_change_failed) { api.vault() } ?: return@shown UiText.Res(R.string.vault_change_failed)
         val key = try {
             unwrap(wrap, current)
         } catch (e: WrongPassphraseException) {
@@ -373,7 +381,7 @@ class SessionManager(
         }
         key.use {
             val rewrapped = withContext(cpu) { PassphraseWrap.wrap(it, next) }
-            ask(session, forbidden = R.string.vault_owner_only) { api.putVault(rewrapped) }
+            ask(session, R.string.vault_change_failed, forbidden = R.string.vault_owner_only) { api.putVault(rewrapped) }
         }
         null
     }
@@ -414,16 +422,22 @@ class SessionManager(
         try {
             return mutex.withLock {
                 if (_session.value !== session) return@withLock null   // signed out meanwhile
-                withContext(io + NonCancellable) {
-                    if (hasLocalData() && cache.keyId != key.keyId) clearLocalData()
-                    vaultKeys?.save(key)
-                    replaceVaultKey(key)
-                    kept = true
-                    claimLocalData(key.keyId)
+                try {
+                    withContext(io + NonCancellable) {
+                        if (hasLocalData() && cache.keyId != key.keyId) clearLocalData()
+                        vaultKeys?.save(key)
+                        replaceVaultKey(key)
+                        kept = true
+                        claimLocalData(key.keyId)
+                    }
+                } finally {
+                    // Once the key is held, the state says so, whatever fails after that.
+                    if (kept) {
+                        _keyWasReset.value = false
+                        _vaultChecked.value = true
+                        _vaultState.value = VaultState.UNLOCKED
+                    }
                 }
-                _keyWasReset.value = false
-                _vaultChecked.value = true
-                _vaultState.value = VaultState.UNLOCKED
                 null
             }
         } catch (e: IOException) {
@@ -502,8 +516,18 @@ class SessionManager(
         e.text
     }
 
-    /** Runs a server call, turning its failures into copy ([Shown]). A 401 propagates: the device was revoked. */
-    private suspend fun <T> ask(session: StoredSession, forbidden: Int? = null, call: suspend () -> T): T = try {
+    /**
+     * Runs a server call, turning its failures into copy ([Shown]): [forbidden] for a 403 and [conflict] for a 409 when
+     * given, else the action's generic [failed] line. The server's own text is never shown. A 401 propagates: the
+     * device was revoked.
+     */
+    private suspend fun <T> ask(
+        session: StoredSession,
+        failed: Int,
+        forbidden: Int? = null,
+        conflict: Int? = null,
+        call: suspend () -> T,
+    ): T = try {
         call()
     } catch (e: UpdateRequiredException) {
         settle(session, VaultState.UPDATE_REQUIRED)
@@ -511,8 +535,12 @@ class SessionManager(
     } catch (e: ApiException.Unauthorized) {
         throw e
     } catch (e: ApiException.Rejected) {
-        val text = if (e.status == FORBIDDEN && forbidden != null) UiText.Res(forbidden) else UiText.Raw(e.message.orEmpty())
-        throw Shown(text)
+        val copy = when {
+            e.status == FORBIDDEN && forbidden != null -> forbidden
+            e.status == CONFLICT && conflict != null -> conflict
+            else -> failed
+        }
+        throw Shown(UiText.Res(copy))
     } catch (e: ApiException) {
         throw Shown(UiText.Res(R.string.signin_unreachable))
     }
@@ -531,6 +559,7 @@ class SessionManager(
         queue.clear()
         vaultKeys?.delete()
         replaceVaultKey(null)
+        onLocalDataCleared()
     }
 
     private companion object {
@@ -538,5 +567,6 @@ class SessionManager(
         const val UNREACHABLE = "Can't reach the server. Check the address and your connection."
         val LOGOUT_TIMEOUT = 10.seconds
         const val FORBIDDEN = 403
+        const val CONFLICT = 409
     }
 }

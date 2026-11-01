@@ -124,6 +124,8 @@ class SettingsViewModelTest {
         )
         vm.addDevice()
         assertEquals(AddDeviceState(loading = false, qrText = "privatepaste:handover?id=x", expiresAt = expires), vm.state.value.addDevice)
+        vm.expireAddDevice()   // the countdown reached 0: the one-time key leaves memory, the screen stays
+        assertEquals(AddDeviceState(loading = false), vm.state.value.addDevice)
 
         fail = true
         vm.addDevice()

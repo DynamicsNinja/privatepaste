@@ -148,22 +148,60 @@ class UnlockViewModelTest {
 
     @Test
     fun anExpiredOrUsedCodeShowsTheCopy() {
+        server.enqueue(json(fakeWrapJson("0123456789abcdef")))
         server.enqueue(MockResponse().setResponseCode(404))
         val vm = vm()
         val id = UUID.randomUUID()
         vm.onScanned(Handover.qrText(id, ByteArray(32) { 7 }, "0123456789abcdef"))
 
         assertEquals(UiText.Res(R.string.vault_code_expired), vm.settled().error)
+        assertEquals("/api/vault", server.takeRequest().path)
         assertEquals("/api/vault/handovers/$id", server.takeRequest().path)
     }
+
+    @Test
+    fun aCodeForAKeyTheServerNoLongerUsesIsNotTaken() {
+        server.enqueue(json(fakeWrapJson("fedcba9876543210")))   // reset since the code was made
+        val vm = vm()
+        vm.onScanned(Handover.qrText(UUID.randomUUID(), ByteArray(32) { 7 }, "0123456789abcdef"))
+
+        assertEquals(UiText.Res(R.string.vault_code_expired), vm.settled().error)
+        assertEquals("only the vault was asked: the single-use code is not spent", 1, server.requestCount)
+    }
+
+    @Test
+    fun aFailedVaultCallDoesNotSpendTheCode() {
+        server.enqueue(MockResponse().setResponseCode(503))
+        val vm = vm()
+        vm.onScanned(Handover.qrText(UUID.randomUUID(), ByteArray(32) { 7 }, "0123456789abcdef"))
+
+        assertEquals(UiText.Res(R.string.signin_unreachable), vm.settled().error)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun aCameraDeniedForGoodPointsToSettings() {
+        val vm = vm()
+        vm.onCameraDenied(permanently = false)
+        assertEquals(UiText.Res(R.string.vault_camera_denied), vm.settled().error)
+        assertEquals(false, vm.settled().cameraBlocked)
+        vm.onCameraDenied(permanently = true)
+        assertEquals(UiText.Res(R.string.vault_camera_blocked), vm.settled().error)
+        assertEquals(true, vm.settled().cameraBlocked)
+    }
+
+    /** Only the key id of a wrap matters before the handover is taken. */
+    private fun fakeWrapJson(keyId: String) =
+        """{"keyId":"$keyId","kdf":{"alg":"argon2id","memoryKiB":65536,"iterations":3,"parallelism":1,""" +
+            """"salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"nonce":"AAAAAAAAAAAAAAAA","wrappedKey":"${java.util.Base64.getEncoder().encodeToString(ByteArray(48))}"}"""
 
     @Test
     fun aScannedHandoverUnlocks() {
         val key = VaultKey.create()
         val (otk, blob) = Handover.wrap(key)
         val id = UUID.randomUUID()
+        server.enqueue(json(fakeWrapJson(key.keyId)))
         server.enqueue(json("""{"blob":"${java.util.Base64.getEncoder().encodeToString(blob)}"}"""))
-        server.enqueue(json(ProtocolJson.json.encodeToString(VaultWrap.serializer(), PassphraseWrap.wrap(key, "correct horse battery staple"))))
         val vm = vm()
 
         vm.onScanned(Handover.qrText(id, otk, key.keyId))

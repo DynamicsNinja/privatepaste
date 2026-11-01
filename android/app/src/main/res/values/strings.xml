@@ -30,8 +30,12 @@
     <string name="vault_set_up">Set up</string>
     <string name="vault_or">or</string>
     <string name="vault_scan">Scan a code</string>
-    <string name="vault_scan_prompt">Point the camera at the code from Add a device</string>
+    <string name="vault_scan_prompt">Point the camera at the code from Add a device.</string>
     <string name="vault_camera_denied">Allow the camera to scan a code.</string>
+    <string name="vault_camera_blocked">Allow the camera in Settings to scan a code.</string>
+    <string name="vault_unlock_failed">Couldn\'t unlock. Try again.</string>
+    <string name="vault_setup_failed">Couldn\'t set up encryption. Try again.</string>
+    <string name="vault_set_up_elsewhere">Encryption was already set up on another device. Enter its passphrase.</string>
     <string name="vault_try_again">Try again</string>
     <string name="vault_sign_out">Sign out</string>
     <string name="vault_show_passphrase">Show passphrase</string>

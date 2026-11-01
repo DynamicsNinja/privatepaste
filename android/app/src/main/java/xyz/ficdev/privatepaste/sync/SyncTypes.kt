@@ -1,7 +1,12 @@
 package xyz.ficdev.privatepaste.sync
 
 /** Connection state of the sync engine, shown in the notification and the history screen. */
-enum class SyncState { SIGNED_OUT, CONNECTING, CONNECTED, OFFLINE }
+enum class SyncState {
+    SIGNED_OUT, CONNECTING, CONNECTED, OFFLINE,
+
+    /** Shown only: the phone waits for its passphrase (or for the owner's setup). The engine never reports it. */
+    LOCKED,
+}
 
 /** Outcome of [SessionManager.signIn]; the sign-in screen maps each to its message. */
 sealed interface SignInResult {

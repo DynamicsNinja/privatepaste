@@ -251,6 +251,25 @@ class HistoryViewModelTest {
     }
 
     @Test
+    fun searchOlderThatFailsPartWayKeepsItsHitsAndOffersARetry() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 30, "Hello"))
+        remote.pages["|"] = ClipPage(listOf(clip("x", 5, "invoice one")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("z", 3, "invoice two")), null)
+        remote.failPages += "|c1"
+        val vm = collecting(vm())
+        vm.onQueryChange("invoice")
+        vm.searchOlder()
+        advanceUntilIdle()
+        assertEquals(listOf("x"), vm.ids())
+        assertTrue("stopped part-way: offer it again", vm.state.value.canSearchOlder)
+
+        vm.searchOlder()
+        advanceUntilIdle()
+        assertEquals(listOf("x", "z"), vm.ids())
+        assertEquals(false, vm.state.value.canSearchOlder)
+    }
+
+    @Test
     fun searchOlderThatFindsNothingStopsOffering() = runTest(dispatcher) {
         cache.value = listOf(clip("a", 30, "Hello"))
         remote.pages["|"] = ClipPage(listOf(clip("y", 4, "nope")), null)
@@ -502,10 +521,14 @@ class HistoryViewModelTest {
 
         val limits = mutableListOf<Int>()
 
+        /** Page keys that fail once. */
+        val failPages = mutableSetOf<String>()
+
         override suspend fun clips(cursor: String?, limit: Int, pinned: Boolean): ClipPage {
             val key = (if (pinned) "P:" else "") + "|${cursor.orEmpty()}"
             events += "clips:$key"
             limits += limit
+            if (failPages.remove(key)) throw ApiException.Transient("down")
             gates[key]?.await()
             return pages[key] ?: ClipPage(emptyList(), null)
         }

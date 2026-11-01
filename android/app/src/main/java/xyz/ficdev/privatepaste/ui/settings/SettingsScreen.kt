@@ -78,7 +78,7 @@ fun SettingsScreen(
     }
     val context = LocalContext.current
     state.addDevice?.let { addDevice ->
-        AddDeviceScreen(addDevice, onNewCode = vm::addDevice, onBack = vm::closeAddDevice)
+        AddDeviceScreen(addDevice, onNewCode = vm::addDevice, onExpired = vm::expireAddDevice, onBack = vm::closeAddDevice)
         return
     }
     BackHandler(onBack = onBack)

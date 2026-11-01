@@ -139,6 +139,11 @@ class SettingsViewModel(
         }
     }
 
+    /** The code's 10 minutes are up: forget its text (it holds the one-time key) and keep the screen open. */
+    fun expireAddDevice() = local.update { s ->
+        s.copy(addDevice = s.addDevice?.copy(qrText = null, expiresAt = null))
+    }
+
     fun closeAddDevice() {
         handoverJob?.cancel()
         local.update { it.copy(addDevice = null) }

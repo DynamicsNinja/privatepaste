@@ -1,7 +1,14 @@
 package xyz.ficdev.privatepaste.ui.unlock
 
 import android.Manifest
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -54,6 +61,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.journeyapps.barcodescanner.ScanContract
@@ -81,7 +89,15 @@ fun UnlockScreen(vm: UnlockViewModel) {
     }
     // The camera permission is asked for only here, when Scan is tapped.
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) scanner.launch(options()) else vm.onCameraDenied()
+        if (granted) {
+            scanner.launch(options())
+        } else {
+            // Right after a refusal, no rationale means the system won't ask again ("Don't allow" for good).
+            val activity = context.findActivity()
+            val permanently = activity != null &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
+            vm.onCameraDenied(permanently)
+        }
     }
     UnlockContent(
         state = state,
@@ -98,7 +114,24 @@ fun UnlockScreen(vm: UnlockViewModel) {
         },
         onRetry = vm::retry,
         onSignOut = vm::signOut,
+        onOpenAppSettings = {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+            try {
+                context.startActivity(intent)
+            } catch (_: ActivityNotFoundException) {
+                // No such screen on this build: the copy still says where to go.
+            }
+        },
     )
+}
+
+private fun Context.findActivity(): Activity? {
+    var c: Context? = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
 }
 
 @Composable
@@ -111,6 +144,7 @@ fun UnlockContent(
     onScan: () -> Unit,
     onRetry: () -> Unit,
     onSignOut: () -> Unit,
+    onOpenAppSettings: () -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(modifier = Modifier.fillMaxSize(), color = colors.background) {
@@ -133,7 +167,7 @@ fun UnlockContent(
                 Spacer(Modifier.height(10.dp))
 
                 when (state.vault) {
-                    VaultState.LOCKED -> Unlock(state, onPassphraseChange, onUnlock, onScan)
+                    VaultState.LOCKED -> Unlock(state, onPassphraseChange, onUnlock, onScan, onOpenAppSettings)
                     VaultState.NEEDS_OWNER_SETUP -> SetUp(state, onPassphraseChange, onRepeatChange, onSetUp)
                     VaultState.SERVER_TOO_OLD -> Blocked(R.string.vault_server_too_old, onRetry)
                     VaultState.UPDATE_REQUIRED -> Blocked(R.string.vault_update_required, onRetry)
@@ -151,7 +185,13 @@ fun UnlockContent(
 }
 
 @Composable
-private fun Unlock(state: UnlockState, onPassphraseChange: (String) -> Unit, onUnlock: () -> Unit, onScan: () -> Unit) {
+private fun Unlock(
+    state: UnlockState,
+    onPassphraseChange: (String) -> Unit,
+    onUnlock: () -> Unit,
+    onScan: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+) {
     Title(R.string.vault_unlock_title)
     if (state.keyWasReset) Message(stringResource(R.string.vault_was_reset))
     PassphraseField(
@@ -176,6 +216,11 @@ private fun Unlock(state: UnlockState, onPassphraseChange: (String) -> Unit, onU
         Icon(painterResource(R.drawable.ic_scan), contentDescription = null, modifier = Modifier.size(20.dp))
         Spacer(Modifier.size(10.dp))
         Text(stringResource(R.string.vault_scan))
+    }
+    if (state.cameraBlocked) {
+        TextButton(onClick = onOpenAppSettings, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text(stringResource(R.string.settings_open_settings))
+        }
     }
 }
 

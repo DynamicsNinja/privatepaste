@@ -22,6 +22,8 @@ data class UnlockState(
     val repeat: String = "",
     val busy: Boolean = false,
     val error: UiText? = null,
+    /** The camera permission was denied for good: only the app's settings page can grant it now. */
+    val cameraBlocked: Boolean = false,
 ) {
     val canUnlock: Boolean get() = !busy && passphrase.isNotEmpty()
     val canSetUp: Boolean get() = !busy && passphrase.isNotEmpty() && repeat.isNotEmpty()
@@ -52,7 +54,7 @@ class UnlockViewModel(
         UnlockState(vault = vaultState.value, keyWasReset = keyWasReset.value),
     )
 
-    fun onPassphraseChange(value: String) = form.update { it.copy(passphrase = value, error = null) }
+    fun onPassphraseChange(value: String) = form.update { it.copy(passphrase = value, error = null, cameraBlocked = false) }
 
     fun onRepeatChange(value: String) = form.update { it.copy(repeat = value, error = null) }
 
@@ -74,7 +76,13 @@ class UnlockViewModel(
         run { unlockWithQr(text) }
     }
 
-    fun onCameraDenied() = form.update { it.copy(error = UiText.Res(R.string.vault_camera_denied)) }
+    /** [permanently]: the system won't ask again, so the copy points to Settings. */
+    fun onCameraDenied(permanently: Boolean) = form.update {
+        it.copy(
+            error = UiText.Res(if (permanently) R.string.vault_camera_blocked else R.string.vault_camera_denied),
+            cameraBlocked = permanently,
+        )
+    }
 
     fun retry() {
         form.update { it.copy(error = null) }
@@ -94,7 +102,7 @@ class UnlockViewModel(
     }
 
     private fun run(action: suspend () -> UiText?) {
-        form.update { it.copy(busy = true, error = null) }
+        form.update { it.copy(busy = true, error = null, cameraBlocked = false) }
         viewModelScope.launch {
             val error = try {
                 action()

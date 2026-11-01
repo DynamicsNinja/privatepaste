@@ -85,7 +85,11 @@ class SessionManagerTest {
         apiFactory = { baseUrl, token -> PrivatePasteApi(baseUrl, token, client) },
         hints = hints,
         vaultKeys = vault,
+        onLocalDataCleared = { cleared++ },
     )
+
+    /** How often the manager told the host to clear its own copies. */
+    private var cleared = 0
 
     private fun json(body: String, code: Int = 200) =
         MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(body)
@@ -374,6 +378,47 @@ class SessionManagerTest {
         assertTrue(m.vaultChecked.value)
         assertEquals("the empty cache now belongs to the server's key", "0123456789abcdef", cache.keyId)
         assertEquals(emptyList<String>(), unexpected)
+        assertEquals("the host clears its plaintext copies with it", 1, cleared)
+    }
+
+    @Test
+    fun setUpOnAServerSetUpMeanwhileSaysSoNeverTheServersText(): Unit = runBlocking {
+        val m = signedIn()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl?.encodedPath) {
+                "/api/server-info" -> json("""{"protocol":2,"kinds":["text"],"limits":{"textKb":1024,"imageMb":20}}""")
+                "/api/me" -> json("""{"name":"Ana","isOwner":true}""")
+                "/api/vault" -> if (request.method == "PUT") {
+                    json("""{"title":"Conflict","detail":"internal: row 7 locked"}""", code = 409)
+                } else {
+                    json(ProtocolJson.json.encodeToString(VaultWrap.serializer(), wrapFor("0123456789abcdef")))
+                }
+                else -> MockResponse().setResponseCode(500)
+            }
+        }
+        assertEquals(
+            UiText.Res(R.string.vault_set_up_elsewhere),
+            m.setUp("a long enough passphrase", "a long enough passphrase"),
+        )
+        assertEquals("re-checked: there is a vault now", VaultState.LOCKED, m.vaultState.value)
+        assertNull(m.vaultKey.value)
+    }
+
+    @Test
+    fun anotherRefusalShowsTheActionsGenericLine(): Unit = runBlocking {
+        val key = VaultKey.create()
+        val wrap = PassphraseWrap.wrap(key, "the old passphrase")
+        val m = signedIn()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.method) {
+                "GET" -> json(ProtocolJson.json.encodeToString(VaultWrap.serializer(), wrap))
+                else -> json("""{"title":"Bad request","detail":"kdf.salt: stack trace here"}""", code = 400)
+            }
+        }
+        assertEquals(
+            UiText.Res(R.string.vault_change_failed),
+            m.changePassphrase("the old passphrase", "the new passphrase", "the new passphrase"),
+        )
     }
 
     @Test

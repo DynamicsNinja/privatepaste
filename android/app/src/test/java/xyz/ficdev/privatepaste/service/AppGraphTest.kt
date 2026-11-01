@@ -114,4 +114,29 @@ class AppGraphTest {
         awaitUntil("signed out") { app.uiDeps.session.value == null }
         assertEquals("Pixel Test", app.uiDeps.lastDeviceName)
     }
+
+    @Test
+    fun aFirstContactWipeAlsoClearsThePlaintextCopies() {
+        val checkMayAnswer = java.util.concurrent.CountDownLatch(1)
+        server.other = { req ->
+            if (req.path == "/api/server-info") checkMayAnswer.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            null
+        }
+        val result = runBlocking { app.uiDeps.signIn(server.url, "owner", "dev", "Pixel Test") }
+        assertEquals(xyz.ficdev.privatepaste.sync.SignInResult.Ok, result)
+        // History from another key (or from before encryption): a cached clip, its plaintext PNG, its preview.
+        app.graph.cache.upsert(clip, fromSync = true)
+        app.graph.cache.save()
+        app.graph.imageFiles.store("c1", byteArrayOf(1, 2, 3))
+        Notifications.postClip(app, clip)
+        assertNotNull(app.graph.imageFiles.find("c1"))
+
+        checkMayAnswer.countDown()
+        awaitUntil("checked") { app.graph.sessions.vaultChecked.value }
+
+        assertTrue(app.graph.cache.items.value.isEmpty())
+        assertNull("no plaintext PNG of the wiped history is left", app.graph.imageFiles.find("c1"))
+        assertTrue(java.io.File(app.cacheDir, "clipboard").listFiles().orEmpty().isEmpty())
+        assertNull("no clip preview either", shadowOf(nm).getNotification(Notifications.ID_CLIP))
+    }
 }

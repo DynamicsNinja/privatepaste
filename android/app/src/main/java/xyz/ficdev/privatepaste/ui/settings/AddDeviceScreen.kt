@@ -59,17 +59,28 @@ import java.util.Locale
 fun AddDeviceScreen(
     state: AddDeviceState,
     onNewCode: () -> Unit,
+    onExpired: () -> Unit,
     onBack: () -> Unit,
     clock: Clock = Clock.systemUTC(),
 ) {
     BackHandler(onBack = onBack)
-    val now by produceState(clock.instant(), state.expiresAt) {
+    val expiresAt = state.expiresAt?.takeIf { state.qrText != null }
+    // Ticks only while a code is shown (not while loading or after a failure); at 0 the code leaves the state.
+    val left by produceState<Duration?>(null, expiresAt) {
+        if (expiresAt == null) {
+            value = null
+            return@produceState
+        }
         while (true) {
-            value = clock.instant()
+            val remaining = Duration.between(clock.instant(), expiresAt).coerceAtLeast(Duration.ZERO)
+            value = remaining
+            if (remaining.isZero) {
+                onExpired()
+                return@produceState
+            }
             delay(1_000)
         }
     }
-    val left = state.expiresAt?.let { Duration.between(now, it).coerceAtLeast(Duration.ZERO) }
     AddDeviceContent(state, left, onNewCode, onBack)
 }
 

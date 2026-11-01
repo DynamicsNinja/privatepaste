@@ -125,6 +125,8 @@ class HistoryViewModel(
         val items: List<ClipDto> = emptyList(),
         val searching: Boolean = false,
         val done: Boolean = false,
+        /** The last attempt stopped early: offer the button again, even with some hits. */
+        val failed: Boolean = false,
     )
 
     /** This phone's own changes, shown before the sync broadcast (or a search page) catches up. */
@@ -163,7 +165,8 @@ class HistoryViewModel(
                 liveClipId = newest?.takeIf { it.id !in changes.deleted && it.hash == lastAppliedHash() }?.id,
                 syncState = sync,
                 loadingMore = page.loading,
-                canSearchOlder = needle.isNotEmpty() && items.isEmpty() && search?.searching != true && search?.done != true,
+                canSearchOlder = needle.isNotEmpty() && search?.searching != true && search?.done != true &&
+                    (items.isEmpty() || search?.failed == true),
                 searchingOlder = search?.searching == true,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryState(syncState = syncState.value))
@@ -184,7 +187,7 @@ class HistoryViewModel(
         }
         val tabPinned = remotePages.value.pinned
         olderJob?.cancel()
-        older.value = Older(needle, tabPinned, searching = true)
+        older.update { if (it.query == needle && it.pinned == tabPinned) it.copy(items = emptyList(), searching = true, failed = false) else Older(needle, tabPinned, searching = true) }
         fun Older.mine() = this.query == needle && this.pinned == tabPinned
         olderJob = viewModelScope.launch {
             try {
@@ -201,7 +204,7 @@ class HistoryViewModel(
                 throw e
             } catch (e: Exception) {
                 // Offline or a server error: what was found stays, and the button comes back to retry.
-                older.update { if (it.mine()) it.copy(searching = false) else it }
+                older.update { if (it.mine()) it.copy(searching = false, failed = true) else it }
                 if (e is ApiException.Unauthorized) onUnauthorized() else _messages.trySend(UiText.Res(R.string.signin_unreachable))
             }
         }
@@ -346,7 +349,7 @@ class HistoryViewModel(
     /** On-device search: the clip's text contains [needle], ignoring case. Images and unknown clips have no text. */
     private fun ClipDto.matches(needle: String) = needle.isEmpty() || text?.contains(needle, ignoreCase = true) == true
 
-    private fun isOnline() = syncState.value != SyncState.OFFLINE && syncState.value != SyncState.SIGNED_OUT
+    private fun isOnline() = syncState.value == SyncState.CONNECTED || syncState.value == SyncState.CONNECTING
 
     private suspend fun fetchImage(api: ClipRemote, id: String): ByteArray? = try {
         withContext(io) { api.image(id) }

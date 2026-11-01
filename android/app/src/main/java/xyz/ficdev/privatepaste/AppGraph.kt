@@ -103,7 +103,14 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         hints = PrefsSignInHints(app),
         settings = settings,
         vaultKeys = VaultKeyStore(CryptoFile(File(dir, "vault.bin"), keys, KeyAliases.VAULT)),
+        onLocalDataCleared = ::clearPlaintextCopies,
     )
+
+    /** Every wipe of local data takes these too: plaintext PNG copies of clips, and the clip preview notification. */
+    private fun clearPlaintextCopies() {
+        imageFiles.clear()
+        Notifications.cancelClip(app)
+    }
 
     private val lifecycle = Mutex()
 
@@ -211,11 +218,17 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
          */
         private val attempted = MutableStateFlow(false)
 
-        val displayState: Flow<SyncState> = combine(engine.state, attempted) { s, tried -> display(s, tried) }
+        val displayState: Flow<SyncState> =
+            combine(engine.state, attempted, sessions.vaultState) { s, tried, vault -> display(s, tried, vault) }
 
-        fun displayStateNow(): SyncState = display(engine.state.value, attempted.value)
+        fun displayStateNow(): SyncState = display(engine.state.value, attempted.value, sessions.vaultState.value)
 
-        private fun display(s: SyncState, tried: Boolean) = if (s == SyncState.OFFLINE && !tried) SyncState.CONNECTING else s
+        // Waiting for the passphrase or the owner: nothing connects until someone opens the app.
+        private fun display(s: SyncState, tried: Boolean, vault: VaultState) = when {
+            vault == VaultState.LOCKED || vault == VaultState.WAITING_FOR_OWNER -> SyncState.LOCKED
+            s == SyncState.OFFLINE && !tried -> SyncState.CONNECTING
+            else -> s
+        }
 
         /** Wakes [checkVaultLoop]; declared before [init], which starts the loop. */
         private val vaultWake = Channel<Unit>(Channel.CONFLATED)
@@ -338,9 +351,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             if (_current.value !== g || g.ending) return@withLock
             if (sessions.vaultKey.value?.keyId != keyId) return@withLock
             g.engine.stop()
-            sessions.onKeyReset()
-            withContext(Dispatchers.IO) { imageFiles.clear() }   // plaintext copies of the wiped history
-            Notifications.cancelClip(app)
+            sessions.onKeyReset()   // also clears the plaintext copies (clearPlaintextCopies)
             Log.i(TAG, "Encryption was reset; waiting for the new key")
         }
     }

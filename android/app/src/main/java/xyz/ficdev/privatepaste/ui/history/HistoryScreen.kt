@@ -250,10 +250,23 @@ fun HistoryContent(
                             }
                         }
                     }
-                    if (state.loadingMore) {
+                    if (state.loadingMore || state.searchingOlder) {
                         item(key = "loading") {
                             Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            }
+                        }
+                    } else if (state.canSearchOlder) {
+                        // A search of the older clips stopped part-way: what it found shows above, and this retries.
+                        item(key = "search-older") {
+                            Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                                OutlinedButton(
+                                    onClick = onSearchOlder,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text(stringResource(R.string.history_search_older))
+                                }
                             }
                         }
                     }
@@ -350,7 +363,7 @@ private fun StatusChip(sync: SyncState) {
     val (label, dot) = when (sync) {
         SyncState.CONNECTED -> R.string.status_connected to Live
         SyncState.CONNECTING -> R.string.status_connecting to colors.onSurfaceVariant
-        SyncState.OFFLINE, SyncState.SIGNED_OUT -> R.string.status_offline to colors.outline
+        SyncState.OFFLINE, SyncState.SIGNED_OUT, SyncState.LOCKED -> R.string.status_offline to colors.outline
     }
     Row(
         modifier = Modifier
