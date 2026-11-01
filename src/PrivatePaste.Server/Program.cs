@@ -146,6 +146,11 @@ app.Use((context, next) =>
 {
     // No page of this app is meant to be framed (clickjacking). Set before antiforgery, which would add SAMEORIGIN.
     context.Response.Headers.XFrameOptions = "DENY";
+    // The web UI decrypts clips in the browser, so injected script must not run. 'wasm-unsafe-eval' is for the
+    // vendored Argon2 (hash-wasm); inline styles are blocked too, so styling lives in site.css.
+    context.Response.Headers.ContentSecurityPolicy =
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' blob: data:; " +
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
     return next(context);
 });
 app.UseForwardedHeaders();
