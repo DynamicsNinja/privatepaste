@@ -1,15 +1,17 @@
 using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Cache;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Client.Core.Sync;
 
 /// <summary>
-/// Fetches thumbnails of image clips in the background and stores them in the cache. Best effort: failures are swallowed
-/// and the clip simply shows without a thumbnail. At most <see cref="MaxConcurrent"/> fetches run at once; each clip is
+/// Fetches the sealed thumbnails of image clips in the background, opens them with the current codec and stores them in
+/// the cache. Best effort: failures (offline, no codec, a closed key, a thumbnail that doesn't open) are swallowed and
+/// the clip simply shows without a thumbnail. At most <see cref="MaxConcurrent"/> fetches run at once; each clip is
 /// fetched at most once at a time; nothing here runs on (or waits for) the coordinator's gate.
 /// </summary>
-public sealed class ThumbnailFetcher(PrivatePasteApi api, HistoryCache cache)
+public sealed class ThumbnailFetcher(PrivatePasteApi api, HistoryCache cache, Func<ClipCodec?> codec)
 {
     public const int MaxConcurrent = 2;
 
@@ -23,7 +25,7 @@ public sealed class ThumbnailFetcher(PrivatePasteApi api, HistoryCache cache)
     /// <summary>Starts a fetch for an image clip the cache holds without a thumbnail; anything else is ignored.</summary>
     public void Request(ClipDto clip)
     {
-        if (clip.Kind != ClipKind.Image) return;
+        if (clip.Kind != ClipKind.Image || !clip.HasThumb) return;
         if (!cache.Items.Any(i => i.Clip.Id == clip.Id && i.ThumbnailPng is null)) return;
         lock (_gate)
             if (!_pending.Add(clip.Id)) return;
@@ -37,12 +39,13 @@ public sealed class ThumbnailFetcher(PrivatePasteApi api, HistoryCache cache)
             await _slots.WaitAsync().ConfigureAwait(false);
             try
             {
-                var png = await api.GetThumbnailAsync(clip.Id).ConfigureAwait(false);
+                if (codec() is not { } c) return;
+                var png = c.DecodeThumb(await api.GetThumbAsync(clip.Id).ConfigureAwait(false));
                 if (png.Length > 0 && cache.SetThumbnail(clip.Id, clip.Hash, png)) Stored?.Invoke(this, EventArgs.Empty);
             }
             finally { _slots.Release(); }
         }
-        catch (Exception) { }   // offline, deleted meanwhile, signed out (disposed client), a throwing handler: no thumbnail
+        catch (Exception) { }   // offline, deleted meanwhile, signed out (disposed client or key), a throwing handler: no thumbnail
         finally
         {
             lock (_gate) _pending.Remove(clip.Id);

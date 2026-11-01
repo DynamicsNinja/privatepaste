@@ -163,11 +163,40 @@ public class HistoryCacheTests : IDisposable
     {
         var c = new HistoryCache(FilePath, NewKey());
         c.Upsert(Clip(1, "a", 1));
+        c.KeyId = "0123456789abcdef";
         c.Save();
         c.Clear();
         Assert.False(File.Exists(FilePath));
         Assert.Empty(c.Items);
         Assert.Equal(0, c.HighestSeq);
+        Assert.Null(c.KeyId);
+    }
+
+    [Fact]
+    public void Unknown_clips_survive_save_and_load()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Clip(1, null, 1, kind: ClipKind.Unknown) with { Payload = "c2VhbGVk", KeyId = "0123456789abcdef" });
+        c.Upsert(Clip(2, "a", 2));
+        c.Save();
+        var loaded = HistoryCache.Load(FilePath, key).Items;
+        Assert.Equal([ClipKind.Text, ClipKind.Unknown], loaded.Select(i => i.Clip.Kind));
+        Assert.Equal("c2VhbGVk", loaded[1].Clip.Payload);   // kept, so a newer app could still open it
+    }
+
+    [Fact]
+    public void Key_id_survives_save_and_load_and_is_null_for_an_older_cache()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Clip(1, "a", 1));
+        c.Save();
+        Assert.Null(HistoryCache.Load(FilePath, key).KeyId);   // written without one, like a cache from before encryption
+
+        c.KeyId = "0123456789abcdef";
+        c.Save();
+        Assert.Equal("0123456789abcdef", HistoryCache.Load(FilePath, key).KeyId);
     }
 
     [Fact]

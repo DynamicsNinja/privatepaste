@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using PrivatePaste.Client.Core.Api;
+using PrivatePaste.Client.Core.Platform;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Protocol;
 using PrivatePaste.Tests.Images;
 
@@ -15,6 +17,8 @@ public class ApiClientTests
         api.Token = r.Token;
         return api;
     }
+
+    private static async Task<ClipCodec> CodecAsync(PrivatePasteFactory server) => new(await server.VaultKeyAsync());
 
     private sealed class Capture : HttpMessageHandler
     {
@@ -38,26 +42,28 @@ public class ApiClientTests
         Assert.Contains("\"username\":\"Ana\"", capture.Body);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Login_then_upload_and_list()
     {
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);
-        var clip = await api.UploadTextAsync("hello", null, false);
+        var codec = await CodecAsync(server);
+        var clip = await api.UploadTextAsync(codec, "hello");
         Assert.Equal("hello", clip.Text);
-        var page = await api.ListAsync(null, null);
+        var page = await api.ListOpenedAsync(codec);
         Assert.Equal("hello", page.Items[0].Text);
         Assert.Equal("PC-test", page.Items[0].SourceDeviceName);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Pin_unpin_and_list_pinned()
     {
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);
-        var a = await api.UploadTextAsync("alpha", null, false);
-        var b = await api.UploadTextAsync("beta", null, false);
-        await api.UploadTextAsync("gamma", null, false);
+        var codec = await CodecAsync(server);
+        var a = await api.UploadTextAsync(codec, "alpha");
+        var b = await api.UploadTextAsync(codec, "beta");
+        await api.UploadTextAsync(codec, "gamma");
 
         var pinnedA = await api.PinAsync(a.Id, true);
         Assert.NotNull(pinnedA.PinnedAt);
@@ -65,15 +71,15 @@ public class ApiClientTests
         server.Clock.Advance(TimeSpan.FromMinutes(1));
         await api.PinAsync(b.Id, true);
 
-        var page = await api.ListPinnedAsync(null, null);
+        var page = await api.ListPinnedOpenedAsync(codec);
         Assert.Equal(["beta", "alpha"], page.Items.Select(c => c.Text));
-        var first = await api.ListPinnedAsync(null, null, limit: 1);
+        var first = await api.ListPinnedOpenedAsync(codec, limit: 1);
         Assert.Equal(["beta"], first.Items.Select(c => c.Text));
-        Assert.Equal(["alpha"], (await api.ListPinnedAsync(null, first.NextCursor, limit: 1)).Items.Select(c => c.Text));
+        Assert.Equal(["alpha"], (await api.ListPinnedOpenedAsync(codec, first.NextCursor, limit: 1)).Items.Select(c => c.Text));
 
         var unpinned = await api.PinAsync(b.Id, false);
         Assert.Null(unpinned.PinnedAt);
-        Assert.Equal(["alpha"], (await api.ListPinnedAsync(null, null)).Items.Select(c => c.Text));
+        Assert.Equal(["alpha"], (await api.ListPinnedOpenedAsync(codec)).Items.Select(c => c.Text));
         Assert.Equal(HttpStatusCode.NotFound,
             (await Assert.ThrowsAsync<ApiException>(() => api.PinAsync(Guid.NewGuid(), true))).Status);
     }
@@ -95,52 +101,62 @@ public class ApiClientTests
         var aId = (await b.Client.GetFromJsonAsync<List<DeviceDto>>("/api/devices", ProtocolJson.Options))!
             .Single(d => d.Name == "A").Id;
         Assert.Equal(HttpStatusCode.NoContent, (await b.Client.DeleteAsync($"/api/devices/{aId}")).StatusCode);
-        await Assert.ThrowsAsync<UnauthorizedApiException>(() => a.ListAsync(null, null));
+        await Assert.ThrowsAsync<UnauthorizedApiException>(() => a.ListAsync(null));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Image_upload_roundtrip()
     {
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);
-        var clip = await api.UploadImageAsync(TestImages.MakePng(10, 10).ToArray(), null, false);
+        var codec = await CodecAsync(server);
+        var clip = await api.UploadImageAsync(codec, TestImages.MakePng(10, 10).ToArray());
         Assert.Equal(ClipKind.Image, clip.Kind);
         Assert.Equal(10, clip.Width);
-        var thumb = await api.GetThumbnailAsync(clip.Id);
-        Assert.True(TestImages.IsPng(thumb));
-        Assert.True(TestImages.IsPng(await api.GetImageAsync(clip.Id)));
+        Assert.True(clip.HasThumb);
+        Assert.Equal(1, clip.BlobCount);
+        var thumb = await api.GetThumbAsync(clip.Id);
+        Assert.False(TestImages.IsPng(thumb));   // sealed
+        Assert.True(TestImages.IsPng(codec.DecodeThumb(thumb)));
+        Assert.True(TestImages.IsPng(await codec.DecodeBlobAsync(await api.GetBlobAsync(clip.Id, 0), default)));
+        Assert.Equal(HttpStatusCode.NotFound, (await Assert.ThrowsAsync<ApiException>(() => api.GetBlobAsync(clip.Id, 1))).Status);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Backfill_keeps_copied_at()
     {
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);
+        var codec = await CodecAsync(server);
         var t = server.Clock.GetUtcNow();
         var earlier = t - TimeSpan.FromHours(1);
-        var text = await api.UploadTextAsync("old", earlier, true);
+        var text = await api.UploadTextAsync(codec, "old", earlier, true);
         Assert.Equal(earlier, text.LastCopiedAt);
-        var img = await api.UploadImageAsync(TestImages.MakePng(4, 4).ToArray(), earlier, true);
+        var img = await api.UploadImageAsync(codec, TestImages.MakePng(4, 4).ToArray(), earlier, true);
         Assert.Equal(earlier, img.LastCopiedAt);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Too_large_text_is_api_exception_413()
     {
         using var server = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_TEXT_KB"] = "1" });
         var api = await LoggedInAsync(server);
-        var ex = await Assert.ThrowsAsync<ApiException>(() => api.UploadTextAsync(new string('x', 2000), null, false));
+        var codec = await CodecAsync(server);
+        // Sealed against roomier limits than the server's, so the server is the one to refuse it.
+        var upload = await codec.EncodeAsync(new ClipboardContent.Text(new string('x', 2000)), null, false, new ServerLimitsDto(1024, 20), default);
+        var ex = await Assert.ThrowsAsync<ApiException>(() => api.UploadClipAsync(upload));
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, ex.Status);
         Assert.IsNotType<UnauthorizedApiException>(ex);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Sync_returns_changes_after_seq()
     {
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);
-        var first = await api.UploadTextAsync("one", null, false);
-        var second = await api.UploadTextAsync("two", null, false);
+        var codec = await CodecAsync(server);
+        var first = await api.UploadTextAsync(codec, "one");
+        var second = await api.UploadTextAsync(codec, "two");
         var sync = await api.SyncAsync(first.Seq);
         Assert.Equal(second.Id, Assert.Single(sync.Clips).Id);
         Assert.Equal(second.Seq, sync.LatestSeq);
@@ -149,20 +165,22 @@ public class ApiClientTests
         Assert.Contains(first.Id, after.DeletedIds);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Restore_bumps_and_delete_removes()
     {
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);
-        var a = await api.UploadTextAsync("a", null, false);
+        var codec = await CodecAsync(server);
+        var a = await api.UploadTextAsync(codec, "a");
         server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await api.UploadTextAsync("b", null, false);
+        await api.UploadTextAsync(codec, "b");
         server.Clock.Advance(TimeSpan.FromMinutes(1));
         var restored = await api.RestoreAsync(a.Id);
         Assert.True(restored.Seq > a.Seq);
-        Assert.Equal("a", (await api.ListAsync(null, null)).Items[0].Text);
+        Assert.Equal("a", codec.Decode(restored).Text);
+        Assert.Equal("a", (await api.ListOpenedAsync(codec)).Items[0].Text);
         await api.DeleteAsync(a.Id);
-        Assert.Equal("b", Assert.Single((await api.ListAsync(null, null)).Items).Text);
+        Assert.Equal("b", Assert.Single((await api.ListOpenedAsync(codec)).Items).Text);
         var ex = await Assert.ThrowsAsync<ApiException>(() => api.DeleteAsync(a.Id));
         Assert.Equal(HttpStatusCode.NotFound, ex.Status);
     }
@@ -173,7 +191,7 @@ public class ApiClientTests
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);
         await api.LogoutAsync();
-        await Assert.ThrowsAsync<UnauthorizedApiException>(() => api.ListAsync(null, null));
+        await Assert.ThrowsAsync<UnauthorizedApiException>(() => api.ListAsync(null));
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> f) : HttpMessageHandler
@@ -195,7 +213,7 @@ public class ApiClientTests
     public async Task Network_failure_is_http_request_exception()
     {
         var api = Stub((_, _) => throw new HttpRequestException("down"));
-        await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null, null));
+        await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null));
     }
 
     [Fact]
@@ -203,7 +221,7 @@ public class ApiClientTests
     {
         var api = Stub(async (_, ct) => { await Task.Delay(TimeSpan.FromSeconds(30), ct); return new HttpResponseMessage(); },
             TimeSpan.FromMilliseconds(100));
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null, null));
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null));
         Assert.NotNull(ex.InnerException);
     }
 
@@ -212,7 +230,7 @@ public class ApiClientTests
     {
         var api = Stub(async (_, ct) => { await Task.Delay(TimeSpan.FromSeconds(30), ct); return new HttpResponseMessage(); });
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => api.ListAsync(null, null, ct: cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => api.ListAsync(null, ct: cts.Token));
     }
 
     [Theory]
@@ -221,7 +239,7 @@ public class ApiClientTests
     public async Task Unparseable_success_body_is_http_request_exception(string body, string type)
     {
         var api = Stub((_, _) => Reply(HttpStatusCode.OK, body, type));
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null, null));
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => api.ListAsync(null));
         Assert.Equal("Unexpected response from server.", ex.Message);
         Assert.NotNull(ex.InnerException);
     }
@@ -234,29 +252,62 @@ public class ApiClientTests
     public async Task Error_message_comes_from_problem_details(string body, string expected)
     {
         var api = Stub((_, _) => Reply(HttpStatusCode.BadRequest, body, "application/problem+json"));
-        var ex = await Assert.ThrowsAsync<ApiException>(() => api.ListAsync(null, null));
+        var ex = await Assert.ThrowsAsync<ApiException>(() => api.ListAsync(null));
         Assert.Equal(expected, ex.Message);
         Assert.Equal(HttpStatusCode.BadRequest, ex.Status);
     }
 
     [Fact]
-    public async Task Query_and_cursor_are_escaped()
+    public async Task Cursor_is_escaped_and_no_query_is_sent()
     {
         var seen = new List<string>();
         var api = Stub((r, _) => { seen.Add(r.RequestUri!.OriginalString); return Reply(HttpStatusCode.OK, "{\"items\":[]}", "application/json"); });
-        await api.ListAsync("a&b #c+d", "x&y z#+");
-        Assert.Contains("q=a%26b%20%23c%2Bd", seen[0]);
-        Assert.Contains("cursor=x%26y%20z%23%2B", seen[0]);
+        await api.ListAsync("x&y z#+");
+        await api.ListPinnedAsync("x&y z#+");
+        Assert.All(seen, url => Assert.Contains("cursor=x%26y%20z%23%2B", url));
+        Assert.All(seen, url => Assert.DoesNotContain("q=", url));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
-    public async Task Query_with_special_characters_is_accepted_and_ignored()
+    [Fact]
+    public async Task A_409_titled_encryption_was_reset_is_a_key_reset_and_a_426_is_update_required()
     {
-        using var server = new PrivatePasteFactory();
+        var reset = Stub((_, _) => Reply(HttpStatusCode.Conflict,
+            "{\"title\":\"Encryption was reset\",\"detail\":\"Encryption was reset. Enter the new passphrase.\"}", "application/problem+json"));
+        var e = await Assert.ThrowsAsync<KeyResetException>(() => reset.ListAsync(null));
+        Assert.Equal("Encryption was reset. Enter the new passphrase.", e.Message);
+        Assert.Equal(HttpStatusCode.Conflict, e.Status);
+
+        var noVault = Stub((_, _) => Reply(HttpStatusCode.Conflict, "{\"title\":\"Conflict\",\"detail\":\"Set up encryption first.\"}",
+            "application/problem+json"));
+        var other = await Assert.ThrowsAsync<ApiException>(() => noVault.ListAsync(null));
+        Assert.IsNotType<KeyResetException>(other);
+        Assert.Equal("Set up encryption first.", other.Message);
+
+        var old = Stub((_, _) => Reply(HttpStatusCode.UpgradeRequired, "{\"detail\":\"Update PrivatePaste to keep syncing.\"}",
+            "application/problem+json"));
+        var update = await Assert.ThrowsAsync<UpdateRequiredException>(() => old.SyncAsync(0));
+        Assert.Equal("Update PrivatePaste to keep syncing.", update.Message);
+    }
+
+    [Fact]
+    public async Task Server_info_and_vault_are_null_on_404()
+    {
+        var api = Stub((_, _) => Reply(HttpStatusCode.NotFound, "", "text/plain"));
+        Assert.Null(await api.GetServerInfoAsync());
+        Assert.Null(await api.GetVaultAsync());
+        Assert.Null(await api.TakeHandoverAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task Server_info_reports_the_limits_and_a_real_server_rejects_a_query()
+    {
+        using var server = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_TEXT_KB"] = "64", ["PP_MAX_IMAGE_MB"] = "5" });
         var api = await LoggedInAsync(server);
-        await api.UploadTextAsync("a&b #c+d", null, false);
-        var page = await api.ListAsync("a&b #c+d", null);
-        Assert.Equal("a&b #c+d", Assert.Single(page.Items).Text);
+        var info = (await api.GetServerInfoAsync())!;
+        Assert.Equal(2, info.Protocol);
+        Assert.Equal(new ServerLimitsDto(64, 5), info.Limits);
+        Assert.Null(await api.GetVaultAsync());
+        Assert.True((await api.GetMeAsync()).IsOwner);
     }
 
     [Fact]
@@ -270,8 +321,9 @@ public class ApiClientTests
         };
         var api = new PrivatePasteApi(http, time) { Token = "t" };
 
-        var list = api.ListAsync(null, null);
-        var upload = api.UploadTextAsync(new string('x', 1024 * 1024), null, false);   // 1 MB: 30 s + 4 s
+        var list = api.ListAsync(null);
+        var payload = new string('A', 1024 * 1024);
+        var upload = api.UploadClipAsync(new ClipUpload(new ClipUploadMeta("text", "k", "h", payload, 1, null, false), null, []));   // 1 MB: 30 s + 4 s
         time.Advance(TimeSpan.FromSeconds(30));
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() => list.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.IsType<TimeoutException>(ex.InnerException);

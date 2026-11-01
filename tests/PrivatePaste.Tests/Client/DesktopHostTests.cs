@@ -3,12 +3,14 @@ using System.Net.Http.Json;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Security;
 using PrivatePaste.Client.Core.Sync;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Desktop;
 using PrivatePaste.Desktop.Logging;
 using PrivatePaste.Desktop.Platform;
 using PrivatePaste.Desktop.Tray;
 using PrivatePaste.Desktop.ViewModels;
 using PrivatePaste.Protocol;
+using PrivatePaste.Protocol.Crypto;
 
 namespace PrivatePaste.Tests.Client;
 
@@ -24,11 +26,12 @@ public class DesktopHostTests : IAsyncLifetime
     private readonly ListNotifier _notes = new();
     private readonly List<DesktopHost> _hosts = [];
     private int _connects;
+    private VaultKey _vaultKey = null!;
 
-    public Task InitializeAsync()
+    public async Task InitializeAsync()
     {
         Directory.CreateDirectory(_dir);
-        return Task.CompletedTask;
+        _vaultKey = await _server.VaultKeyAsync();
     }
 
     public async Task DisposeAsync()
@@ -66,6 +69,7 @@ public class DesktopHostTests : IAsyncLifetime
         };
         var host = new DesktopHost(platform, _dir, _notes, new FileLog(Path.Combine(_dir, "logs", "privatepaste.log")),
             transport: transport);
+        host.SetVaultKey(VaultKey.FromBytes(_vaultKey.Export()));   // unlocked, as after entering the passphrase
         _hosts.Add(host);
         return host;
     }
@@ -163,15 +167,14 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Equal(SyncState.SignedOut, host.State);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Sign_out_logs_out_deletes_the_token_and_clears_cache_and_queue()
     {
         var host = await SignedInHostAsync();
         var historyChanged = 0;
         host.HistoryChanged += (_, _) => Interlocked.Increment(ref historyChanged);
         var other = await _server.LoginAsync("Phone");
-        (await other.PostAsJsonAsync("/api/clips/text", new TextClipUpload("from phone", null, false), ProtocolJson.Options))
-            .EnsureSuccessStatusCode();
+        await _server.UploadTextAsync(other, "from phone");
         await WaitUntilAsync(() => host.Cache.Items.Count == 1 && Volatile.Read(ref historyChanged) > 0);
         var signedOut = 0;
         host.SignedOut += (_, _) => signedOut++;
@@ -207,7 +210,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Contains("This device was signed out.", _notes.Messages);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Resume_never_uploads_what_was_copied_while_paused()
     {
         var host = await SignedInHostAsync();
@@ -231,6 +234,7 @@ public class DesktopHostTests : IAsyncLifetime
         while (DateTime.UtcNow < until)
         {
             page = await other.GetFromJsonAsync<ClipPage>("/api/clips", ProtocolJson.Options);
+            page = page! with { Items = page.Items.Select(new ClipCodec(_vaultKey).Decode).ToList() };
             if (page!.Items.Any(c => c.Text == "after resume")) break;
             await Task.Delay(50);
         }
@@ -250,7 +254,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Empty(_notes.Messages);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task An_unreadable_cache_key_is_kept_until_a_sign_in_replaces_it()
     {
         var keyPath = Path.Combine(_dir, "cache.key");
@@ -268,8 +272,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.NotEqual(foreign, File.ReadAllBytes(keyPath));
         await WaitUntilAsync(() => host.State == SyncState.Connected);
         var other = await _server.LoginAsync("Phone");
-        (await other.PostAsJsonAsync("/api/clips/text", new TextClipUpload("kept now", null, false), ProtocolJson.Options))
-            .EnsureSuccessStatusCode();
+        await _server.UploadTextAsync(other, "kept now");
         await WaitUntilAsync(() => host.Cache.Items.Any(i => i.Clip.Text == "kept now"));
         await host.DisposeAsync();
         _hosts.Remove(host);
@@ -319,15 +322,14 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.True(fromEnv.Isolated);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Blocking_dispose_on_a_ui_thread_completes_and_saves_the_cache()
     {
         var host = await SignedInHostAsync();
         var other = await _server.LoginAsync("Phone");
         foreach (var text in new[] { "first", "last change" })
         {
-            (await other.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options))
-                .EnsureSuccessStatusCode();
+            await _server.UploadTextAsync(other, text);
             await WaitUntilAsync(() => host.Cache.Items.Any(i => i.Clip.Text == text));
         }
         _hosts.Remove(host);
@@ -373,7 +375,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.False(File.Exists(Path.Combine(_dir, "cache.dat")));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task History_changed_is_raised_for_local_uploads_and_sign_out()
     {
         var host = await SignedInHostAsync();
@@ -399,7 +401,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Equal(["keepassxc", "chrome"], NewSettingsStore().Load().BlockedApps);   // persisted
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Clip_arrived_is_raised_for_a_live_clip_from_another_device_unless_turned_off()
     {
         var host = await SignedInHostAsync();
@@ -408,13 +410,10 @@ public class DesktopHostTests : IAsyncLifetime
         host.ClipArrived += (_, c) => arrived.Enqueue(c);
         var phone = await _server.LoginAsync("Phone", "android");
 
-        async Task<ClipDto> UploadAsync(string text)
+        async Task UploadAsync(string text)
         {
-            var r = await phone.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-            r.EnsureSuccessStatusCode();
-            var clip = (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+            await _server.UploadTextAsync(phone, text);
             await WaitUntilAsync(() => _clipboard.Writes.OfType<ClipboardContent.Text>().Any(w => w.Value == text));
-            return clip;
         }
 
         await UploadAsync("one");
@@ -445,12 +444,12 @@ public class DesktopHostTests : IAsyncLifetime
         public override void Send(SendOrPostCallback d, object? state) => throw new InvalidOperationException();
     }
 
-    /// <summary>Holds text uploads until released (honouring cancellation late), after signalling that one arrived.</summary>
+    /// <summary>Holds clip uploads until released (honouring cancellation late), after signalling that one arrived.</summary>
     private sealed class HoldUploads(HttpMessageHandler inner, TaskCompletionSource entered, Task release) : DelegatingHandler(inner)
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
-            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/api/clips/text"))
+            if (SwitchHandler.IsUpload(request))
             {
                 entered.TrySetResult();
                 try { await release.WaitAsync(ct); }

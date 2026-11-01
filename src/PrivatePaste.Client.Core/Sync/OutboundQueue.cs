@@ -81,6 +81,17 @@ public sealed class OutboundQueue(string path, byte[] key)
         }
     }
 
+    /// <summary>Drops every queued clip (persisted).</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            if (_items.Count == 0) return;
+            _items.Clear();
+            Save();
+        }
+    }
+
     /// <summary>Missing, corrupt or wrong-key files yield an empty queue; never throws.</summary>
     public static OutboundQueue Load(string path, byte[] key)
     {

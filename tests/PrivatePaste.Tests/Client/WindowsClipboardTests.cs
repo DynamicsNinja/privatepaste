@@ -112,19 +112,21 @@ public class WindowsClipboardTests : IDisposable
         var other = new PrivatePasteApi(server.CreateClient());
         other.Token = (await other.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "B", "windows")).Token;
 
+        var codec = new PrivatePaste.Client.Core.Vault.ClipCodec(await server.VaultKeyAsync());
         using var clip = new WindowsClipboard();
-        var coordinator = new ClipboardCoordinator(clip, api,
+        var coordinator = new ClipboardCoordinator(clip, api, () => codec,
             new HistoryCache(Path.Combine(_dir, "h.enc"), key), new OutboundQueue(Path.Combine(_dir, "q.enc"), key),
             new EchoGuard(time, TimeSpan.FromSeconds(30)), new ListNotifier(), time, () => false);
 
-        var remote = await other.UploadImageAsync(TestImages.MakePng(16, 12, 9).ToArray(), null, false);
+        var png = TestImages.MakePng(16, 12, 9).ToArray();
+        var remote = await other.UploadImageAsync(codec, png);
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         clip.Changed += (_, _) => changed.TrySetResult();
 
         await coordinator.ApplyRemoteAsync(remote, default);
         await WithinAsync(changed.Task.ContinueWith(_ => true), TimeSpan.FromSeconds(2));
         var back = Assert.IsType<ClipboardContent.Image>(await clip.ReadAsync(default));
-        Assert.Equal(remote.Hash, ImageHashing.HashPng(back.Png));   // the PNG format round-trips the exact pixels
+        Assert.Equal(ImageHashing.HashPng(png), ImageHashing.HashPng(back.Png));   // the PNG format round-trips the exact pixels
         await coordinator.OnClipboardChangedAsync(default);   // deliver the event the watcher raised
 
         var observer = await server.LoginAsync("Observer");

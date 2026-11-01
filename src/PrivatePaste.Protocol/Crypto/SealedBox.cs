@@ -14,12 +14,22 @@ public static class SealedBox
     private const int TagSize = 16;
     internal const int Overhead = 1 + NonceSize + TagSize;
 
-    public static byte[] Seal(VaultKey key, string purpose, ReadOnlySpan<byte> plaintext) =>
-        Seal(key.EncKey, Aad(purpose), plaintext, RandomNumberGenerator.GetBytes(NonceSize));
+    public static byte[] Seal(VaultKey key, string purpose, ReadOnlySpan<byte> plaintext)
+    {
+        var aad = Aad(purpose);
+        var encKey = key.EncKey;
+        try { return Seal(encKey, aad, plaintext, RandomNumberGenerator.GetBytes(NonceSize)); }
+        finally { CryptographicOperations.ZeroMemory(encKey); }
+    }
 
     /// <exception cref="CryptographicException">The input is malformed, was tampered with, or was sealed under another key or purpose.</exception>
-    public static byte[] Open(VaultKey key, string purpose, ReadOnlySpan<byte> sealedBytes) =>
-        Open(key.EncKey, Aad(purpose), sealedBytes);
+    public static byte[] Open(VaultKey key, string purpose, ReadOnlySpan<byte> sealedBytes)
+    {
+        var aad = Aad(purpose);
+        var encKey = key.EncKey;
+        try { return Open(encKey, aad, sealedBytes); }
+        finally { CryptographicOperations.ZeroMemory(encKey); }
+    }
 
     internal static byte[] Seal(ReadOnlySpan<byte> aesKey, ReadOnlySpan<byte> aad, ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> nonce)
     {

@@ -6,7 +6,9 @@ using PrivatePaste.Client.Core.Images;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Settings;
 using PrivatePaste.Client.Core.Sync;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Protocol;
+using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Tests.Images;
 using SkiaSharp;
 
@@ -26,6 +28,8 @@ public partial class ClipboardCoordinatorTests : IDisposable
     private OutboundQueue _queue = null!;
     private EchoGuard _echo = null!;
     private ClipboardCoordinator _c = null!;
+    private VaultKey _vaultKey = null!;
+    private ClipCodec _codec = null!;
     private bool _paused;
     private List<string> _blockedApps = [];
     private readonly List<string> _log = [];
@@ -40,13 +44,15 @@ public partial class ClipboardCoordinatorTests : IDisposable
 
     private async Task StartAsync(string device = "A")
     {
-        _handler = new SwitchHandler(_server.Server.CreateHandler());
+        _vaultKey = await _server.VaultKeyAsync();
+        _codec = new ClipCodec(_vaultKey);
+        _handler = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey };
         _api = new PrivatePasteApi(new HttpClient(_handler) { BaseAddress = new Uri("http://localhost/") });
         _api.Token = (await _api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, device, "windows")).Token;
         _cache = new HistoryCache(Path.Combine(_dir, "h.enc"), _key);
         _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
         _echo = new EchoGuard(_time, TimeSpan.FromSeconds(30));
-        _c = new ClipboardCoordinator(_clip, _api, _cache, _queue, _echo, _notes, _time, () => _paused,
+        _c = new ClipboardCoordinator(_clip, _api, () => _codec, _cache, _queue, _echo, _notes, _time, () => _paused,
             app => BlockedApps.Matches(_blockedApps, app), _log.Add);
     }
 
@@ -54,10 +60,10 @@ public partial class ClipboardCoordinatorTests : IDisposable
     {
         var client = await _server.LoginAsync("Observer");
         var page = await client.GetFromJsonAsync<ClipPage>("/api/clips?limit=50", ProtocolJson.Options);
-        return page!.Items.ToList();
+        return page!.Items.Select(_codec.Decode).ToList();
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Copy_uploads_live_and_caches()
     {
         await StartAsync();
@@ -68,13 +74,13 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Equal(0, _queue.Count);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Remote_clip_written_to_clipboard_is_not_uploaded_back()
     {
         await StartAsync();
         var b = new PrivatePasteApi(_server.CreateClient());
         b.Token = (await b.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "B", "windows")).Token;
-        var remote = await b.UploadTextAsync("from b", null, false);
+        var remote = await b.UploadTextAsync(_codec, "from b");
 
         await _c.ApplyRemoteAsync(remote, default);
         Assert.Equal(new ClipboardContent.Text("from b"), Assert.Single(_clip.Writes));
@@ -89,7 +95,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
     {
         await StartAsync();
         var spy = new EchoSpyClipboard(() => _echo);
-        var c = new ClipboardCoordinator(spy, _api, _cache, _queue, _echo, _notes, _time, () => false);
+        var c = new ClipboardCoordinator(spy, _api, () => _codec, _cache, _queue, _echo, _notes, _time, () => false);
         var clip = new ClipDto(Guid.NewGuid(), 1, ClipKind.Text, "x", ContentHash.ForText("x"), null, null, 1, null, "B", _time.GetUtcNow());
         await c.ApplyRemoteAsync(clip, default);
         Assert.True(spy.WasRememberedAtWrite);
@@ -107,7 +113,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         }
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Echo_window_expires()
     {
         await StartAsync();
@@ -131,7 +137,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Equal(0, _queue.Count);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Offline_copy_is_queued_then_flushed_in_order_with_backfill()
     {
         await StartAsync();
@@ -157,7 +163,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Equal(t0.AddMinutes(1), clips[1].LastCopiedAt);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Flush_drops_rejected_item_with_one_notification_and_continues()
     {
         await StartAsync();
@@ -169,7 +175,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Equal("ok", Assert.Single(await ServerClipsAsync()).Text);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Unauthorized_propagates_and_item_stays_queued()
     {
         await StartAsync();
@@ -202,7 +208,35 @@ public partial class ClipboardCoordinatorTests : IDisposable
         _clip.Current = new ClipboardContent.Image(png);
         await _c.OnClipboardChangedAsync(default);
         Assert.Empty(await ServerClipsAsync());
-        Assert.Contains("too large", Assert.Single(_notes.Messages));
+        Assert.Equal("Images over 20 MB aren't synced.", Assert.Single(_notes.Messages));
+    }
+
+    [Fact]
+    public async Task Limits_come_from_the_server()
+    {
+        using var small = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_TEXT_KB"] = "1", ["PP_MAX_IMAGE_MB"] = "1" });
+        _handler = new SwitchHandler(small.Server.CreateHandler());
+        _api = new PrivatePasteApi(new HttpClient(_handler) { BaseAddress = new Uri("http://localhost/") });
+        _api.Token = (await _api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "A", "windows")).Token;
+        _codec = new ClipCodec(await small.VaultKeyAsync());
+        _cache = new HistoryCache(Path.Combine(_dir, "h.enc"), _key);
+        _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
+        _c = new ClipboardCoordinator(_clip, _api, () => _codec, _cache, _queue, new EchoGuard(_time, TimeSpan.FromSeconds(30)), _notes,
+            _time, () => false);
+
+        _clip.Current = new ClipboardContent.Text(new string('x', 1025));
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Image(TestImages.MakePng(800, 800, 9).ToArray());   // about 1.9 MB
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Image(TestImages.MakePngHeaderOnly(7200, 7200).ToArray());
+        await _c.OnClipboardChangedAsync(default);
+        _clip.Current = new ClipboardContent.Text(new string('x', 1024));
+        await _c.OnClipboardChangedAsync(default);
+
+        Assert.Equal(["Clip too large to sync (text over 1 KB).", "Images over 1 MB aren't synced.",
+            "Images over 50 megapixels aren't synced."], _notes.Messages);
+        Assert.Equal([new string('x', 1024)], _cache.Items.Select(i => i.Clip.Text));
+        Assert.Single(_handler.Uploads);
     }
 
     [Fact]
@@ -216,7 +250,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Equal(0, _queue.Count);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Image_copy_uploads_and_remote_image_is_applied_without_echo()
     {
         await StartAsync();
@@ -224,7 +258,8 @@ public partial class ClipboardCoordinatorTests : IDisposable
         _clip.Current = new ClipboardContent.Image(png);
         await _c.OnClipboardChangedAsync(default);
         var uploaded = Assert.Single(await ServerClipsAsync());
-        Assert.Equal(ImageHashing.HashPng(png), uploaded.Hash);
+        Assert.Equal(KeyedHash.For(_vaultKey, ImageHashing.HashPng(png)), uploaded.Hash);
+        Assert.Equal((8, 8), (uploaded.Width, uploaded.Height));
 
         await _c.ApplyRemoteAsync(uploaded, default);
         Assert.IsType<ClipboardContent.Image>(Assert.Single(_clip.Writes));
@@ -232,14 +267,14 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Single(await ServerClipsAsync());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Undecodable_remote_image_is_skipped_without_write_or_mark()
     {
         await StartAsync();
-        var up = await _api.UploadImageAsync(TestImages.MakePng(4, 4).ToArray(), null, false);
-        // The image endpoint answers 200 with a captive-portal style HTML page.
+        var up = await _api.UploadImageAsync(_codec, TestImages.MakePng(4, 4).ToArray());
+        // The blob endpoint answers 200 with a captive-portal style HTML page.
         var html = new PrivatePasteApi(new HttpClient(new HtmlHandler()) { BaseAddress = new Uri("http://localhost/") }) { Token = _api.Token };
-        var c = new ClipboardCoordinator(_clip, html, _cache, _queue, _echo, _notes, _time, () => false);
+        var c = new ClipboardCoordinator(_clip, html, () => _codec, _cache, _queue, _echo, _notes, _time, () => false);
         await c.ApplyRemoteAsync(up, default);
         Assert.Empty(_clip.Writes);
         Assert.Null(_cache.LastAppliedAt);
@@ -288,7 +323,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Equal(Enumerable.Repeat("Skipped a copy marked private.", 3), _log);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task A_copy_from_a_blocked_app_is_skipped_case_insensitively()
     {
         await StartAsync();
@@ -367,7 +402,7 @@ public partial class ClipboardCoordinatorTests : IDisposable
         Assert.Equal(["app4", "app12", "app11", "app10", "app9", "app8", "app7", "app6", "app5", "app3"], _c.RecentSourceApps);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task A_410_drops_the_queued_clip_without_a_toast()
     {
         await StartAsync();

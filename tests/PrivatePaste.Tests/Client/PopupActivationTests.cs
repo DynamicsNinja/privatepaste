@@ -263,23 +263,24 @@ public class PopupActivationTests
         Assert.Equal([PopupActivation.CouldNotCopyToast], _toasts);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task An_undecodable_image_from_the_server_gives_no_paste()
     {
         using var server = new PrivatePasteFactory();
         var handler = new SwitchHandler(server.Server.CreateHandler());
         var api = new PrivatePasteApi(new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") });
         api.Token = (await api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "A", "windows")).Token;
-        var image = await api.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(4, 4, 1).ToArray(), null, false);
-        handler.Respond = r => r.RequestUri!.AbsolutePath.EndsWith("/image") && r.Method == HttpMethod.Get
+        var codec = new PrivatePaste.Client.Core.Vault.ClipCodec(await server.VaultKeyAsync());
+        var image = await api.UploadImageAsync(codec, PrivatePaste.Tests.Images.TestImages.MakePng(4, 4, 1).ToArray());
+        handler.Respond = r => r.RequestUri!.AbsolutePath.EndsWith("/blobs/0") && r.Method == HttpMethod.Get
             ? new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("<html>captive portal</html>") }
             : null;
         var clipboard = new FakeClipboard();
-        var coordinator = new PrivatePaste.Client.Core.Sync.ClipboardCoordinator(clipboard, api,
+        var coordinator = new PrivatePaste.Client.Core.Sync.ClipboardCoordinator(clipboard, api, () => codec,
             new PrivatePaste.Client.Core.Cache.HistoryCache(Path.Combine(Path.GetTempPath(), "pp-act-" + Guid.NewGuid() + ".dat"), new byte[32]),
             new PrivatePaste.Client.Core.Sync.OutboundQueue(Path.Combine(Path.GetTempPath(), "pp-actq-" + Guid.NewGuid() + ".dat"), new byte[32]),
             new PrivatePaste.Client.Core.Sync.EchoGuard(_time, TimeSpan.FromSeconds(30)), new ListNotifier(), _time, () => false);
-        _restore = api.RestoreAsync;
+        _restore = async (id, ct) => codec.Decode(await api.RestoreAsync(id, ct));
         _apply = coordinator.ApplyRemoteAsync;
 
         await RunAsync(Create(), image);
