@@ -91,7 +91,7 @@ Limits, with `PP_MAX_TEXT_KB` and `PP_MAX_IMAGE_MB` (as `limits` in server info)
 - **Image:** the blob may be at most `PP_MAX_IMAGE_MB` × 1 MiB plus the blob header (9 bytes) and a 16-byte tag per 1 MiB chunk; over is 413. The sealed payload (which holds only the size) may be at most 4096 bytes. Clients check the plaintext before uploading: images over 50 megapixels or over `imageMb` are refused on the device, since the server can't decode them.
 - The whole request is capped at the larger of the two cases plus some framing.
 
-Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers, an image clip without exactly one blob (`An image clip has exactly one blob.`), or a text or link clip with a thumbnail or blobs; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists under another kind.
+Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers, an image clip without exactly one blob (`An image clip has exactly one blob.`), or a text or link clip with a thumbnail or blobs; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists as an image and the upload is text or link, or the other way round. A text upload onto a stored link (or a link onto a stored text) is a bump that keeps the stored kind, since platforms may disagree on whether some content is a link.
 
 Live uploads always get the server's time. Backfilled uploads keep `copiedAt`, clamped to no later than the server's time, and are never applied to other devices' clipboards.
 
@@ -193,6 +193,8 @@ The server never sees `otk`. A code works once and only for 10 minutes, so a pho
 ### Test vectors
 
 [`e2e-test-vectors.json`](e2e-test-vectors.json) holds the vectors every client must reproduce: the subkeys and `keyId` of a fixed VK, Argon2id outputs (including the NFC and NFD spellings of the same passphrase), a passphrase wrap, a sealed payload and thumbnail, a two-chunk blob and an empty one, a keyed hash and two handovers with their QR text. They are written by `tests/PrivatePaste.Tests/Protocol/VaultCryptoTests.cs` (with `PP_WRITE_VECTORS=1`) and checked by the .NET tests, the Android JVM tests and the browser module's Node test (`tests/web/e2e.test.mjs`).
+
+[`classifier-test-vectors.json`](classifier-test-vectors.json) lists texts and whether a client uploads each as `link` or `text` (one absolute http or https URL, no whitespace, with the host and port rules of .NET's `System.Uri`). The .NET and Android tests check it.
 
 ## Content hash
 

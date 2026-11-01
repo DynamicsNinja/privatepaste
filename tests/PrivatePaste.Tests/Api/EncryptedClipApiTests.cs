@@ -236,6 +236,49 @@ public class EncryptedClipApiTests
     }
 
     [Fact]
+    public async Task Text_hash_uploaded_as_an_image_is_409()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (imageMeta, blob, thumb) = await PrivatePasteFactory.SealImageAsync(key, [1, 2, 3, 4]);
+        var image = (await (await PrivatePasteFactory.PostClipAsync(c, imageMeta, thumb, blob))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+
+        var response = await PrivatePasteFactory.PostClipAsync(c,
+            PrivatePasteFactory.TextMeta(key, "now as text") with { Hash = image.Hash });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("That content was already stored as a different kind.", (await ProblemAsync(response)).Detail);
+        Assert.Equal(ClipKind.Image, (await c.GetFromJsonAsync<ClipDto>($"/api/clips/{image.Id}", ProtocolJson.Options))!.Kind);
+    }
+
+    // Platforms can disagree on whether content is a link (an underscore in the host, say), and both send the same
+    // keyed hash; the second upload must still bump, not fail.
+    [Theory]
+    [InlineData("text", "link")]
+    [InlineData("link", "text")]
+    public async Task Same_hash_as_text_and_link_bumps_and_keeps_the_stored_kind(string storedKind, string uploadKind)
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var meta = PrivatePasteFactory.TextMeta(key, "https://my_host.example/a");
+        var first = (await (await PrivatePasteFactory.PostClipAsync(c, meta with { Kind = storedKind }))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+
+        var response = await PrivatePasteFactory.PostClipAsync(c, meta with { Kind = uploadKind });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var again = (await response.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        Assert.Equal(first.Id, again.Id);
+        Assert.True(again.Seq > first.Seq);
+        Assert.Equal(first.Kind, again.Kind);
+        Assert.Equal(storedKind == "link" ? ClipKind.Link : ClipKind.Text, again.Kind);
+        Assert.Single((await c.GetFromJsonAsync<ClipPage>("/api/clips", ProtocolJson.Options))!.Items);
+    }
+
+    [Fact]
     public async Task Bump_that_brings_a_thumb_records_it()
     {
         using var f = new PrivatePasteFactory();

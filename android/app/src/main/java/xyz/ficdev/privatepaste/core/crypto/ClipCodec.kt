@@ -9,8 +9,6 @@ import xyz.ficdev.privatepaste.core.model.ProtocolJson
 import xyz.ficdev.privatepaste.core.model.ServerLimits
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.net.URI
-import java.net.URISyntaxException
 import java.security.GeneralSecurityException
 import java.time.Instant
 import java.util.Base64
@@ -117,17 +115,50 @@ class ClipCodec(private val key: VaultKey) {
     }
 
     internal companion object {
-        /** Same rule as the desktop's ContentClassifier: one absolute http(s) URL and nothing else. */
+        /**
+         * Same rule as the desktop's ContentClassifier: one absolute http(s) URL and nothing else. It follows .NET's
+         * System.Uri rather than java.net.URI, which refuses hosts with `_` and paths with `{ } | ^`; the cases both
+         * must agree on are in docs/classifier-test-vectors.json. Anything they still disagree on only changes how a
+         * clip looks: the server bumps a link onto a stored text and the other way round.
+         */
         fun isLink(text: String): Boolean {
             val t = text.trim()
             if (t.isEmpty() || t.any { it.isWhitespace() }) return false
-            val uri = try {
-                URI(t)
-            } catch (_: URISyntaxException) {
-                return false
+            val match = LINK_START.find(t) ?: return false
+            val rest = t.substring(match.range.last + 1)
+            val end = rest.indexOfAny(charArrayOf('/', '?', '#'))
+            val authority = if (end < 0) rest else rest.substring(0, end)
+            // Anything goes in the user info except a second @; the host and port must be valid.
+            if (authority.substringBeforeLast('@', "").contains('@')) return false
+            val hostPort = authority.substringAfterLast('@')
+            val hostEnd = if (hostPort.startsWith('[')) hostPort.indexOf(']') + 1 else hostPort.indexOf(':')
+            if (hostPort.startsWith('[') && hostEnd == 0) return false
+            val split = if (hostEnd <= 0) hostPort.length else hostEnd
+            return isHost(hostPort.substring(0, split)) && isPort(hostPort.substring(split))
+        }
+
+        private val LINK_START = Regex("^https?://", RegexOption.IGNORE_CASE)
+
+        /** A bracketed IPv6 address, or dot-separated labels of letters, digits, `-`, `_` and non-ASCII. */
+        private fun isHost(host: String): Boolean {
+            if (host.startsWith('[')) {
+                val address = host.substring(1, host.length - 1).substringBefore('%')
+                return address.contains(':') && address.indexOf("::") == address.lastIndexOf("::") &&
+                    address.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' }
             }
-            val scheme = uri.scheme?.lowercase() ?: return false
-            return (scheme == "http" || scheme == "https") && !uri.host.isNullOrEmpty()
+            val labels = host.split('.')
+            // A trailing dot is allowed (an empty last label); any other empty label is not.
+            return host.isNotEmpty() && labels.dropLast(1).none { it.isEmpty() } &&
+                host.all { it.code > 0x7f || it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
+        }
+
+        /** Empty, or `:` and digits up to 65535 (leading zeros allowed). */
+        private fun isPort(port: String): Boolean {
+            if (port.isEmpty()) return true
+            val digits = port.substring(1)
+            if (!port.startsWith(':') || !digits.all { it in '0'..'9' }) return false
+            val value = digits.trimStart('0')
+            return value.length <= 5 && (value.toIntOrNull() ?: 0) <= 65535
         }
     }
 }

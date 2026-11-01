@@ -135,8 +135,11 @@ public sealed partial class ClipService(
             // Under the lock, so a backfill can't land between a clear recording its time and deleting.
             if (meta.Backfill)
                 await EnsureNotClearedAsync(copiedAt);
-            // The same hash under another kind would pair one clip's row with another's blobs.
-            if (await clips.GetByHashAsync(meta.Hash) is { } existing && existing.Kind != kind)
+            // An image and a text clip under one hash would pair one clip's row with another's blobs. Text and link
+            // share a shape (no blobs, no thumb) and platforms can disagree on whether some content is a link, so
+            // that clash is a bump that keeps the stored kind.
+            if (await clips.GetByHashAsync(meta.Hash) is { } existing
+                && (existing.Kind == ClipKind.Image) != (kind == ClipKind.Image))
                 throw new ClipRejectedException(StatusCodes.Status409Conflict,
                     "That content was already stored as a different kind.");
 

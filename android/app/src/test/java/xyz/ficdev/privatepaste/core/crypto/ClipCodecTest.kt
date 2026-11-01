@@ -5,6 +5,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -97,6 +99,16 @@ class ClipCodecTest {
         assertEquals("text", codec.encodeText("ftp://example.com", null, false).meta.kind)
         assertEquals("text", codec.encodeText("example.com", null, false).meta.kind)
         assertEquals("text", codec.encodeText("", null, false).meta.kind)
+    }
+
+    @Test
+    fun linksMatchTheSharedClassifierVectors() {
+        val cases = Json.parseToJsonElement(File("../../docs/classifier-test-vectors.json").readText(Charsets.UTF_8))
+            .jsonObject.getValue("cases").jsonArray
+        val wrong = cases.map { it.jsonObject }
+            .filter { ClipCodec.isLink(it.getValue("text").jsonPrimitive.content) != it.getValue("link").jsonPrimitive.boolean }
+            .map { it.getValue("text").jsonPrimitive.content }
+        assertEquals(emptyList<String>(), wrong)
     }
 
     @Test
