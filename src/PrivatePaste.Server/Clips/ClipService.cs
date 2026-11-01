@@ -151,6 +151,26 @@ public sealed class ClipService(
         return await DeleteUnpinnedAsync(at);
     }
 
+    /// <summary>
+    /// Stores the new vault wrap and deletes everything, atomically (see <see cref="ClipRepository.ResetAllAsync"/>),
+    /// then the image blobs, best effort. Used when the owner resets encryption, after which no old clip could be
+    /// opened anyway. The caller announces it with <see cref="IClipBroadcaster.VaultResetAsync"/>, so no per-clip
+    /// deletes are sent.
+    /// </summary>
+    public async Task ResetAllAsync(VaultWrapDto wrap)
+    {
+        await _imageLock.WaitAsync();
+        try
+        {
+            foreach (var clip in await clips.ResetAllAsync(wrap))
+                RemoveBlobs(clip);
+        }
+        finally
+        {
+            _imageLock.Release();
+        }
+    }
+
     /// <summary>Deletes unpinned clips last copied before <paramref name="cutoff"/> (the auto-delete sweep).</summary>
     public Task<int> DeleteOlderThanAsync(DateTimeOffset cutoff) => DeleteUnpinnedAsync(cutoff);
 

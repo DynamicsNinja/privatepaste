@@ -27,6 +27,8 @@ public class PinEndpointsTests
             lock (Deleted) Deleted.Add(id);
             return Task.CompletedTask;
         }
+
+        public Task VaultResetAsync() => Task.CompletedTask;
     }
 
     /// <summary>A client of a host whose broadcasts are recorded instead of sent to WebSockets.</summary>

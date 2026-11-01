@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
 using PrivatePaste.Protocol;
+using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Server.Auth;
 
 namespace PrivatePaste.Tests;
@@ -76,6 +78,24 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
             client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         return (client, login.DeviceId, login.Token);
     }
+
+    /// <summary>
+    /// Stores a syntactically valid vault wrap for <paramref name="key"/> as the owner. The server never opens the
+    /// wrap, so its bytes are random; tests that need a real wrap build one with <c>PassphraseWrap</c>.
+    /// </summary>
+    public static async Task<VaultWrapDto> EnsureVaultAsync(HttpClient ownerClient, VaultKey key)
+    {
+        var wrap = RandomWrap(key.KeyId);
+        var response = await ownerClient.PutAsJsonAsync("/api/vault", wrap, ProtocolJson.Options);
+        Assert.True(response.StatusCode is HttpStatusCode.Created or HttpStatusCode.OK, response.StatusCode.ToString());
+        return wrap;
+    }
+
+    /// <summary>A valid-looking wrap with random salt, nonce and wrapped key.</summary>
+    public static VaultWrapDto RandomWrap(string keyId) => new(keyId,
+        new VaultKdfDto("argon2id", 65536, 3, 1, Convert.ToBase64String(RandomNumberGenerator.GetBytes(16))),
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(12)),
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(48)));
 
     /// <summary>
     /// Adds a regular person, as the owner would, and returns their id; sign in as them with
