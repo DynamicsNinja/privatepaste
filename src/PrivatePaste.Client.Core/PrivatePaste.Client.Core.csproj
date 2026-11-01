@@ -5,9 +5,19 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="PrivatePaste.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
     <PackageReference Include="SkiaSharp" Version="3.119.2" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Byte-for-byte copy of the web list (a test compares the hashes), so every client rejects the same passphrases. -->
+    <EmbeddedResource Include="Vault\common-passphrases.txt" LogicalName="common-passphrases.txt" />
   </ItemGroup>
 
 </Project>

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Tests.Web;
@@ -172,6 +173,9 @@ public class VaultCryptoTests
     [InlineData("privatepaste:handover?id=00000000-0000-0000-0000-000000000001&k=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8&kid=ZZ11223344556677")]
     [InlineData("privatepaste:handover?id=00000000-0000-0000-0000-000000000001&k=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8")]
     [InlineData("privatepaste:handover?id=00000000-0000-0000-0000-000000000001&id=00000000-0000-0000-0000-000000000002&k=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8&kid=0011223344556677")]
+    [InlineData("privatepaste:handover?id=00000000-0000-0000-0000-000000000001&k=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=&kid=0011223344556677")] // padded
+    [InlineData("privatepaste:handover?id=00000000-0000-0000-0000-000000000001&k=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9&kid=0011223344556677")] // stray trailing bits
+    [InlineData("privatepaste:handover?id=00000000-0000-0000-0000-000000000001&k=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6 Ozw9Pj8&kid=0011223344556677")] // whitespace
     [InlineData("")]
     public void Handover_RejectsMalformedQr(string text) =>
         Assert.False(Handover.TryParseQr(text, out _, out _, out _));
@@ -219,6 +223,33 @@ public class VaultCryptoTests
         using (var unwrapped = Handover.Unwrap(otk, handoverBlob, key.KeyId))
             Assert.Equal(vk, unwrapped.Export());
 
+        // A second case whose key text uses the URL-safe characters '-' and '_' (base64url sextets 62 and 63).
+        var otk2 = Enumerable.Range(0, 32).Select(i => new byte[] { 0xfb, 0xff, 0xbf }[i % 3]).ToArray();
+        var handover2Blob = Handover.Wrap(key, otk2, nonce);
+        var handover2Id = Guid.Parse("00000000-0000-4000-8000-000000000002");
+        var handover2Qr = Handover.QrText(handover2Id, otk2, key.KeyId);
+        Assert.Contains("-", handover2Qr.Split("&k=")[1]);
+        Assert.Contains("_", handover2Qr.Split("&k=")[1]);
+        Assert.True(Handover.TryParseQr(handover2Qr, out _, out var parsed2, out _));
+        Assert.Equal(otk2, parsed2);
+
+        var thumbPlain = Range(0xc0, 20);
+        var thumbSealed = SealedBox.Seal(key.EncKey, Encoding.UTF8.GetBytes("privatepaste v1 thumb"), thumbPlain, nonce);
+        Assert.Equal(thumbPlain, SealedBox.Open(key, "thumb", thumbSealed));
+
+        // Passphrase cases: fixed salt and nonce, 64 MiB / 3 / 1 as shipped.
+        var salt = Range(0, 16);
+        var passphrases = new[] { "correct horse battery", "Šećer na 5. katu".Normalize(NormalizationForm.FormC), "Šećer na 5. katu".Normalize(NormalizationForm.FormD) };
+        Assert.NotEqual(passphrases[1], passphrases[2]);
+        var argonCases = passphrases.Select(p => (p, key: PassphraseWrap.DeriveKek(p, salt, 65536, 3, 1))).ToArray();
+        Assert.Equal(argonCases[1].key, argonCases[2].key);
+        var wrapCases = passphrases.Take(2).Select(p => (p, wrap: PassphraseWrap.Wrap(key, p, salt, nonce))).ToArray();
+        foreach (var (p, wrap) in wrapCases)
+        {
+            using var unwrapped = PassphraseWrap.Unwrap(wrap, p);
+            Assert.Equal(vk, unwrapped.Export());
+        }
+
         using var stream = new MemoryStream();
         using (var w = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
@@ -237,7 +268,9 @@ public class VaultCryptoTests
                 "emptyBlob: the full output for an empty plaintext (one final chunk).",
                 "keyedHash: text -> contentHash (ContentHash.ForText) -> keyedHash = HMAC-SHA256(hashKey, UTF-8 of contentHash).",
                 "handover: blob is otk-sealed small item with AAD 'privatepaste v1 handover' and plaintext vk; qrText uses id, base64url otk without padding, and keyId.",
-                "argon2: passphrase -> key cases (passphrase as a UTF-8 string, NFC and NFD forms must agree); passphraseWrap: the VK wrapped under a passphrase key. Both are added by the passphrase task."));
+                "handoverUrlSafe: a second handover whose otk text contains - and _. thumb: a small item with purpose thumb; plaintext is hex.",
+                "argon2: passphrase (NFC-normalised, UTF-8) -> 32-byte key with the given salt and cost; the NFC and NFD spellings of the same text give the same key.",
+                "passphraseWrap: the VK wrapped under a passphrase: AES-256-GCM with AAD 'privatepaste v1 vault ' + keyId under the argon2 key (salt 0..15, 64 MiB, 3, 1); wrap is the VaultWrap DTO as sent on the wire (base64)."));
 
             w.WriteStartObject("vaultKey");
             w.WriteString("vk", Hex(vk));
@@ -281,7 +314,45 @@ public class VaultCryptoTests
             w.WriteString("qrText", Handover.QrText(handoverId, otk, key.KeyId));
             w.WriteEndObject();
 
+            w.WriteStartObject("handoverUrlSafe");
+            w.WriteString("otk", Hex(otk2));
+            w.WriteString("nonce", Hex(nonce));
+            w.WriteString("blob", Hex(handover2Blob));
+            w.WriteString("id", handover2Id.ToString("D"));
+            w.WriteString("qrText", handover2Qr);
+            w.WriteEndObject();
+
+            w.WriteStartObject("thumb");
+            w.WriteString("purpose", "thumb");
+            w.WriteString("nonce", Hex(nonce));
+            w.WriteString("plaintext", Hex(thumbPlain));
+            w.WriteString("sealed", Hex(thumbSealed));
+            w.WriteEndObject();
+
             w.WriteStartArray("argon2");
+            foreach (var (p, derived) in argonCases)
+            {
+                w.WriteStartObject();
+                w.WriteString("passphrase", p);
+                w.WriteString("salt", Hex(salt));
+                w.WriteNumber("memoryKiB", 65536);
+                w.WriteNumber("iterations", 3);
+                w.WriteNumber("parallelism", 1);
+                w.WriteString("key", Hex(derived));
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            w.WriteStartArray("passphraseWrap");
+            foreach (var (p, wrap) in wrapCases)
+            {
+                w.WriteStartObject();
+                w.WriteString("passphrase", p);
+                w.WriteString("vk", Hex(vk));
+                w.WritePropertyName("wrap");
+                JsonSerializer.Serialize(w, wrap, ProtocolJson.Options);
+                w.WriteEndObject();
+            }
             w.WriteEndArray();
             w.WriteEndObject();
         }
