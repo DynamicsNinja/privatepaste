@@ -1,6 +1,7 @@
 using System.Buffers.Text;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using PrivatePaste.Protocol;
 
@@ -247,21 +248,29 @@ public sealed class ClipRepository(PrivatePasteDb db)
     }
 
     /// <summary>
-    /// Deletes every clip, pinned ones included, and every tombstone, in one transaction (the encryption reset). The
-    /// seq counter keeps its value so no seq is ever reused. Returns the deleted clips so the caller can remove blobs.
+    /// The encryption reset, in one transaction under the write lock that clip inserts take: stores the new vault wrap
+    /// first, then deletes every clip (pinned too), every tombstone and the clear marker. A crash leaves either the old
+    /// vault with its history or the new one with none, and no insert lands between the two. The seq counter keeps its
+    /// value so no seq is ever reused. Returns the deleted clips so the caller can remove blobs after the commit.
+    /// A stale-key upload that arrives after the commit is refused by Task 7's keyId check (409), not here.
     /// </summary>
-    public async Task<IReadOnlyList<ClipDto>> DeleteAllAsync()
+    public async Task<IReadOnlyList<ClipDto>> ResetAllAsync(VaultWrapDto wrap)
     {
         await _writeLock.WaitAsync();
         try
         {
             await using var conn = db.Open();
             await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
+            await ExecAsync(conn, tx,
+                "INSERT INTO vault(id, wrap_json, key_id) VALUES(1, @json, @kid) " +
+                "ON CONFLICT(id) DO UPDATE SET wrap_json = excluded.wrap_json, key_id = excluded.key_id",
+                ("@json", JsonSerializer.Serialize(wrap, ProtocolJson.Options)), ("@kid", wrap.KeyId));
             List<ClipDto> doomed;
             await using (var select = Command(conn, tx, $"SELECT {Columns} FROM {From}", []))
                 doomed = await ReadClipsAsync(select);
             await ExecAsync(conn, tx, "DELETE FROM clips");
             await ExecAsync(conn, tx, "DELETE FROM tombstones");
+            await ExecAsync(conn, tx, "DELETE FROM settings WHERE name = @n", ("@n", SettingsRepository.HistoryClearedAt));
             await tx.CommitAsync();
             return doomed;
         }

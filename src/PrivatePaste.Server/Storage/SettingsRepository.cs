@@ -34,8 +34,6 @@ public sealed class SettingsRepository(PrivatePasteDb db)
     public Task SetHistoryClearedAtAsync(DateTimeOffset at) =>
         SetAsync(HistoryClearedAt, at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
 
-    public Task ClearHistoryClearedAtAsync() => DeleteAsync(HistoryClearedAt);
-
     /// <summary>
     /// Whether web sessions from before there were people (cookies with no person in them) are still honoured as the
     /// owner's. Those cookies may be held by anyone the old shared password was given to.

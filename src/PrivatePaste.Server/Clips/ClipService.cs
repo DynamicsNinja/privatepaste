@@ -152,18 +152,18 @@ public sealed class ClipService(
     }
 
     /// <summary>
-    /// Deletes everything: every clip (pinned too), tombstone and blob, and the clear marker that only meant something
-    /// for that history. Used when the owner resets encryption, after which no old clip could be opened anyway. The
-    /// caller announces it with <see cref="IClipBroadcaster.VaultResetAsync"/>, so no per-clip deletes are sent.
+    /// Stores the new vault wrap and deletes everything, atomically (see <see cref="ClipRepository.ResetAllAsync"/>),
+    /// then the image blobs, best effort. Used when the owner resets encryption, after which no old clip could be
+    /// opened anyway. The caller announces it with <see cref="IClipBroadcaster.VaultResetAsync"/>, so no per-clip
+    /// deletes are sent.
     /// </summary>
-    public async Task ResetAllAsync()
+    public async Task ResetAllAsync(VaultWrapDto wrap)
     {
         await _imageLock.WaitAsync();
         try
         {
-            foreach (var clip in await clips.DeleteAllAsync())
+            foreach (var clip in await clips.ResetAllAsync(wrap))
                 RemoveBlobs(clip);
-            await settings.ClearHistoryClearedAtAsync();
         }
         finally
         {

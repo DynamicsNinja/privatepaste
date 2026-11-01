@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Server.Storage;
+using PrivatePaste.Tests.Images;
 using PrivatePaste.Tests.Realtime;
 
 namespace PrivatePaste.Tests.Api;
@@ -107,6 +108,16 @@ public class VaultApiTests
         posted.EnsureSuccessStatusCode();
         var clip = (await posted.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
         (await owner.PostAsync($"/api/clips/{clip.Id}/pin", null)).EnsureSuccessStatusCode();
+        // An image (blob and thumbnail files) and a deleted clip (a tombstone), so the wipe has all of it to remove.
+        var form = new MultipartFormDataContent { { new ByteArrayContent(TestImages.MakePng(40, 30).ToArray()), "file", "x.png" } };
+        var imageResponse = await owner.PostAsync("/api/clips/image", form);
+        imageResponse.EnsureSuccessStatusCode();
+        var blobDir = Path.Combine(f.DataDir, "blobs");
+        Assert.NotEmpty(Directory.GetFiles(blobDir, "*.enc"));
+        var doomed = await owner.PostAsJsonAsync("/api/clips/text", new TextClipUpload("deleted", null, false), ProtocolJson.Options);
+        var doomedClip = (await doomed.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        (await owner.DeleteAsync($"/api/clips/{doomedClip.Id}")).EnsureSuccessStatusCode();
+        Assert.Equal(1, TombstoneCount(f));
         var settings = f.Services.GetRequiredService<SettingsRepository>();
         await settings.SetHistoryClearedAtAsync(DateTimeOffset.UtcNow);
 
@@ -119,6 +130,8 @@ public class VaultApiTests
         var sync = await owner.GetFromJsonAsync<SyncResponse>("/api/sync?afterSeq=0", ProtocolJson.Options);
         Assert.Empty(sync!.Clips);
         Assert.Empty(sync.DeletedIds);
+        Assert.Equal(0, TombstoneCount(f));
+        Assert.Empty(Directory.GetFiles(blobDir, "*", SearchOption.AllDirectories));
         Assert.True(sync.LatestSeq >= clip.Seq, "the seq counter must not go back");
         Assert.Null(await settings.GetHistoryClearedAtAsync());
         Assert.Equal(newWrap, await owner.GetFromJsonAsync<VaultWrapDto>("/api/vault", ProtocolJson.Options));
@@ -126,6 +139,14 @@ public class VaultApiTests
         var (result, text) = await WebSocketTests.ReceiveAsync(socket);
         Assert.Equal(WebSocketMessageType.Text, result.MessageType);
         Assert.Equal(WsTypes.VaultReset, JsonSerializer.Deserialize<WsMessage>(text, ProtocolJson.Options)!.Type);
+    }
+
+    private static long TombstoneCount(PrivatePasteFactory f)
+    {
+        using var conn = f.Services.GetRequiredService<PrivatePasteDb>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT count(*) FROM tombstones";
+        return (long)cmd.ExecuteScalar()!;
     }
 
     [Fact]
@@ -151,6 +172,9 @@ public class VaultApiTests
             good with { WrappedKey = Convert.ToBase64String(new byte[32]) },
             good with { KeyId = "ABCDEF0123456789" },
             good with { KeyId = "abc" },
+            // Decodes to 12 bytes but isn't canonical: whitespace, and non-zero trailing bits in the last character.
+            good with { Nonce = good.Nonce[..4] + " " + good.Nonce[4..] },
+            good with { Kdf = good.Kdf with { Salt = "AAAAAAAAAAAAAAAAAAAAAB==" } },
         ];
         foreach (var wrap in bad)
         {

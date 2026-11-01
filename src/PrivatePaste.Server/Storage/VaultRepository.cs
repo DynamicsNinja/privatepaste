@@ -40,17 +40,6 @@ public sealed class VaultRepository(PrivatePasteDb db)
         return await cmd.ExecuteNonQueryAsync() == 1;
     }
 
-    /// <summary>Stores the wrap whatever was there, key id included (the reset).</summary>
-    public async Task ReplaceAllAsync(VaultWrapDto wrap)
-    {
-        await using var conn = db.Open();
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO vault(id, wrap_json, key_id) VALUES(1, @json, @kid) " +
-                          "ON CONFLICT(id) DO UPDATE SET wrap_json = excluded.wrap_json, key_id = excluded.key_id";
-        Bind(cmd, wrap);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
     private static void Bind(SqliteCommand cmd, VaultWrapDto wrap)
     {
         cmd.Parameters.AddWithValue("@json", JsonSerializer.Serialize(wrap, ProtocolJson.Options));

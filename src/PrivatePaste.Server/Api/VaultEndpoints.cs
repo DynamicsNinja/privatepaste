@@ -35,12 +35,11 @@ public static partial class VaultEndpoints
                 detail: "Encryption is already set up with a different key.");
         }).RequireAuthorization(AuthSchemes.OwnerPolicy);
 
-        group.MapPost("reset", async (VaultWrapDto body, VaultRepository vault, ClipService clips, IClipBroadcaster broadcaster) =>
+        group.MapPost("reset", async (VaultWrapDto body, ClipService clips, IClipBroadcaster broadcaster) =>
         {
             if (Validate(body) is { } error)
                 return BadRequest(error);
-            await clips.ResetAllAsync();
-            await vault.ReplaceAllAsync(body);
+            await clips.ResetAllAsync(body);
             await broadcaster.VaultResetAsync();
             return Results.Ok(body);
         }).RequireAuthorization(AuthSchemes.OwnerPolicy);
@@ -75,7 +74,9 @@ public static partial class VaultEndpoints
 
     private static bool HasLength(string base64, int bytes)
     {
+        // Canonical only: re-encoding must give the input back, which rejects whitespace and stray trailing bits.
         Span<byte> buffer = stackalloc byte[bytes + 3];
-        return Convert.TryFromBase64String(base64, buffer, out var written) && written == bytes;
+        return Convert.TryFromBase64String(base64, buffer, out var written) && written == bytes
+            && Convert.ToBase64String(buffer[..written]) == base64;
     }
 }
