@@ -11,6 +11,8 @@ on:
     paths:
       - 'src/PrivatePaste.Server/**'
       - 'src/PrivatePaste.Protocol/**'
+      - 'tests/web/**'
+      - 'docs/e2e-test-vectors.json'
       - 'Dockerfile'
       - '.dockerignore'
       - 'Directory.Build.props'
@@ -30,6 +32,10 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet test -c Release --filter "FullyQualifiedName!~PrivatePaste.Tests.Client"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test "tests/web/*.test.mjs"
 
   image:
     needs: test
