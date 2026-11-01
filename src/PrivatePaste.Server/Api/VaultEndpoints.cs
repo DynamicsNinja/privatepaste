@@ -11,6 +11,7 @@ public static partial class VaultEndpoints
     // The clients' own bounds: weaker settings are refused, and so are settings so heavy they'd stall a phone.
     private const int MinMemoryKiB = 65536, MaxMemoryKiB = 262144;
     private const int MinIterations = 3, MaxIterations = 10;
+    private const int MaxHandoverBytes = 1024;
     private const int MinParallelism = 1, MaxParallelism = 8;
 
     [GeneratedRegex("^[0-9a-f]{16}$")]
@@ -43,6 +44,24 @@ public static partial class VaultEndpoints
             await broadcaster.VaultResetAsync();
             return Results.Ok(body);
         }).RequireAuthorization(AuthSchemes.OwnerPolicy);
+
+        group.MapPost("handovers", async (HandoverCreateRequest body, HandoverStore handovers) =>
+        {
+            // 1024 bytes encode to 1368 characters; anything longer is too large whatever it decodes to.
+            if (body?.Blob is not { } text)
+                return BadRequest("blob is required.");
+            if (text.Length > (MaxHandoverBytes + 2) / 3 * 4)
+                return TooLarge();
+            var blob = DecodeCanonical(text);
+            if (blob is null || blob.Length == 0)
+                return BadRequest("blob must be non-empty canonical base64.");
+            return blob.Length > MaxHandoverBytes ? TooLarge() : Results.Ok(await handovers.CreateAsync(blob));
+        });
+
+        group.MapGet("handovers/{id:guid}", async (Guid id, HandoverStore handovers) =>
+            await handovers.TakeAsync(id) is { } blob
+                ? Results.Ok(new HandoverBlob(Convert.ToBase64String(blob)))
+                : Results.NotFound());
     }
 
     private static IResult BadRequest(string detail) =>
@@ -71,6 +90,18 @@ public static partial class VaultEndpoints
             return "wrappedKey must be 48 bytes.";
         return null;
     }
+
+    // Standard base64 that re-encodes to the same text (no whitespace, no stray trailing bits); null otherwise.
+    private static byte[]? DecodeCanonical(string base64)
+    {
+        var buffer = new byte[base64.Length * 3 / 4 + 3];
+        if (!Convert.TryFromBase64String(base64, buffer, out var written))
+            return null;
+        return Convert.ToBase64String(buffer.AsSpan(0, written)) == base64 ? buffer[..written] : null;
+    }
+
+    private static IResult TooLarge() => Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+        detail: $"blob must be at most {MaxHandoverBytes} bytes.");
 
     private static bool HasLength(string base64, int bytes)
     {
