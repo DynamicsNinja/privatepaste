@@ -266,8 +266,9 @@ public sealed class DesktopHost : IAsyncDisposable
 
             // A new device identity: history and unsent clips of any earlier sign-in do not carry over.
             LeaveEphemeralMode();
-            Cache.Clear();
-            ClearQueue();
+            // Guarded like a wipe (a file that can't be removed is logged); the first vault check clears again if needed.
+            WipeStep("history", ClearHistory);
+            WipeStep("queue", ClearQueue);
             try { _tokenFile.Write(login.Token); }
             catch (Exception e)
             {
@@ -335,7 +336,7 @@ public sealed class DesktopHost : IAsyncDisposable
         try { session.Http.Dispose(); }
         catch (Exception e) { _log.Error($"Could not close the connection ({e.GetType().Name})."); }
         WipeStep("sign-in", _tokenFile.Delete);
-        WipeStep("history", () => Cache.Clear());
+        WipeStep("history", ClearHistory);
         WipeStep("queue", ClearQueue);
         WipeStep("key", DeleteVaultKey);   // it belongs to this account's server
         // The next sign-in may be to another server: it starts from scratch, as on first contact.
@@ -604,19 +605,12 @@ public sealed class DesktopHost : IAsyncDisposable
             var serverKeyId = vault?.KeyId;
             if (!_settings.MetE2eServer)
             {
-                // First contact with an encrypted server: nothing from before (history, thumbnails, queued plaintext
-                // copies) may stay or ever be uploaded. Remembered before anything is queued under the new rules.
-                if (HasLocalData())
-                {
-                    _log.Info("First contact with an encrypted server; clearing local history and queued copies.");
-                    session = await WipeLocalDataAsync(session).ConfigureAwait(false);
-                }
-                UpdateSettings(s => s with { MetE2eServer = true });
+                session = await FirstContactAsync(session).ConfigureAwait(false);
             }
             else if (BelongsElsewhere(serverKeyId))
             {
                 _log.Info("Local history belongs to another key; clearing it.");
-                session = await WipeLocalDataAsync(session).ConfigureAwait(false);
+                (session, _) = await WipeLocalDataAsync(session).ConfigureAwait(false);
             }
             if (HeldKeyId() is { } held && held != serverKeyId) DeleteVaultKey();
             if (serverKeyId is not null) ClaimLocalData(serverKeyId);
@@ -666,13 +660,29 @@ public sealed class DesktopHost : IAsyncDisposable
     /// the same sign-in (its engine not started), so nothing of the old one writes them again. Each step runs whatever the
     /// others did (a file that can't be removed must not keep the key). Never throws. Caller holds _lifecycle.
     /// </summary>
-    private async Task<Session> WipeLocalDataAsync(Session session)
+    /// <returns>The new session, and whether the history and the queue are gone from disk too.</returns>
+    private async Task<(Session Session, bool Cleared)> WipeLocalDataAsync(Session session, bool dropKey = true)
     {
         await StopSessionAsync(session).ConfigureAwait(false);
-        WipeStep("history", () => Cache.Clear());
-        WipeStep("queue", ClearQueue);
-        WipeStep("key", DeleteVaultKey);
-        return StartSession(session.Server, session.Token, session.DeviceId, session.Http);
+        var cleared = WipeStep("history", ClearHistory);
+        cleared &= WipeStep("queue", ClearQueue);
+        if (dropKey) WipeStep("key", DeleteVaultKey);
+        return (StartSession(session.Server, session.Token, session.DeviceId, session.Http), cleared);
+    }
+
+    /// <summary>
+    /// First contact with an encrypted server: nothing from before (history, thumbnails, queued plaintext copies) may stay or
+    /// ever be uploaded. Clears the files whatever memory holds (a queue file that couldn't be read at start is still on
+    /// disk). Only once that worked is <see cref="ClientSettings.MetE2eServer"/> written; otherwise the next check clears
+    /// again. A stored key goes too when there was anything to clear (it can't have been this vault's). Caller holds _lifecycle.
+    /// </summary>
+    private async Task<Session> FirstContactAsync(Session session)
+    {
+        _log.Info("First contact with an encrypted server; clearing local history and queued copies.");
+        var (fresh, cleared) = await WipeLocalDataAsync(session, dropKey: HasLocalData()).ConfigureAwait(false);
+        if (cleared) UpdateSettings(s => s with { MetE2eServer = true });
+        else _log.Error("Local data from before encryption could not be cleared; trying again at the next check.");
+        return fresh;
     }
 
     /// <summary>Drains the session's clipboard work and stops its engine. Never throws: each failure is logged by type.</summary>
@@ -688,18 +698,30 @@ public sealed class DesktopHost : IAsyncDisposable
         catch (Exception e) { _log.Error($"Could not stop sync ({e.GetType().Name})."); }
     }
 
-    private void WipeStep(string what, Action step)
+    /// <summary>Runs one wipe step; false when it failed. In memory the key and the queue are gone whatever happened.</summary>
+    private bool WipeStep(string what, Action step)
     {
         try
         {
             WipeFault?.Invoke(what);
             step();
+            return true;
         }
-        catch (Exception e) { _log.Error($"Could not clear the {what} ({e.GetType().Name})."); }
+        catch (Exception e)
+        {
+            _log.Error($"Could not clear the {what} ({e.GetType().Name}).");
+            return false;
+        }
         finally
         {
-            if (what == "key") ReplaceVaultKey(null);   // in memory at least, whatever happened to the file
+            if (what == "key") ReplaceVaultKey(null);
+            else if (what == "queue") _queue = new OutboundQueue(_queuePath, _cacheKey);
         }
+    }
+
+    private void ClearHistory()
+    {
+        if (!Cache.Clear()) throw new IOException("The history file could not be removed.");
     }
 
     /// <summary>
@@ -880,9 +902,8 @@ public sealed class DesktopHost : IAsyncDisposable
             // The same sign-in, even if a wipe replaced the session object meanwhile.
             if (_session is not { } current || current.Token != session.Token) return null;
             // The check runs first (the window opens only after it), but never upload what predates first contact.
-            if (!_settings.MetE2eServer ? HasLocalData() : BelongsElsewhere(key.KeyId))
-                current = await WipeLocalDataAsync(current).ConfigureAwait(false);
-            UpdateSettings(s => s with { MetE2eServer = true });
+            if (!_settings.MetE2eServer) current = await FirstContactAsync(current).ConfigureAwait(false);
+            else if (BelongsElsewhere(key.KeyId)) (current, _) = await WipeLocalDataAsync(current).ConfigureAwait(false);
             try { _vaultKeyStore.Save(key); }
             catch (Exception e)
             {
@@ -1133,8 +1154,10 @@ public sealed class DesktopHost : IAsyncDisposable
         {
             _log.Error($"Could not delete the offline queue ({e.GetType().Name}); emptying it instead.");
             // Never load the old file back: overwrite it with an empty queue (Clear writes even when nothing was read).
+            // If that fails too, the caller learns it (a wipe that didn't happen must be retried).
             try { new OutboundQueue(_queuePath, _cacheKey).Clear(); }
-            catch (Exception again) { _log.Error($"Could not empty the offline queue ({again.GetType().Name})."); }
+            finally { _queue = new OutboundQueue(_queuePath, _cacheKey); }
+            return;
         }
         _queue = new OutboundQueue(_queuePath, _cacheKey);   // empty in memory whatever the file says
     }

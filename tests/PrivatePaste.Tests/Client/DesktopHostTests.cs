@@ -401,6 +401,67 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.False(NewSettingsStore().Load().MetE2eServer);   // a sign-out starts the next sign-in from scratch
     }
 
+    /// <summary>Signs in once (so the data folder is set up), then leaves a copy queued the way an app from before encryption did.</summary>
+    private async Task PreE2eQueueAsync(string text)
+    {
+        var first = await SignedInHostAsync();
+        await first.DisposeAsync();
+        _hosts.Remove(first);
+        var cacheKey = Convert.FromBase64String(new SecretFile(Path.Combine(_dir, "cache.key"), new XorProtector()).Read()!);
+        new OutboundQueue(Path.Combine(_dir, "queue.dat"), cacheKey).Enqueue(new ClipboardContent.Text(text), DateTimeOffset.UtcNow);
+        ForgetFirstContact();
+    }
+
+    [Fact]
+    public async Task First_contact_clears_a_queue_file_that_could_not_be_read_at_start()
+    {
+        await PreE2eQueueAsync("plaintext from before");
+        SwitchHandler? uploads = null;
+        DesktopHost host;
+        // Locked while the app starts (a scanner, say): the queue loads empty, but the file is still there.
+        using (new FileStream(Path.Combine(_dir, "queue.dat"), FileMode.Open, FileAccess.Read, FileShare.None))
+            host = NewHost(handler: () => uploads = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+
+        Assert.True(await host.StartAsync());
+        await WaitUntilAsync(() => NewSettingsStore().Load().MetE2eServer && host.State == SyncState.Connected);
+
+        Assert.Equal(0, QueuedCount());     // the file itself was cleared
+        await host.DisposeAsync();
+        _hosts.Remove(host);
+        var again = NewHost(handler: () => uploads = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+        Assert.True(await again.StartAsync());
+        await WaitUntilAsync(() => again.State == SyncState.Connected);
+        Assert.Empty(uploads!.Uploads);     // nothing from before encryption ever went out
+    }
+
+    [Fact]
+    public async Task A_failed_first_contact_wipe_leaves_the_marker_unset_and_the_next_check_wipes_again()
+    {
+        await PreE2eQueueAsync("plaintext from before");
+        SwitchHandler? uploads = null;
+        var host = NewHost(handler: () => uploads = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+        host.WipeFault = step => { if (step == "queue") throw new UnauthorizedAccessException(); };
+
+        Assert.True(await host.StartAsync());
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked);   // the key went with the wipe
+
+        Assert.False(NewSettingsStore().Load().MetE2eServer);
+        Assert.Equal(1, QueuedCount());     // still on disk
+        Assert.False(File.Exists(VaultKeyPath));
+        await host.DisposeAsync();
+        _hosts.Remove(host);
+
+        var queueWipes = 0;
+        var again = NewHost(handler: () => uploads = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+        again.WipeFault = step => { if (step == "queue") Interlocked.Increment(ref queueWipes); };
+        Assert.True(await again.StartAsync());
+        await WaitUntilAsync(() => NewSettingsStore().Load().MetE2eServer);
+
+        Assert.True(Volatile.Read(ref queueWipes) >= 1);
+        Assert.Equal(0, QueuedCount());
+        Assert.Empty(uploads!.Uploads);
+    }
+
     [Fact]
     public async Task Sign_out_still_wipes_when_stopping_the_session_fails()
     {
