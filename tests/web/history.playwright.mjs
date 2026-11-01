@@ -1,12 +1,12 @@
-// Browser check of the web history page: setup, lock, unlock, rows decrypted and drawn safely, Copy, Pin, Delete,
-// search and the strict CSP. Run by hand (not in CI) against a FRESH local server, never the live one:
+// Browser check of the web history page and Settings: setup, lock, unlock, rows decrypted and drawn safely, Copy, Pin,
+// Delete, search, change passphrase, add a device by QR, reset encryption and the strict CSP. Run by hand (not in CI) against a FRESH local server, never the live one:
 //
 //   PP_DB_KEY=0123456789abcdef0123 PP_PASSWORD=dev PP_DATA_DIR=<empty temp dir> \
 //     dotnet run --project src/PrivatePaste.Server --no-launch-profile --urls http://localhost:5303
 //   node tests/web/history.playwright.mjs [--url http://localhost:5303] [--password dev]
 //
 // Uses Playwright from scripts/readme (run `npm ci` there once). With PP_SCREENSHOT_DIR set, it saves the setup,
-// unlock and history states in dark and light at desktop and phone widths. It signs in once.
+// unlock, history, settings and dialog states in dark and light at desktop and phone widths. It signs in once.
 
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
@@ -20,6 +20,8 @@ const arg = (name, fallback) => {
 const url = arg('url', 'http://localhost:5303');
 const password = arg('password', 'dev');
 const passphrase = 'purple walrus eats pancakes at dawn';
+const changedPassphrase = 'orange heron naps beside the harbor';
+const resetPassphrase = 'silver otter reads maps at noon';
 const xss = '<img src=x onerror=window.__x=1>';
 const shots = process.env.PP_SCREENSHOT_DIR;
 if (shots) mkdirSync(shots, { recursive: true });
@@ -360,6 +362,148 @@ try {
   await page.fill('#unlock-passphrase', passphrase);
   await page.click('#unlock-form button');
   await until(id => document.querySelector(`.clip[data-id="${id}"] img.thumb`)?.naturalWidth > 0, imageId);
+
+  // ---- Settings: the encryption panels ----
+  const unlockWith = async phrase => {
+    await page.fill('#unlock-passphrase', phrase);
+    await page.click('#unlock-form button');
+  };
+  const lockAndReload = async () => {
+    await page.goto(`${url}/`);
+    await page.waitForSelector('#lock:not([hidden])');
+    await page.click('#lock');
+    await page.waitForSelector('#unlock:not([hidden])');
+  };
+
+  step('Settings: Add a device is available while unlocked, and the owner sees the other two panels');
+  await page.goto(`${url}/settings`);
+  await page.waitForSelector('#add-device-open:not([disabled])');
+  assert.equal(await visible('#cp-form'), true);
+  assert.equal(await visible('#reset-open'), true);
+  assert.equal(await visible('#encryption-note'), false);
+  await shoot('settings');
+
+  step('Change passphrase: checks, then the old passphrase fails and the new one unlocks');
+  await page.fill('#cp-current', passphrase);
+  await page.fill('#cp-new', 'too short');
+  await page.fill('#cp-repeat', 'too short');
+  await page.click('#cp-form button');
+  await until(() => document.getElementById('cp-error').textContent.startsWith('Use at least 12'));
+  await page.fill('#cp-new', changedPassphrase);
+  await page.fill('#cp-repeat', changedPassphrase + '!');
+  await page.click('#cp-form button');
+  await until(() => document.getElementById('cp-error').textContent === "The passphrases don't match.");
+  await page.fill('#cp-current', 'not the current passphrase');
+  await page.fill('#cp-repeat', changedPassphrase);
+  await page.click('#cp-form button');
+  await until(() => document.getElementById('cp-error').textContent === 'The current passphrase is wrong.');
+  await page.fill('#cp-current', passphrase);
+  await page.click('#cp-form button');
+  await until(() => document.getElementById('cp-status').textContent === 'Passphrase changed.');
+  assert.equal(await visible('#cp-error'), false);
+  assert.equal(await page.inputValue('#cp-new'), '');
+  await lockAndReload();
+  await unlockWith(passphrase);
+  await page.waitForSelector('#unlock-error:not([hidden])', { timeout: 30000 });
+  assert.equal(await text('#unlock-error'), "That passphrase doesn't unlock this server's history.");
+  await unlockWith(changedPassphrase);
+  await page.waitForSelector('#clips-view:not([hidden])', { timeout: 30000 });
+
+  step('Add a device: the code carries a handover that opens to the same key, once');
+  await page.goto(`${url}/settings`);
+  await page.waitForSelector('#add-device-open:not([disabled])');
+  await page.click('#add-device-open');
+  await page.waitForSelector('#qr-code[data-qr]');
+  assert.equal(await visible('#add-device-code'), true);
+  assert.match(await text('#add-device-code'), /Scan this with PrivatePaste on your phone\. It works once, for 10 minutes\./);
+  assert.match(await text('#add-device-time'), /^(9:5\d|10:00) left$/);
+  assert.ok(await page.evaluate(() => document.getElementById('qr-code').width > 100));
+  await shoot('add-device');
+  const opened = await page.evaluate(async () => {
+    const e2e = await import(document.getElementById('add-device').dataset.e2e);
+    const headers = { 'X-PrivatePaste-Protocol': '2' };
+    const parsed = e2e.parseHandoverQr(document.getElementById('qr-code').getAttribute('data-qr'));
+    const wrap = await (await fetch('/api/vault', { headers })).json();
+    const first = await fetch(`/api/vault/handovers/${parsed.id}`, { headers });
+    const blob = Uint8Array.from(atob((await first.json()).blob), c => c.charCodeAt(0));
+    const vault = await e2e.openHandover(parsed.otk, blob, parsed.keyId);
+    const second = await fetch(`/api/vault/handovers/${parsed.id}`, { headers });
+    return { parsed: parsed.keyId, opened: vault.keyId, server: wrap.keyId, secondStatus: second.status };
+  });
+  assert.equal(opened.parsed, opened.server);
+  assert.equal(opened.opened, opened.server);
+  assert.equal(opened.secondStatus, 404);
+
+  step('closing the dialog drops the code');
+  await page.click('#add-device-close');
+  assert.equal(await page.locator('#qr-code').getAttribute('data-qr'), null);
+  assert.equal(await visible('#add-device-code'), false);
+
+  step('a code that cannot be made says so and offers a new one');
+  await page.route('**/api/vault/handovers', route => route.fulfill({ status: 500, json: {} }));
+  await page.click('#add-device-open');
+  await page.waitForSelector('#add-device-error:not([hidden])');
+  assert.equal(await text('#add-device-error'), "Couldn't make a code. Check your connection.");
+  assert.equal(await page.locator('#qr-code').getAttribute('data-qr'), null);
+  await page.unroute('**/api/vault/handovers');
+  await page.click('#add-device-new');
+  await page.waitForSelector('#qr-code[data-qr]');
+  assert.equal(await visible('#add-device-error'), false);
+
+  step('the code is hidden when the countdown reaches 0');
+  await page.click('#add-device-close');
+  await page.clock.install();
+  await page.click('#add-device-open');
+  await page.waitForSelector('#qr-code[data-qr]');
+  await page.clock.fastForward('09:58');
+  await until(() => /^0:0[0-3] left$/.test(document.getElementById('add-device-time').textContent));
+  assert.notEqual(await page.locator('#qr-code').getAttribute('data-qr'), null);
+  await page.clock.fastForward('00:05');
+  await page.waitForSelector('#add-device-code', { state: 'hidden' });
+  assert.equal(await page.locator('#qr-code').getAttribute('data-qr'), null);
+  assert.equal(await text('#add-device-new'), 'Show a new code');
+  await page.click('#add-device-new');
+  await page.waitForSelector('#qr-code[data-qr]');
+  assert.match(await text('#add-device-time'), /^(9:5\d|10:00) left$/);
+  await page.click('#add-device-close');
+
+  step('Reset encryption: the dialog states the cost, checks the passphrase, and starts over');
+  const keyBefore = await page.evaluate(() => sessionStorage.getItem('pp.vault'));
+  await page.click('#reset-open');
+  await page.waitForSelector('#reset-dialog[open]');
+  assert.match(await text('#reset-dialog'),
+    /This deletes the whole history, pinned clips included, on every device\. Devices need the new passphrase\./);
+  assert.equal(await text('#reset-dialog button.danger'), 'Delete history and reset');
+  await shoot('reset-dialog');
+  await page.fill('#reset-new', 'short one');
+  await page.fill('#reset-repeat', 'short one');
+  await page.click('#reset-form button.danger');
+  await until(() => document.getElementById('reset-error').textContent.startsWith('Use at least 12'));
+  await page.fill('#reset-new', resetPassphrase);
+  await page.fill('#reset-repeat', resetPassphrase + '!');
+  await page.click('#reset-form button.danger');
+  await until(() => document.getElementById('reset-error').textContent === "The passphrases don't match.");
+  await page.click('#reset-cancel');
+  assert.equal(await page.locator('#reset-dialog[open]').count(), 0);
+  await page.click('#reset-open');
+  assert.equal(await page.inputValue('#reset-new'), '');
+  await page.fill('#reset-new', resetPassphrase);
+  await page.fill('#reset-repeat', resetPassphrase);
+  await page.click('#reset-form button.danger');
+  await until(() => !document.getElementById('reset-dialog').open, undefined, 30000);
+  const keyAfter = await page.evaluate(() => sessionStorage.getItem('pp.vault'));
+  assert.ok(keyAfter && keyAfter !== keyBefore, 'this tab holds the new key');
+  await page.goto(`${url}/`);
+  await page.waitForSelector('#history-empty:not([hidden])', { timeout: 30000 });
+  assert.equal(await page.locator('.clip').count(), 0);
+  await page.click('#lock');
+  await page.waitForSelector('#unlock:not([hidden])');
+  await unlockWith(changedPassphrase);
+  await page.waitForSelector('#unlock-error:not([hidden])', { timeout: 30000 });
+  assert.equal(await text('#unlock-error'), "That passphrase doesn't unlock this server's history.");
+  await unlockWith(resetPassphrase);
+  await page.waitForSelector('#history-empty:not([hidden])', { timeout: 30000 });
+
   assert.deepEqual(cspViolations, []);
   assert.deepEqual(pageErrors, []);
 

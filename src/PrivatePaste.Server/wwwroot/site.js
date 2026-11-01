@@ -148,7 +148,7 @@ document.getElementById("auto-delete")?.addEventListener("change", (event) => {
         })
         .catch((error) => {
             console.error(error);
-            status.textContent = "Could not save";
+            status.textContent = "Couldn't save";
         });
 });
 
