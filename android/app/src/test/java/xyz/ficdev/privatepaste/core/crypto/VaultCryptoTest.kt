@@ -7,13 +7,12 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
-import org.junit.Assume.assumeTrue
 import org.junit.Test
+import xyz.ficdev.privatepaste.core.ContentHash
 import xyz.ficdev.privatepaste.core.model.VaultWrap
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -55,6 +54,7 @@ class VaultCryptoTest {
         assertEquals(payload.str("json"), String(SealedBox.open(key, payload.str("purpose"), sealed)))
 
         val blob = section("blob")
+        assertEquals(blob.str("chunkSize").toInt(), BlobCipher.CHUNK_SIZE)
         val plain = blobPlaintext(blob.str("plaintextLength").toInt())
         assertEquals(blob.str("plaintextSha256"), sha256(plain))
         val encrypted = ByteArrayOutputStream()
@@ -71,6 +71,7 @@ class VaultCryptoTest {
         assertEquals(empty.str("ciphertext"), emptyOut.toByteArray().hex())
 
         val keyed = section("keyedHash")
+        assertEquals(keyed.str("contentHash"), ContentHash.text(keyed.str("text")))
         assertEquals(keyed.str("keyedHash"), KeyedHash.forHash(key, keyed.str("contentHash")))
 
         val handover = section("handover")
@@ -235,18 +236,66 @@ class VaultCryptoTest {
             assertEquals(PassphraseWrap.COMMON_MESSAGE, PassphraseWrap.problem("password1234"))
             assertEquals(PassphraseWrap.COMMON_MESSAGE, PassphraseWrap.problem("letmeinletmein"))
             assertNull(PassphraseWrap.problem("# comment      "))
+            assertNull(PassphraseWrap.problem("  letmeinletmein  "))
             assertNull(PassphraseWrap.problem("my cat eats lemons daily"))
         } finally {
             PassphraseWrap.useCommonList(ByteArrayInputStream(ByteArray(0)))
         }
     }
 
+    // The SHA-256 of the shared list (src/PrivatePaste.Server/wwwroot/js/common-passphrases.txt); update it with the list.
     @Test
-    fun commonListMatchesWebCopy() {
-        val web = File("../../src/PrivatePaste.Server/wwwroot/js/common-passphrases.txt")
-        assumeTrue("the web copy of the common list doesn't exist yet", web.exists())
+    fun bundledCommonListIsTheSharedList() {
         val bundled = File("src/main/assets/common-passphrases.txt")
-        assertEquals(sha256(web.readBytes()), sha256(bundled.readBytes()))
-        assertFalse(bundled.readText().isBlank())
+        assertEquals("8ce67ae3206188e600ba31179311f8a937d359cdcc963dae997d42e2ca9cb75f", sha256(bundled.readBytes()))
+        val web = File("../../src/PrivatePaste.Server/wwwroot/js/common-passphrases.txt")
+        if (web.exists()) assertEquals(sha256(web.readBytes()), sha256(bundled.readBytes()))
+    }
+
+    @Test
+    fun bundledCommonListRejectsAKnownEntry() {
+        val bundled = File("src/main/assets/common-passphrases.txt")
+        val entry = bundled.readLines().first { it.isNotEmpty() && !it.startsWith("#") }
+        PassphraseWrap.useCommonList(bundled.inputStream())
+        try {
+            assertEquals(PassphraseWrap.COMMON_MESSAGE, PassphraseWrap.problem(entry.uppercase()))
+        } finally {
+            PassphraseWrap.useCommonList(ByteArrayInputStream(ByteArray(0)))
+        }
+    }
+
+    @Test
+    fun unwrapRejectsHostileWraps() {
+        val wrap = PassphraseWrap.wrap(VaultKey.create(), "correct horse battery")
+        val phrase = "correct horse battery"
+        fun rejects(bad: VaultWrap) {
+            assertThrows(GeneralSecurityException::class.java) { PassphraseWrap.unwrap(bad, phrase) }
+        }
+        rejects(wrap.copy(nonce = "not base64!"))
+        rejects(wrap.copy(nonce = ""))
+        rejects(wrap.copy(wrappedKey = "AAAA"))
+        rejects(wrap.copy(keyId = "XYZ"))
+        rejects(wrap.copy(kdf = wrap.kdf.copy(alg = "pbkdf2")))
+        rejects(wrap.copy(kdf = wrap.kdf.copy(salt = "AAAA")))
+        rejects(wrap.copy(kdf = wrap.kdf.copy(memoryKiB = 1_048_576)))
+        rejects(wrap.copy(kdf = wrap.kdf.copy(memoryKiB = 1024)))
+        rejects(wrap.copy(kdf = wrap.kdf.copy(iterations = 1_000_000)))
+        rejects(wrap.copy(kdf = wrap.kdf.copy(parallelism = 0)))
+        // A flipped nonce byte is a well-formed wrap that simply doesn't open.
+        val nonce = java.util.Base64.getDecoder().decode(wrap.nonce).also { it[0] = (it[0].toInt() xor 1).toByte() }
+        assertThrows(WrongPassphraseException::class.java) {
+            PassphraseWrap.unwrap(wrap.copy(nonce = java.util.Base64.getEncoder().encodeToString(nonce)), phrase)
+        }
+    }
+
+    @Test
+    fun closedKeyIsWipedAndUnusable() {
+        val key = VaultKey.create()
+        val snapshot = key.encKey
+        key.close()
+        assertArrayEquals(ByteArray(32), snapshot)
+        assertThrows(IllegalStateException::class.java) { key.export() }
+        assertThrows(IllegalStateException::class.java) { SealedBox.seal(key, "payload", ByteArray(1)) }
+        assertThrows(IllegalStateException::class.java) { KeyedHash.forHash(key, "x") }
     }
 }

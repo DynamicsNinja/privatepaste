@@ -8,10 +8,10 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.security.GeneralSecurityException
-import java.security.MessageDigest
 import java.security.SecureRandom
 import java.text.Normalizer
 import java.util.Base64
+import java.util.Locale
 import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.Mac
@@ -27,7 +27,7 @@ private val random = SecureRandom()
 
 private fun randomBytes(size: Int) = ByteArray(size).also { random.nextBytes(it) }
 
-private fun ascii(text: String) = text.toByteArray(Charsets.UTF_8)
+private fun utf8(text: String) = text.toByteArray(Charsets.UTF_8)
 
 private fun gcm(mode: Int, key: ByteArray, nonce: ByteArray, aad: ByteArray): Cipher =
     Cipher.getInstance("AES/GCM/NoPadding").apply {
@@ -44,21 +44,50 @@ private fun hmacSha256(key: ByteArray, data: ByteArray): ByteArray =
 /** HKDF-SHA256 with no salt (RFC 5869 treats that as 32 zero bytes). Every length used here fits one block. */
 private fun hkdf(ikm: ByteArray, info: String): ByteArray {
     val prk = hmacSha256(ByteArray(32), ikm)
-    return hmacSha256(prk, ascii(info) + byteArrayOf(1))
+    try {
+        return hmacSha256(prk, utf8(info) + byteArrayOf(1))
+    } finally {
+        prk.fill(0)
+    }
 }
 
 private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
 
-/** The per-server vault key (VK) and the subkeys derived from it. The server never sees any of these. */
-class VaultKey private constructor(private val vk: ByteArray) {
-    internal val encKey: ByteArray = hkdf(vk, "privatepaste v1 enc")
-    internal val hashKey: ByteArray = hkdf(vk, "privatepaste v1 hash")
+/**
+ * The per-server vault key (VK) and the subkeys derived from it. The server never sees any of these. [close] wipes the
+ * key material; any use afterwards throws [IllegalStateException].
+ */
+class VaultKey private constructor(private val vk: ByteArray) : AutoCloseable {
+    private val enc: ByteArray = hkdf(vk, "privatepaste v1 enc")
+    private val hash: ByteArray = hkdf(vk, "privatepaste v1 hash")
+    private var closed = false
 
     /** Identifies the key without revealing it, so devices can tell whether they hold the server's current vault. */
-    val keyId: String = hex(hkdf(vk, "privatepaste v1 key id").copyOfRange(0, 8))
+    val keyId: String = hkdf(vk, "privatepaste v1 key id").let { full ->
+        try {
+            hex(full.copyOfRange(0, 8))
+        } finally {
+            full.fill(0)
+        }
+    }
+
+    internal val encKey: ByteArray get() = live(enc)
+    internal val hashKey: ByteArray get() = live(hash)
 
     /** A copy of the raw key; the caller owns it and should zero it when done. */
-    fun export(): ByteArray = vk.clone()
+    fun export(): ByteArray = live(vk).clone()
+
+    override fun close() {
+        closed = true
+        vk.fill(0)
+        enc.fill(0)
+        hash.fill(0)
+    }
+
+    private fun live(bytes: ByteArray): ByteArray {
+        check(!closed) { "The vault key was closed." }
+        return bytes
+    }
 
     companion object {
         const val LENGTH = 32
@@ -101,7 +130,7 @@ object SealedBox {
     // "blob" has its own format and "handover" its own key, so only vault purposes go through the public API.
     private fun aad(purpose: String): ByteArray {
         require(purpose == "payload" || purpose == "thumb") { "Unknown purpose '$purpose'." }
-        return ascii("privatepaste v1 $purpose")
+        return utf8("privatepaste v1 $purpose")
     }
 }
 
@@ -116,7 +145,7 @@ object BlobCipher {
     private const val VERSION: Byte = 2
     private const val PREFIX_SIZE = 8
     private const val HEADER_SIZE = 1 + PREFIX_SIZE
-    private val aadLabel = ascii("privatepaste v1 blob")
+    private val aadLabel = utf8("privatepaste v1 blob")
 
     fun encrypt(key: VaultKey, input: InputStream, output: OutputStream) = encrypt(key, input, output, randomBytes(PREFIX_SIZE))
 
@@ -197,7 +226,7 @@ object BlobCipher {
 /** The hash the server sees for dedup: a plain content hash would let anyone confirm a guessed clip, so it is keyed. */
 object KeyedHash {
     /** Lowercase hex of HMAC-SHA256(hashKey, UTF8(contentHash)). */
-    fun forHash(key: VaultKey, contentHash: String): String = hex(hmacSha256(key.hashKey, ascii(contentHash)))
+    fun forHash(key: VaultKey, contentHash: String): String = hex(hmacSha256(key.hashKey, utf8(contentHash)))
 }
 
 class HandoverQr(val id: UUID, val otk: ByteArray, val keyId: String)
@@ -209,7 +238,7 @@ class HandoverQr(val id: UUID, val otk: ByteArray, val keyId: String)
 object Handover {
     private const val QR_PREFIX = "privatepaste:handover?"
     private const val OTK_SIZE = 32
-    private val aad = ascii("privatepaste v1 handover")
+    private val aad = utf8("privatepaste v1 handover")
     private val keyIdPattern = Regex("^[0-9a-f]{16}$")
     private val uuidPattern = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
@@ -235,7 +264,10 @@ object Handover {
         try {
             if (vk.size != VaultKey.LENGTH) throw GeneralSecurityException("The handover holds no vault key.")
             val key = VaultKey.fromBytes(vk)
-            if (key.keyId != expectedKeyId) throw GeneralSecurityException("The handover holds a different vault key.")
+            if (key.keyId != expectedKeyId) {
+                key.close()
+                throw GeneralSecurityException("The handover holds a different vault key.")
+            }
             return key
         } finally {
             vk.fill(0)
@@ -276,7 +308,11 @@ object Handover {
 /** Thrown when the passphrase doesn't open a wrap. It can't tell a wrong passphrase from a damaged wrap. */
 class WrongPassphraseException : GeneralSecurityException("That passphrase doesn't unlock this vault.")
 
-/** Wraps the vault key under a passphrase-derived key (Argon2id) so the server can store it without being able to open it. */
+/**
+ * Wraps the vault key under a passphrase-derived key (Argon2id) so the server can store it without being able to open
+ * it. [deriveKek], [wrap] and [unwrap] allocate about 64 MiB and take seconds: call them off the main thread
+ * (Dispatchers.Default).
+ */
 object PassphraseWrap {
     const val MIN_LENGTH = 12
     const val RULE_MESSAGE = "Use at least 12 characters. A short sentence works well."
@@ -286,25 +322,33 @@ object PassphraseWrap {
     private const val ITERATIONS = 3
     private const val PARALLELISM = 1
     private const val SALT_BYTES = 16
+    private const val WRAPPED_KEY_BYTES = VaultKey.LENGTH + GCM_TAG_BYTES
+
+    // Client-side bounds on what a server-supplied wrap may ask for, so a hostile server can't exhaust memory or hang us.
+    private val memoryRange = 65536..262144
+    private val iterationsRange = 3..10
+    private val parallelismRange = 1..8
+    private val keyIdPattern = Regex("^[0-9a-f]{16}$")
 
     @Volatile
     private var common: Set<String> = emptySet()
 
     /**
-     * Loads the bundled list (assets/common-passphrases.txt): one entry per line, `#` lines are comments. Comparison
-     * ignores case. Until a list is loaded, only the length rule applies.
+     * Loads the bundled list (assets/common-passphrases.txt): one entry per line, `#` lines are comments. Entries are
+     * NFC-normalized and lowercased once here, like the browser does. Until a list is loaded, only the length rule applies.
      */
     fun useCommonList(stream: InputStream) {
         common = stream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-            lines.map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }.map { it.lowercase() }.toSet()
+            lines.filter { it.isNotEmpty() && !it.startsWith("#") }
+                .map { normalize(it).lowercase(Locale.ROOT) }.toSet()
         }
     }
 
-    /** Null when the passphrase is acceptable, otherwise the message to show. */
+    /** Null when the passphrase is acceptable, otherwise the message to show. Same rule as the browser's passphraseProblem. */
     fun problem(passphrase: String): String? {
         val normalized = normalize(passphrase)
         if (normalized.length < MIN_LENGTH) return RULE_MESSAGE
-        return if (normalized.trim().lowercase() in common) COMMON_MESSAGE else null
+        return if (normalized.lowercase(Locale.ROOT) in common) COMMON_MESSAGE else null
     }
 
     fun wrap(key: VaultKey, passphrase: String): VaultWrap {
@@ -327,18 +371,36 @@ object PassphraseWrap {
         }
     }
 
-    /** @throws WrongPassphraseException if the passphrase doesn't open the wrap (or the wrap's key id doesn't match its key). */
+    /**
+     * The wrap comes from the server, so it is validated before any work is done.
+     * @throws WrongPassphraseException if the passphrase doesn't open the wrap (or the wrap's key id doesn't match its key).
+     * @throws GeneralSecurityException if the wrap is malformed or asks for parameters outside the client bounds.
+     */
     fun unwrap(wrap: VaultWrap, passphrase: String): VaultKey {
         val kdf = wrap.kdf
         val b64 = Base64.getDecoder()
-        val kek = try {
-            deriveKek(passphrase, b64.decode(kdf.salt), kdf.memoryKiB, kdf.iterations, kdf.parallelism)
-        } catch (e: IllegalArgumentException) {
-            throw GeneralSecurityException("The vault wrap is malformed.", e)
+        fun decode(text: String, size: Int, what: String): ByteArray {
+            val bytes = try {
+                b64.decode(text)
+            } catch (e: IllegalArgumentException) {
+                throw GeneralSecurityException("The vault wrap has a malformed $what.", e)
+            }
+            if (bytes.size != size) throw GeneralSecurityException("The vault wrap has a malformed $what.")
+            return bytes
         }
+        if (kdf.alg != "argon2id") throw GeneralSecurityException("The vault wrap uses an unsupported KDF.")
+        if (!keyIdPattern.matches(wrap.keyId)) throw GeneralSecurityException("The vault wrap has a malformed key id.")
+        if (kdf.memoryKiB !in memoryRange || kdf.iterations !in iterationsRange || kdf.parallelism !in parallelismRange) {
+            throw GeneralSecurityException("The vault wrap asks for KDF parameters outside the supported range.")
+        }
+        val salt = decode(kdf.salt, SALT_BYTES, "salt")
+        val nonce = decode(wrap.nonce, GCM_NONCE_BYTES, "nonce")
+        val wrapped = decode(wrap.wrappedKey, WRAPPED_KEY_BYTES, "wrapped key")
+
+        val kek = deriveKek(passphrase, salt, kdf.memoryKiB, kdf.iterations, kdf.parallelism)
         try {
             val vk = try {
-                gcm(Cipher.DECRYPT_MODE, kek, b64.decode(wrap.nonce), aad(wrap.keyId)).doFinal(b64.decode(wrap.wrappedKey))
+                gcm(Cipher.DECRYPT_MODE, kek, nonce, aad(wrap.keyId)).doFinal(wrapped)
             } catch (_: GeneralSecurityException) {
                 throw WrongPassphraseException()
             }
@@ -346,7 +408,10 @@ object PassphraseWrap {
                 if (vk.size != VaultKey.LENGTH) throw WrongPassphraseException()
                 val key = VaultKey.fromBytes(vk)
                 // The key id is bound into the AAD, but check it too so a swapped wrap can't pass for another vault.
-                if (!MessageDigest.isEqual(ascii(key.keyId), ascii(wrap.keyId))) throw WrongPassphraseException()
+                if (key.keyId != wrap.keyId) {
+                    key.close()
+                    throw WrongPassphraseException()
+                }
                 return key
             } finally {
                 vk.fill(0)
@@ -364,7 +429,7 @@ object PassphraseWrap {
             .withIterations(iterations)
             .withParallelism(parallelism)
             .build()
-        val password = ascii(normalize(passphrase))
+        val password = utf8(normalize(passphrase))
         try {
             return ByteArray(32).also { Argon2BytesGenerator().apply { init(params) }.generateBytes(password, it) }
         } finally {
@@ -372,8 +437,8 @@ object PassphraseWrap {
         }
     }
 
-    // NFC, so a keyboard that types "š" as s + combining caron unlocks the same vault as one that types it composed.
+    // NFC, so a keyboard that types "s + combining caron" unlocks the same vault as one that types it composed.
     private fun normalize(passphrase: String) = Normalizer.normalize(passphrase, Normalizer.Form.NFC)
 
-    private fun aad(keyId: String) = ascii("privatepaste v1 vault $keyId")
+    private fun aad(keyId: String) = utf8("privatepaste v1 vault $keyId")
 }
