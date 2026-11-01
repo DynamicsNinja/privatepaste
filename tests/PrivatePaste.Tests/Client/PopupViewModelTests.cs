@@ -162,6 +162,20 @@ public class PopupViewModelTests
         Assert.Empty(vm.Items);  // no more searches offered while locked
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Only_the_locked_exception_is_quiet(bool locked)
+    {
+        _olderFails = locked ? new VaultLockedException() : new InvalidOperationException("some other bug");
+        var vm = Create(CacheWith(Text("beta", 1, 2)));
+        vm.Query = "alpha";
+
+        await vm.ActivateSelectedAsync();
+
+        Assert.Equal(locked ? [] : ["Can't reach the server."], _toasts);
+    }
+
     [Fact]
     public void No_search_older_row_without_a_query_on_pinned_or_when_locked()
     {

@@ -350,6 +350,7 @@ public class DesktopHostTests : IAsyncLifetime
         old.Save();
         new OutboundQueue(Path.Combine(_dir, "queue.dat"), cacheKey).Enqueue(new ClipboardContent.Text("queued before encryption"),
             DateTimeOffset.UtcNow);
+        ForgetFirstContact();
         SwitchHandler? uploads = null;
         var host = NewHost(handler: () => uploads = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
         Assert.Contains(host.Cache.Items, i => i.Clip.Text == "from before encryption");
@@ -363,6 +364,65 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Equal(_vaultKey.KeyId, host.Cache.KeyId);
         Assert.Equal(0, OutboundQueue.Load(Path.Combine(_dir, "queue.dat"), cacheKey).Count);
         Assert.Empty(uploads!.Uploads);   // the queued plaintext copy never went out
+        Assert.True(NewSettingsStore().Load().MetE2eServer);
+    }
+
+    /// <summary>Makes the settings look like those of an app from before encryption (it never met an encrypted server).</summary>
+    private void ForgetFirstContact()
+    {
+        var store = NewSettingsStore();
+        store.Save(store.Load() with { MetE2eServer = false });
+    }
+
+    [Fact]
+    public async Task Host_PreE2eQueueWithoutHistoryIsWipedAndNeverUploaded()
+    {
+        var first = await SignedInHostAsync();
+        await first.DisposeAsync();
+        _hosts.Remove(first);
+        // An app from before encryption with no history yet, only a copy waiting to be sent (key id null).
+        File.Delete(Path.Combine(_dir, "cache.dat"));
+        var cacheKey = Convert.FromBase64String(new SecretFile(Path.Combine(_dir, "cache.key"), new XorProtector()).Read()!);
+        new OutboundQueue(Path.Combine(_dir, "queue.dat"), cacheKey).Enqueue(new ClipboardContent.Text("plaintext from before"),
+            DateTimeOffset.UtcNow);
+        ForgetFirstContact();
+        SwitchHandler? uploads = null;
+        var host = NewHost(handler: () => uploads = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+        Assert.Empty(host.Cache.Items);
+
+        Assert.True(await host.StartAsync());
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked);
+
+        Assert.Equal(0, QueuedCount());
+        Assert.False(File.Exists(VaultKeyPath));
+        Assert.True(NewSettingsStore().Load().MetE2eServer);
+        await host.SignOutAsync();
+        Assert.Empty(uploads!.Uploads);
+        Assert.False(NewSettingsStore().Load().MetE2eServer);   // a sign-out starts the next sign-in from scratch
+    }
+
+    [Fact]
+    public async Task Sign_out_still_wipes_when_stopping_the_session_fails()
+    {
+        var host = await SignedInHostAsync();
+        _clipboard.Current = new ClipboardContent.Text("in the history");
+        _clipboard.RaiseChanged();
+        await WaitUntilAsync(() => host.Cache.Items.Any(i => i.Clip.Text == "in the history"));
+        await WaitUntilAsync(() => File.Exists(Path.Combine(_dir, "cache.dat")));
+        var signedOut = 0;
+        host.SignedOut += (_, _) => signedOut++;
+        host.WipeFault = step => { if (step == "session") throw new InvalidOperationException("boom"); };
+
+        await host.SignOutAsync();
+
+        Assert.Equal(1, signedOut);
+        Assert.False(File.Exists(TokenPath));
+        Assert.False(File.Exists(VaultKeyPath));
+        Assert.False(File.Exists(Path.Combine(_dir, "cache.dat")));
+        Assert.Empty(host.Cache.Items);
+        Assert.Null(host.Codec);
+        Assert.Equal(VaultState.Unknown, host.VaultState);
+        Assert.False(NewSettingsStore().Load().MetE2eServer);
     }
 
     [Fact]
@@ -703,6 +763,20 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Equal(VaultState.WaitingForOwner, ana.VaultState);
         Assert.Equal(1, QueuedCount(dir));
         Assert.Same(coordinator, ana.Coordinator);   // nothing was wiped or rebuilt
+
+        // The owner sets up; ana's next recheck finds the vault, and after the unlock the copy goes out under its key.
+        var owner = await SignInAsync(NewHost(server: server, dir: Path.Combine(_dir, "owner"), unlocked: false));
+        Assert.Null(await owner.SetUpVaultAsync(Passphrase, Passphrase));
+        await WaitUntilAsync(() =>
+        {
+            time.Advance(DesktopHost.RecheckInterval);
+            return ana.VaultState == VaultState.Locked;
+        });
+        Assert.Equal(1, QueuedCount(dir));
+        Assert.Null(await ana.UnlockAsync(Passphrase));
+        await WaitUntilAsync(() => ana.Cache.Items.Any(i => i.Clip.Text == "copied while waiting"));
+        await WaitUntilAsync(() => QueuedCount(dir) == 0);
+        await WaitUntilAsync(() => owner.Cache.Items.Any(i => i.Clip.Text == "copied while waiting"));
     }
 
     /// <summary>A server from before end-to-end encryption: no /api/server-info.</summary>

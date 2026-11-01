@@ -10,7 +10,10 @@ public sealed record ClientSettings(
     // A settings file from before this key existed loads as true (the constructor default).
     bool NotifyOnClipArrival = true,
     // The name last signed in with; prefills the sign-in window. Empty in a file from before there were people.
-    string Username = "")
+    string Username = "",
+    // Set once this install first met a server with end-to-end encryption and cleared what it held from before (history,
+    // thumbnails, queue): until then nothing local may be uploaded. False in a file from before encryption; cleared on sign-out.
+    bool MetE2eServer = false)
 {
     /// <summary>
     /// Apps whose copies are never synced (see <see cref="PrivatePaste.Client.Core.Settings.BlockedApps.Matches"/>).

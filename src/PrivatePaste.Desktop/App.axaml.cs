@@ -317,7 +317,7 @@ public partial class App : Application
     private IAsyncEnumerable<ClipDto> SearchOlder(string query, CancellationToken ct) =>
         _host?.Api is { } api && _host.Codec is { } codec
             ? new OlderClipSearch(api, codec).SearchAsync(query, null, ct)
-            : throw new InvalidOperationException("Locked or signed out.");
+            : throw new VaultLockedException();
 
     private async Task<ClipDto> PinFromPopupAsync(Guid id, bool pinned) =>
         Codec().Decode(await (_host?.Api ?? throw new InvalidOperationException("Signed out.")).PinAsync(id, pinned));

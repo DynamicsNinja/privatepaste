@@ -9,6 +9,9 @@ namespace PrivatePaste.Desktop.ViewModels;
 
 public enum PopupTab { History, Pinned }
 
+/// <summary>A server lookup that needs the vault key was asked for while locked or signed out.</summary>
+public sealed class VaultLockedException() : InvalidOperationException("Locked or signed out.");
+
 /// <summary>
 /// One popup row. <see cref="IsNewest"/> is true only for the first row while the query is empty. The
 /// <see cref="SearchOlder"/> row is not a clip: Enter on it searches the server's older history.
@@ -188,7 +191,7 @@ public sealed partial class PopupViewModel : ObservableObject
             _olderDone = true;
         }
         catch (OperationCanceledException) { return; }
-        catch (Exception e) when (e is VaultKeyClosedException or InvalidOperationException)
+        catch (Exception e) when (e is VaultKeyClosedException or VaultLockedException)
         {
             // Locked (a reset, a sign-out) meanwhile: not a network problem. What was found stays; the banner says the rest.
             _olderUnavailable = true;
