@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using PrivatePaste.Protocol;
+using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Server.Clips;
 using PrivatePaste.Server.Storage;
 
@@ -14,22 +15,22 @@ public class AutoDeleteServiceTests
     private static readonly DeviceIdentity Device = new(null, "test", "windows", null);
 
     private sealed record Rig(PrivatePasteFactory F, SettingsRepository Settings, ClipService Clips,
-        ClipRepository Repo, AutoDeleteService Service)
+        ClipRepository Repo, AutoDeleteService Service, VaultKey Key)
     {
         // Backfills older than the auto-delete age are refused, so the setting is lifted while seeding old clips.
         public async Task<ClipDto> AddAsync(string text, TimeSpan age)
         {
             var days = await Settings.GetAutoDeleteDaysAsync();
             await Settings.SetAutoDeleteDaysAsync(null);
-            try { return await Clips.AddTextAsync(new TextClipUpload(text, F.Clock.GetUtcNow() - age, true), Device); }
+            try { return await Clips.AddAsync(PrivatePasteFactory.TextMeta(Key, text, F.Clock.GetUtcNow() - age, true), null, [], Device); }
             finally { await Settings.SetAutoDeleteDaysAsync(days); }
         }
 
         public async Task<HashSet<string?>> TextsAsync() =>
-            (await Repo.ListAsync(null, 100)).Items.Select(c => c.Text).ToHashSet();
+            (await Repo.ListAsync(null, 100)).Items.Select(c => ClipPayload.Open(Key, c.Payload!).Text).ToHashSet();
     }
 
-    private static Rig NewRig(PrivatePasteFactory f)
+    private static async Task<Rig> NewRigAsync(PrivatePasteFactory f)
     {
         // The host's own AutoDeleteService shares the fake clock and would also run on Advance, so drop it:
         // only the instance built below may delete anything.
@@ -38,15 +39,17 @@ public class AutoDeleteServiceTests
         var sp = app.Services;
         var settings = sp.GetRequiredService<SettingsRepository>();
         var clips = sp.GetRequiredService<ClipService>();
+        var key = VaultKey.Create();
+        Assert.True(await sp.GetRequiredService<VaultRepository>().CreateAsync(PrivatePasteFactory.RandomWrap(key.KeyId)));
         return new Rig(f, settings, clips, sp.GetRequiredService<ClipRepository>(),
-            new AutoDeleteService(settings, clips, f.Clock, NullLogger<AutoDeleteService>.Instance));
+            new AutoDeleteService(settings, clips, f.Clock, NullLogger<AutoDeleteService>.Instance), key);
     }
 
     [Fact]
     public async Task Off_deletes_nothing()
     {
         using var f = new PrivatePasteFactory();
-        var r = NewRig(f);
+        var r = await NewRigAsync(f);
         await r.AddAsync("ancient", TimeSpan.FromDays(400));
 
         Assert.Equal(0, await r.Service.RunOnceAsync());
@@ -57,7 +60,7 @@ public class AutoDeleteServiceTests
     public async Task Thirty_days_deletes_old_unpinned_and_keeps_recent_and_pinned()
     {
         using var f = new PrivatePasteFactory();
-        var r = NewRig(f);
+        var r = await NewRigAsync(f);
         await r.Settings.SetAutoDeleteDaysAsync(30);
         await r.AddAsync("old", TimeSpan.FromDays(31));
         await r.AddAsync("recent", TimeSpan.FromDays(29));
@@ -72,7 +75,7 @@ public class AutoDeleteServiceTests
     public async Task A_year_old_clip_unpinned_now_survives()
     {
         using var f = new PrivatePasteFactory();
-        var r = NewRig(f);
+        var r = await NewRigAsync(f);
         await r.Settings.SetAutoDeleteDaysAsync(30);
         var clip = await r.AddAsync("was pinned", TimeSpan.FromDays(365));
         await r.Clips.SetPinnedAsync(clip.Id, true);
@@ -86,7 +89,7 @@ public class AutoDeleteServiceTests
     public async Task Runs_at_start_and_again_every_hour()
     {
         using var f = new PrivatePasteFactory();
-        var r = NewRig(f);
+        var r = await NewRigAsync(f);
         await r.Settings.SetAutoDeleteDaysAsync(30);
         await r.AddAsync("first", TimeSpan.FromDays(40));
 

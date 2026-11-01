@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Claims;
-using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Net.Http.Headers;
 using PrivatePaste.Protocol;
@@ -10,7 +11,7 @@ using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Server.Api;
 
-public static class ClipEndpoints
+public static partial class ClipEndpoints
 {
     public static void MapClipEndpoints(this IEndpointRouteBuilder app)
     {
@@ -27,12 +28,9 @@ public static class ClipEndpoints
             }
         });
 
-        group.MapPost("clips/text", (TextClipUpload upload, ClaimsPrincipal user, ClipService service) =>
-            service.AddTextAsync(upload, user.ToDeviceIdentity()));
-
-        // Parses the multipart body by hand so the image is read into memory (bounded by MaxImageBytes) and never
-        // buffered to disk. Parts may come in any order: the image is only processed once every part has been read.
-        group.MapPost("clips/image", async (HttpRequest request, ClaimsPrincipal user, ClipService service) =>
+        // Parses the multipart body by hand so every part is read into memory, each bounded by its own limit, and never
+        // buffered to disk. Parts may come in any order: the clip is only checked and stored once every part is read.
+        group.MapPost("clips", async (HttpRequest request, ClaimsPrincipal user, ClipService service) =>
         {
             if (!MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType)
                 || !contentType.MediaType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase)
@@ -40,9 +38,9 @@ public static class ClipEndpoints
                 return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Expected multipart form data.");
 
             var reader = new MultipartReader(boundary, request.Body);
-            DateTimeOffset? copiedAt = null;
-            var backfill = false;
-            MemoryStream? image = null;
+            byte[]? meta = null;
+            byte[]? thumb = null;
+            var blobs = new SortedDictionary<int, byte[]>();
             try
             {
                 MultipartSection? section;
@@ -53,43 +51,59 @@ public static class ClipEndpoints
                         continue;
                     var name = HeaderUtilities.RemoveQuotes(disposition.Name).Value;
 
-                    if (name == "file")
+                    if (name == "meta")
                     {
-                        if (image is not null)
-                            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Duplicate 'file' part.");
-                        image = await service.BufferImageAsync(section.Body);
+                        if (meta is not null)
+                            return Duplicate(name);
+                        // Base64 of the largest payload, plus room for the other fields.
+                        meta = await ReadBoundedAsync(section.Body, service.MaxTextPayloadBytes / 3 * 4 + 8192, "Clip metadata");
                     }
-                    else if (name is "copiedAt" or "backfill")
+                    else if (name == "thumb")
                     {
-                        using var text = new StreamReader(section.Body, Encoding.UTF8, leaveOpen: true);
-                        var value = (await ReadSmallAsync(text)).Trim();
-                        if (name == "backfill")
-                            backfill = bool.TryParse(value, out var b) && b;
-                        else if (value.Length > 0)
-                        {
-                            if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
-                                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Invalid copiedAt.");
-                            copiedAt = parsed;
-                        }
+                        if (thumb is not null)
+                            return Duplicate(name);
+                        thumb = await ReadBoundedAsync(section.Body, ClipService.MaxThumbBytes, "Thumbnail");
+                    }
+                    else if (name is not null && BlobPart().Match(name) is { Success: true } match)
+                    {
+                        if (!int.TryParse(match.Groups[1].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
+                            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: $"Invalid part '{name}'.");
+                        if (blobs.ContainsKey(n))
+                            return Duplicate(name);
+                        blobs[n] = await ReadBoundedAsync(section.Body, service.MaxBlobBytes, "Blob");
                     }
                 }
 
-                if (image is null)
-                    return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Missing 'file' part.");
-                return Results.Ok(await service.AddImageAsync(image, copiedAt, backfill, user.ToDeviceIdentity()));
+                if (meta is null)
+                    return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Missing 'meta' part.");
+                ClipUploadMeta? parsed;
+                try
+                {
+                    parsed = JsonSerializer.Deserialize<ClipUploadMeta>(meta, ProtocolJson.Options);
+                }
+                catch (JsonException)
+                {
+                    parsed = null;
+                }
+                if (parsed is null)
+                    return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Invalid 'meta' part.");
+                // blob0, blob1, ... with no gaps.
+                if (blobs.Count > 0 && blobs.Keys.Last() != blobs.Count - 1)
+                    return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Blob parts must be numbered from 0 without gaps.");
+
+                return Results.Ok(await service.AddAsync(parsed, thumb, blobs.Values.ToList(), user.ToDeviceIdentity()));
             }
             catch (InvalidDataException)
             {
                 return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Malformed multipart body.");
             }
-            finally
-            {
-                image?.Dispose();
-            }
         });
 
-        group.MapGet("clips", async (ClipRepository repo, string? cursor, int? limit, bool? pinned) => // a q parameter is simply ignored: search is client-side now
+        group.MapGet("clips", async (ClipRepository repo, string? cursor, int? limit, bool? pinned, string? q) =>
         {
+            // The server only holds ciphertext, so it can't search; an old client asking would get a wrong, empty answer.
+            if (q is not null)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: "Search runs on your devices");
             try
             {
                 return Results.Ok(pinned == true
@@ -105,11 +119,15 @@ public static class ClipEndpoints
         group.MapGet("clips/{id:guid}", async (Guid id, ClipRepository repo) =>
             await repo.GetAsync(id) is { } clip ? Results.Ok(clip) : Results.NotFound());
 
-        group.MapGet("clips/{id:guid}/image", (Guid id, ClipRepository repo, BlobStore blobs) =>
-            ServeBlobAsync(id, ClipBlobs.Image, repo, blobs));
+        group.MapGet("clips/{id:guid}/thumb", async (Guid id, ClipRepository repo, BlobStore blobs) =>
+            await repo.GetAsync(id) is { HasThumb: true } clip
+                ? await ServeBlobAsync(ClipBlobs.Thumb(clip.Hash), blobs)
+                : Results.NotFound());
 
-        group.MapGet("clips/{id:guid}/thumbnail", (Guid id, ClipRepository repo, BlobStore blobs) =>
-            ServeBlobAsync(id, ClipBlobs.Thumbnail, repo, blobs));
+        group.MapGet("clips/{id:guid}/blobs/{n:int}", async (Guid id, int n, ClipRepository repo, BlobStore blobs) =>
+            await repo.GetAsync(id) is { } clip && n >= 0 && n < clip.BlobCount
+                ? await ServeBlobAsync(ClipBlobs.Blob(clip.Hash, n), blobs)
+                : Results.NotFound());
 
         group.MapPost("clips/{id:guid}/restore", async (Guid id, ClaimsPrincipal user, ClipService service) =>
             await service.RestoreAsync(id, user.ToDeviceIdentity()) is { } clip ? Results.Ok(clip) : Results.NotFound());
@@ -130,19 +148,29 @@ public static class ClipEndpoints
             Results.Ok(await repo.SyncAsync(afterSeq ?? 0, limit ?? 200)));
     }
 
-    private static async Task<string> ReadSmallAsync(StreamReader reader)
+    private static IResult Duplicate(string name) =>
+        Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: $"Duplicate '{name}' part.");
+
+    /// <summary>Reads a part into memory, answering 413 as soon as it exceeds <paramref name="limit"/> bytes.</summary>
+    private static async Task<byte[]> ReadBoundedAsync(Stream input, long limit, string what)
     {
-        var buffer = new char[256];
-        var n = await reader.ReadBlockAsync(buffer);
-        return new string(buffer, 0, n);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        int read;
+        while ((read = await input.ReadAsync(chunk)) > 0)
+        {
+            if (buffer.Length + read > limit)
+                throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge, $"{what} exceeds the {limit} byte limit.");
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
     }
 
-    private static async Task<IResult> ServeBlobAsync(Guid id, Func<string, string> blobName, ClipRepository repo, BlobStore blobs)
-    {
-        var clip = await repo.GetAsync(id);
-        if (clip is null || clip.Kind != ClipKind.Image)
-            return Results.NotFound();
-        var bytes = await blobs.ReadAsync(blobName(clip.Hash));
-        return bytes is null ? Results.NotFound() : Results.File(bytes, "image/png");
-    }
+    // What the server stores is the client's ciphertext, served as is.
+    private static async Task<IResult> ServeBlobAsync(string name, BlobStore blobs) =>
+        await blobs.ReadAsync(name) is { } bytes ? Results.File(bytes, "application/octet-stream") : Results.NotFound();
+
+    [GeneratedRegex(@"^blob([0-9]{1,4})\z")]
+    private static partial Regex BlobPart();
 }

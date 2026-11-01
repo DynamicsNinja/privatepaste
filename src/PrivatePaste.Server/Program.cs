@@ -10,7 +10,6 @@ using PrivatePaste.Server.Api;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Clips;
 using PrivatePaste.Server.Config;
-using PrivatePaste.Server.Images;
 using PrivatePaste.Server.Realtime;
 using PrivatePaste.Server.Storage;
 
@@ -32,7 +31,6 @@ builder.Services.AddSingleton<ClipRepository>();
 builder.Services.AddSingleton<SettingsRepository>();
 builder.Services.AddSingleton<VaultRepository>();
 builder.Services.AddSingleton<BlobStore>();
-builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<OwnerBootstrap>();

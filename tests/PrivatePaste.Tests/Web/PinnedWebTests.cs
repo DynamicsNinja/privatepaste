@@ -29,30 +29,23 @@ public class PinnedWebTests
             fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value))
                 .Append(new("__RequestVerificationToken", token))));
 
-    private static async Task<ClipDto> UploadAsync(HttpClient api, string text)
-    {
-        var response = await api.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
-
     [Fact]
     public async Task Pinned_tab_lists_only_pinned_clips()
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        await UploadAsync(api, "plain-clip-text");
-        var pinned = await UploadAsync(api, "pinned-clip-text");
+        var plain = await factory.UploadTextAsync(api, "plain-clip-text");
+        var pinned = await factory.UploadTextAsync(api, "pinned-clip-text");
         (await api.PostAsync($"/api/clips/{pinned.Id}/pin", null)).EnsureSuccessStatusCode();
         var web = await WebLoginAsync(factory);
 
         var tab = await web.GetStringAsync("/?tab=pinned");
-        Assert.Contains("pinned-clip-text", tab);
-        Assert.DoesNotContain("plain-clip-text", tab);
+        Assert.Contains($"data-id=\"{pinned.Id}\"", tab);
+        Assert.DoesNotContain($"data-id=\"{plain.Id}\"", tab);
 
         var history = await web.GetStringAsync("/");
-        Assert.Contains("plain-clip-text", history);
-        Assert.Contains("pinned-clip-text", history);
+        Assert.Contains($"data-id=\"{plain.Id}\"", history);
+        Assert.Contains($"data-id=\"{pinned.Id}\"", history);
     }
 
     [Fact]
@@ -60,13 +53,17 @@ public class PinnedWebTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
+        var ids = new List<Guid>();
         foreach (var text in new[] { "alpha one", "beta two" })
-            (await api.PostAsync($"/api/clips/{(await UploadAsync(api, text)).Id}/pin", null)).EnsureSuccessStatusCode();
+        {
+            var clip = await factory.UploadTextAsync(api, text);
+            (await api.PostAsync($"/api/clips/{clip.Id}/pin", null)).EnsureSuccessStatusCode();
+            ids.Add(clip.Id);
+        }
         var web = await WebLoginAsync(factory);
 
         var html = await web.GetStringAsync("/?tab=pinned&q=alpha");
-        Assert.Contains("alpha one", html);
-        Assert.Contains("beta two", html);
+        Assert.All(ids, id => Assert.Contains($"data-id=\"{id}\"", html));
     }
 
     [Fact]
@@ -74,8 +71,8 @@ public class PinnedWebTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        await UploadAsync(api, "loose clip");
-        var pinned = await UploadAsync(api, "kept clip");
+        await factory.UploadTextAsync(api, "loose clip");
+        var pinned = await factory.UploadTextAsync(api, "kept clip");
         await api.PostAsync($"/api/clips/{pinned.Id}/pin", null);
         var web = await WebLoginAsync(factory);
 
@@ -90,7 +87,7 @@ public class PinnedWebTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        var clip = await UploadAsync(api, "toggle me");
+        var clip = await factory.UploadTextAsync(api, "toggle me");
         var web = await WebLoginAsync(factory);
         var token = await TokenFromAsync(web, "/");
 
@@ -159,9 +156,9 @@ public class PinnedWebTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        await UploadAsync(api, "one");
-        await UploadAsync(api, "two");
-        var keep = await UploadAsync(api, "three");
+        await factory.UploadTextAsync(api, "one");
+        await factory.UploadTextAsync(api, "two");
+        var keep = await factory.UploadTextAsync(api, "three");
         await api.PostAsync($"/api/clips/{keep.Id}/pin", null);
         var web = await WebLoginAsync(factory);
 
@@ -175,8 +172,8 @@ public class PinnedWebTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        var gone = await UploadAsync(api, "to clear");
-        var keep = await UploadAsync(api, "to keep");
+        var gone = await factory.UploadTextAsync(api, "to clear");
+        var keep = await factory.UploadTextAsync(api, "to keep");
         await api.PostAsync($"/api/clips/{keep.Id}/pin", null);
         var web = await WebLoginAsync(factory);
         var token = await TokenFromAsync(web, "/settings");

@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Server.Storage;
-using PrivatePaste.Tests.Images;
 using PrivatePaste.Tests.Realtime;
 
 namespace PrivatePaste.Tests.Api;
@@ -104,18 +103,13 @@ public class VaultApiTests
         var (owner, _, token) = await f.LoginDeviceAsync();
         using var key = VaultKey.Create();
         await PrivatePasteFactory.EnsureVaultAsync(owner, key);
-        var posted = await owner.PostAsJsonAsync("/api/clips/text", new TextClipUpload("secret", null, false), ProtocolJson.Options);
-        posted.EnsureSuccessStatusCode();
-        var clip = (await posted.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        var clip = await f.UploadTextAsync(owner, key, "secret");
         (await owner.PostAsync($"/api/clips/{clip.Id}/pin", null)).EnsureSuccessStatusCode();
         // An image (blob and thumbnail files) and a deleted clip (a tombstone), so the wipe has all of it to remove.
-        var form = new MultipartFormDataContent { { new ByteArrayContent(TestImages.MakePng(40, 30).ToArray()), "file", "x.png" } };
-        var imageResponse = await owner.PostAsync("/api/clips/image", form);
-        imageResponse.EnsureSuccessStatusCode();
+        await f.UploadImageAsync(owner, key, [1, 2, 3, 4]);
         var blobDir = Path.Combine(f.DataDir, "blobs");
         Assert.NotEmpty(Directory.GetFiles(blobDir, "*.enc"));
-        var doomed = await owner.PostAsJsonAsync("/api/clips/text", new TextClipUpload("deleted", null, false), ProtocolJson.Options);
-        var doomedClip = (await doomed.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        var doomedClip = await f.UploadTextAsync(owner, key, "deleted");
         (await owner.DeleteAsync($"/api/clips/{doomedClip.Id}")).EnsureSuccessStatusCode();
         Assert.Equal(1, TombstoneCount(f));
         var settings = f.Services.GetRequiredService<SettingsRepository>();

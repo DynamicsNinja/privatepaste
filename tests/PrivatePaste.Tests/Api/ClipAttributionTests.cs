@@ -7,12 +7,6 @@ namespace PrivatePaste.Tests.Api;
 
 public class ClipAttributionTests
 {
-    private static async Task<ClipDto> PostAsync(HttpClient c, string text)
-    {
-        var r = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
 
     private static async Task<ClipDto> GetAsync(HttpClient c, Guid id) =>
         (await c.GetFromJsonAsync<ClipDto>($"/api/clips/{id}", ProtocolJson.Options))!;
@@ -22,7 +16,7 @@ public class ClipAttributionTests
     {
         using var f = new PrivatePasteFactory();
         var owner = await f.LoginAsync();
-        var clip = await PostAsync(owner, "hello");
+        var clip = await f.UploadTextAsync(owner, "hello");
 
         Assert.Null(clip.SourceUserName);
         Assert.Null((await GetAsync(owner, clip.Id)).SourceUserName);
@@ -36,7 +30,7 @@ public class ClipAttributionTests
         await f.AddPersonAsync("Ana");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", "person-pass-1");
 
-        var clip = await PostAsync(ana, "from ana");
+        var clip = await f.UploadTextAsync(ana, "from ana");
 
         Assert.Equal("Ana", clip.SourceUserName);
         Assert.Equal("Ana", (await GetAsync(owner, clip.Id)).SourceUserName);
@@ -50,9 +44,9 @@ public class ClipAttributionTests
         await f.AddPersonAsync("Ana");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", "person-pass-1");
 
-        var first = await PostAsync(owner, "shared text");
+        var first = await f.UploadTextAsync(owner, "shared text");
         Assert.Equal("owner", first.SourceUserName);
-        var again = await PostAsync(ana, "shared text");
+        var again = await f.UploadTextAsync(ana, "shared text");
 
         Assert.Equal(first.Id, again.Id);
         Assert.Equal("Ana", again.SourceUserName);
@@ -64,7 +58,7 @@ public class ClipAttributionTests
         using var f = new PrivatePasteFactory();
         await f.AddPersonAsync("Ana");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", "person-pass-1");
-        var clip = await PostAsync(ana, "restore me");
+        var clip = await f.UploadTextAsync(ana, "restore me");
 
         var web = await f.LoginWebAsync();
         var token = await PrivatePasteFactory.AntiforgeryTokenAsync(web, "/");
@@ -85,9 +79,9 @@ public class ClipAttributionTests
         var rec = new PinEndpointsTests.RecordingBroadcaster();
         var (app, owner) = await PinEndpointsTests.RecordedClientAsync(f, rec);
         using var _ = app;
-        var a = await PostAsync(owner, "one");
+        var a = await f.UploadTextAsync(owner, "one");
         f.Clock.Advance(TimeSpan.FromMinutes(1));
-        var b = await PostAsync(owner, "two");
+        var b = await f.UploadTextAsync(owner, "two");
         var before = (await owner.GetFromJsonAsync<SyncResponse>("/api/sync?afterSeq=0", ProtocolJson.Options))!;
         rec.Changed.Clear();
 

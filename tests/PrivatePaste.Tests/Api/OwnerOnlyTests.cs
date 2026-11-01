@@ -6,13 +6,6 @@ namespace PrivatePaste.Tests.Api;
 
 public class OwnerOnlyTests
 {
-    private static async Task<ClipDto> PostAsync(HttpClient c, string text)
-    {
-        var r = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
-
     [Fact]
     public async Task RegularPerson_ClearHistory_403()
     {
@@ -82,7 +75,7 @@ public class OwnerOnlyTests
         using var f = new PrivatePasteFactory();
         await f.AddPersonAsync("Ana");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", "person-pass-1");
-        var clip = await PostAsync(ana, "hello");
+        var clip = await f.UploadTextAsync(ana, "hello");
 
         Assert.True((await ana.PostAsync($"/api/clips/{clip.Id}/pin", null)).IsSuccessStatusCode);
         // Restore re-copies an existing clip, so it comes before the delete.

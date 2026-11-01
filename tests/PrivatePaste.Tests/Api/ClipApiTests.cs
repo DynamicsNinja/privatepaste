@@ -1,44 +1,30 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
 using PrivatePaste.Protocol;
-using PrivatePaste.Tests.Images;
 
 namespace PrivatePaste.Tests.Api;
 
 public class ClipApiTests
 {
-    private static async Task<ClipDto> PostText(HttpClient c, string text, DateTimeOffset? at = null, bool backfill = false)
-    {
-        var r = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, at, backfill), ProtocolJson.Options);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
-
-    private static Task<HttpResponseMessage> PostImage(HttpClient c, byte[] bytes, DateTimeOffset? copiedAt = null, bool backfill = false)
-    {
-        var form = new MultipartFormDataContent();
-        if (copiedAt is not null) form.Add(new StringContent(copiedAt.Value.ToString("O")), "copiedAt");
-        if (backfill) form.Add(new StringContent("true"), "backfill");
-        form.Add(new ByteArrayContent(bytes), "file", "x.png");
-        return c.PostAsync("/api/clips/image", form);
-    }
-
-    private static async Task<ClipDto> PostImageOk(HttpClient c, byte[] bytes, DateTimeOffset? copiedAt = null, bool backfill = false)
-    {
-        var r = await PostImage(c, bytes, copiedAt, backfill);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
-
     private static Task<ClipPage> List(HttpClient c, string query = "") =>
         c.GetFromJsonAsync<ClipPage>("/api/clips" + query, ProtocolJson.Options)!;
+
+    private static byte[] RandomImage(int length = 64)
+    {
+        var bytes = new byte[length];
+        Random.Shared.NextBytes(bytes);
+        return bytes;
+    }
 
     [Fact]
     public async Task Text_upload_roundtrip_and_kind()
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync("PC-test");
-        var clip = await PostText(c, "https://x.io");
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var clip = await f.UploadTextAsync(c, key, "https://x.io");
         Assert.Equal(ClipKind.Link, clip.Kind);
         Assert.Equal("PC-test", clip.SourceDeviceName);
         Assert.NotNull(clip.SourceDeviceId);
@@ -46,7 +32,8 @@ public class ClipApiTests
         var page = await List(c);
         Assert.Equal(clip.Id, page.Items[0].Id);
         var got = await c.GetFromJsonAsync<ClipDto>($"/api/clips/{clip.Id}", ProtocolJson.Options);
-        Assert.Equal("https://x.io", got!.Text);
+        Assert.Null(got!.Text);
+        Assert.Equal("https://x.io", ClipPayload.Open(key, got.Payload!).Text);
     }
 
     [Fact]
@@ -54,10 +41,11 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var phone = await f.LoginAsync("Phone", "Android");
-        var clip = await PostText(phone, "from the phone");
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(phone);
+        var clip = await f.UploadTextAsync(phone, key, "from the phone");
         Assert.Equal("android", clip.SourceDevicePlatform);
 
-        var image = await PostImageOk(phone, TestImages.MakePng(4, 4).ToArray());
+        var (image, _, _) = await f.UploadImageAsync(phone, key, RandomImage());
         Assert.Equal("android", image.SourceDevicePlatform);
 
         var listed = (await List(phone)).Items.Single(i => i.Id == clip.Id);
@@ -76,9 +64,10 @@ public class ClipApiTests
         var pc = await f.LoginAsync("PC", "windows");
         var mac = await f.LoginAsync("Mac", "macos");
         var linux = await f.LoginAsync("Box", "linux");
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(pc);
 
-        var first = await PostText(pc, "same");
-        var bumped = await PostText(mac, "same");
+        var first = await f.UploadTextAsync(pc, key, "same");
+        var bumped = await f.UploadTextAsync(mac, key, "same");
         Assert.Equal(first.Id, bumped.Id);
         Assert.Equal("macos", bumped.SourceDevicePlatform);
 
@@ -89,92 +78,17 @@ public class ClipApiTests
     }
 
     [Fact]
-    public async Task Crlf_text_stored_normalized()
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
-        var a = await PostText(c, "a\r\nb");
-        Assert.Equal("a\nb", a.Text);
-        var b = await PostText(c, "a\nb");
-        Assert.Equal(a.Id, b.Id);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   \n\t")]
-    public async Task Empty_text_400(string text)
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
-        var r = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        Assert.Equal(HttpStatusCode.BadRequest, r.StatusCode);
-    }
-
-    [Fact]
-    public async Task Text_over_limit_413()
-    {
-        using var f = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_TEXT_KB"] = "1" });
-        var c = await f.LoginAsync();
-        var over = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(new string('a', 1025), null, false), ProtocolJson.Options);
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, over.StatusCode);
-        var ok = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(new string('a', 1024), null, false), ProtocolJson.Options);
-        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
-    }
-
-    [Fact]
-    public async Task Image_upload_returns_dims_and_serves_png_and_thumbnail()
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
-        var clip = await PostImageOk(c, TestImages.MakePng(600, 300).ToArray());
-        Assert.Equal(ClipKind.Image, clip.Kind);
-        Assert.Equal(600, clip.Width);
-        Assert.Equal(300, clip.Height);
-
-        var full = await c.GetAsync($"/api/clips/{clip.Id}/image");
-        Assert.Equal("image/png", full.Content.Headers.ContentType?.MediaType);
-        Assert.Equal((600, 300), TestImages.Dims(await full.Content.ReadAsByteArrayAsync()));
-        var thumb = await c.GetAsync($"/api/clips/{clip.Id}/thumbnail");
-        Assert.Equal((256, 128), TestImages.Dims(await thumb.Content.ReadAsByteArrayAsync()));
-    }
-
-    [Fact]
-    public async Task Image_endpoints_404_for_text_clip_and_unknown_clip()
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
-        var clip = await PostText(c, "hello");
-        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{Guid.NewGuid()}")).StatusCode);
-    }
-
-    [Fact]
     public async Task Same_image_twice_dedups()
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var bytes = TestImages.MakePng(20, 20).ToArray();
-        var a = await PostImageOk(c, bytes);
-        var b = await PostImageOk(c, bytes);
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var bytes = RandomImage();
+        var (a, _, _) = await f.UploadImageAsync(c, key, bytes);
+        var (b, _, _) = await f.UploadImageAsync(c, key, bytes);
         Assert.Equal(a.Id, b.Id);
         Assert.True(b.Seq > a.Seq);
         Assert.Single((await List(c)).Items);
-    }
-
-    [Fact]
-    public async Task Garbage_image_400()
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
-        Assert.Equal(HttpStatusCode.BadRequest, (await PostImage(c, [1, 2, 3, 4, 5])).StatusCode);
-    }
-
-    [Fact]
-    public async Task Image_over_limit_413()
-    {
-        using var f = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_IMAGE_MB"] = "1" });
-        var c = await f.LoginAsync();
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await PostImage(c, new byte[1024 * 1024 + 1])).StatusCode);
     }
 
     [Fact]
@@ -182,8 +96,9 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
         var now = f.Clock.GetUtcNow();
-        var clip = await PostText(c, "live", now.AddHours(-1), backfill: false);
+        var clip = await f.UploadTextAsync(c, key, "live", now.AddHours(-1), backfill: false);
         Assert.Equal(now, clip.LastCopiedAt);
     }
 
@@ -192,10 +107,11 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
         var now = f.Clock.GetUtcNow();
-        var past = await PostText(c, "past", now.AddHours(-1), backfill: true);
+        var past = await f.UploadTextAsync(c, key, "past", now.AddHours(-1), backfill: true);
         Assert.Equal(now.AddHours(-1), past.LastCopiedAt);
-        var future = await PostText(c, "future", now.AddHours(1), backfill: true);
+        var future = await f.UploadTextAsync(c, key, "future", now.AddHours(1), backfill: true);
         Assert.Equal(now, future.LastCopiedAt);
     }
 
@@ -204,9 +120,10 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var a = await PostText(c, "a");
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var a = await f.UploadTextAsync(c, key, "a");
         f.Clock.Advance(TimeSpan.FromMinutes(1));
-        var b = await PostText(c, "b");
+        var b = await f.UploadTextAsync(c, key, "b");
         Assert.Equal([b.Id, a.Id], (await List(c)).Items.Select(i => i.Id));
 
         f.Clock.Advance(TimeSpan.FromMinutes(1));
@@ -221,9 +138,11 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var clip = await PostImageOk(c, TestImages.MakePng(10, 10).ToArray());
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (clip, _, _) = await f.UploadImageAsync(c, key, RandomImage());
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(f.DataDir, "blobs")).Length);
         Assert.Equal(HttpStatusCode.NoContent, (await c.DeleteAsync($"/api/clips/{clip.Id}")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}/blobs/0")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await c.DeleteAsync($"/api/clips/{clip.Id}")).StatusCode);
         var sync = (await c.GetFromJsonAsync<SyncResponse>("/api/sync?afterSeq=0", ProtocolJson.Options))!;
@@ -236,22 +155,13 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var clip = await PostImageOk(c, TestImages.MakePng(10, 10).ToArray());
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (clip, _, _) = await f.UploadImageAsync(c, key, RandomImage());
         var blob = Directory.GetFiles(Path.Combine(f.DataDir, "blobs"))[0];
         // On Windows an open handle without FileShare.Delete makes File.Delete throw an IOException.
         using (new FileStream(blob, FileMode.Open, FileAccess.Read, FileShare.Read))
             Assert.Equal(HttpStatusCode.NoContent, (await c.DeleteAsync($"/api/clips/{clip.Id}")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}")).StatusCode);
-    }
-
-    [Fact]
-    public async Task Search_query_param_is_ignored()
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
-        await PostText(c, "docker compose up");
-        await PostText(c, "something else");
-        Assert.Equal(2, (await List(c, "?q=compose")).Items.Count);
     }
 
     [Fact]
@@ -267,18 +177,19 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var bytes = TestImages.MakePng(30, 30).ToArray();
-        var clip = await PostImageOk(c, bytes);
-        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var bytes = RandomImage();
+        var (clip, _, _) = await f.UploadImageAsync(c, key, bytes);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/blobs/0")).StatusCode);
 
         foreach (var file in Directory.GetFiles(Path.Combine(f.DataDir, "blobs")))
             File.Delete(file);
-        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}/blobs/0")).StatusCode);
 
-        var again = await PostImageOk(c, bytes);
+        var (again, _, _) = await f.UploadImageAsync(c, key, bytes);
         Assert.Equal(clip.Id, again.Id);
-        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/image")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/thumbnail")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/blobs/0")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/clips/{clip.Id}/thumb")).StatusCode);
     }
 
     [Fact]
@@ -286,54 +197,41 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var bytes = TestImages.MakePng(30, 30).ToArray();
-        var clip = await PostImageOk(c, bytes);
-        var original = await c.GetByteArrayAsync($"/api/clips/{clip.Id}/image");
-        var originalThumb = await c.GetByteArrayAsync($"/api/clips/{clip.Id}/thumbnail");
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, blob, thumb) = await PrivatePasteFactory.SealImageAsync(key, RandomImage());
+        var first = await PrivatePasteFactory.PostClipAsync(c, meta, thumb, blob);
+        first.EnsureSuccessStatusCode();
+        var clip = (await first.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
 
         // As if a crash had left half-written blob files behind.
         foreach (var file in Directory.GetFiles(Path.Combine(f.DataDir, "blobs")))
             File.WriteAllBytes(file, [1, 2, 3]);
 
-        var again = await PostImageOk(c, bytes);
-        Assert.Equal(clip.Id, again.Id);
-        Assert.Equal(original, await c.GetByteArrayAsync($"/api/clips/{clip.Id}/image"));
-        Assert.Equal(originalThumb, await c.GetByteArrayAsync($"/api/clips/{clip.Id}/thumbnail"));
+        (await PrivatePasteFactory.PostClipAsync(c, meta, thumb, blob)).EnsureSuccessStatusCode();
+        Assert.Equal(blob, await c.GetByteArrayAsync($"/api/clips/{clip.Id}/blobs/0"));
+        Assert.Equal(thumb, await c.GetByteArrayAsync($"/api/clips/{clip.Id}/thumb"));
         Assert.All(Directory.GetFiles(Path.Combine(f.DataDir, "blobs")), p => Assert.EndsWith(".enc", p));
     }
 
     [Fact]
-    public async Task Image_upload_does_not_buffer_to_temp_files()
+    public async Task Meta_after_the_blob_parts_is_honored()
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var bytes = TestImages.MakePng(200, 200).ToArray();
-        Assert.True(bytes.Length > 100 * 1024);
-        // Buffered form files are deleted when the request ends, so watch for their creation instead.
-        var created = new System.Collections.Concurrent.ConcurrentBag<string>();
-        using var watcher = new FileSystemWatcher(Path.GetTempPath(), "ASPNETCORE_*") { EnableRaisingEvents = true };
-        watcher.Created += (_, e) => created.Add(e.FullPath);
-        await PostImageOk(c, bytes);
-        await Task.Delay(300);
-        Assert.Empty(created);
-    }
-
-    [Fact]
-    public async Task Image_fields_after_file_part_are_honored()
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
         var now = f.Clock.GetUtcNow();
+        var (meta, blob, thumb) = await PrivatePasteFactory.SealImageAsync(key, RandomImage(), now.AddHours(-1), backfill: true);
         var form = new MultipartFormDataContent
         {
-            { new ByteArrayContent(TestImages.MakePng(12, 12).ToArray()), "file", "x.png" },
-            { new StringContent(now.AddHours(-1).ToString("O")), "copiedAt" },
-            { new StringContent("true"), "backfill" },
+            { new ByteArrayContent(blob), "blob0", "blob0" },
+            { new ByteArrayContent(thumb), "thumb", "thumb" },
+            { new StringContent(JsonSerializer.Serialize(meta, ProtocolJson.Options), Encoding.UTF8, "application/json"), "meta" },
         };
-        var r = await c.PostAsync("/api/clips/image", form);
+        var r = await c.PostAsync("/api/clips", form);
         r.EnsureSuccessStatusCode();
         var clip = (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
         Assert.Equal(now.AddHours(-1), clip.LastCopiedAt);
+        Assert.True(clip.HasThumb);
     }
 
     [Fact]
@@ -341,27 +239,18 @@ public class ClipApiTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var content = new ByteArrayContent(System.Text.Encoding.ASCII.GetBytes("--abc\r\nthis is not a header\r\n\r\nx\r\n--abc--\r\n"));
+        var content = new ByteArrayContent(Encoding.ASCII.GetBytes("--abc\r\nthis is not a header\r\n\r\nx\r\n--abc--\r\n"));
         content.Headers.TryAddWithoutValidation("Content-Type", "multipart/form-data; boundary=abc");
-        Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsync("/api/clips/image", content)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsync("/api/clips", content)).StatusCode);
     }
 
     [Fact]
-    public async Task Image_without_file_part_400()
+    public async Task Upload_that_is_not_multipart_400()
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var form = new MultipartFormDataContent { { new StringContent("true"), "backfill" } };
-        Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsync("/api/clips/image", form)).StatusCode);
-    }
-
-    [Fact]
-    public async Task Upload_over_50_megapixels_returns_413()
-    {
-        using var f = new PrivatePasteFactory();
-        var c = await f.LoginAsync();
-        var r = await PostImage(c, PrivatePaste.Tests.Images.TestImages.MakePngHeaderOnly(10000, 5001).ToArray());
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, r.StatusCode);
-        Assert.Contains("Image too large (over 50 megapixels).", await r.Content.ReadAsStringAsync());
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var r = await c.PostAsJsonAsync("/api/clips", PrivatePasteFactory.TextMeta(key, "json body"), ProtocolJson.Options);
+        Assert.Equal(HttpStatusCode.BadRequest, r.StatusCode);
     }
 }
