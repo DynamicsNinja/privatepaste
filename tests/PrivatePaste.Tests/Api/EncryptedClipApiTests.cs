@@ -1,8 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Server.Storage;
@@ -161,10 +164,97 @@ public class EncryptedClipApiTests
         var c = await f.LoginAsync();
         using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
 
-        // The limit is on the sealed payload: the text limit plus 4096 bytes of room.
-        var over = await PrivatePasteFactory.PostClipAsync(c, PrivatePasteFactory.TextMeta(key, new string('a', 1024 + 4096)));
+        // The limit the user sees is the plaintext's UTF-8 size, which the client declares.
+        var over = await PrivatePasteFactory.PostClipAsync(c, PrivatePasteFactory.TextMeta(key, new string('a', 1025)));
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, over.StatusCode);
+        var declaredOver = PrivatePasteFactory.TextMeta(key, "short") with { SizeBytes = 1025 };
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await PrivatePasteFactory.PostClipAsync(c, declaredOver)).StatusCode);
+        // A payload past the worst case for the limit is refused even when the declared size is small.
+        var payloadOver = PrivatePasteFactory.TextMeta(key, "short") with
+        {
+            Payload = Convert.ToBase64String(new byte[6 * 1024 + 4096 + 1]),
+        };
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await PrivatePasteFactory.PostClipAsync(c, payloadOver)).StatusCode);
         await f.UploadTextAsync(c, key, new string('a', 1024));
+    }
+
+    [Theory]
+    [InlineData("中", 341)] // 3 UTF-8 bytes each, sealed as \uXXXX: 1023 bytes
+    [InlineData("\"", 1024)] // 1 byte each, but 6 once JSON escapes it: the worst case
+    [InlineData("č", 512)] // Croatian, 2 bytes each
+    public async Task Text_just_under_the_limit_is_accepted_however_the_JSON_escapes_it(string unit, int count)
+    {
+        using var f = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_TEXT_KB"] = "1" });
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var text = string.Concat(Enumerable.Repeat(unit, count));
+
+        var clip = await f.UploadTextAsync(c, key, text);
+
+        Assert.Equal(text, ClipPayload.Open(key, clip.Payload!).Text);
+    }
+
+    [Fact]
+    public async Task Maximal_image_upload_fits_the_request_body_limit()
+    {
+        using var f = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_IMAGE_MB"] = "1" });
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, _, _) = await PrivatePasteFactory.SealImageAsync(key, [1, 2, 3, 4]);
+        meta = meta with { Payload = Convert.ToBase64String(new byte[4096]) };
+        var blob = new byte[1024 * 1024 + 9 + 16];
+        var thumb = new byte[1024 * 1024];
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent(JsonSerializer.Serialize(meta, ProtocolJson.Options), Encoding.UTF8, "application/json"), "meta" },
+            { new ByteArrayContent(thumb), "thumb", "thumb" },
+            { new ByteArrayContent(blob), "blob0", "blob0" },
+        };
+        var bodyLength = (await form.ReadAsByteArrayAsync()).Length;
+
+        // The test server doesn't enforce Kestrel's limit, so check the configured one covers this body.
+        var limit = f.Services.GetRequiredService<IOptions<KestrelServerOptions>>().Value.Limits.MaxRequestBodySize;
+        Assert.True(limit >= bodyLength, $"limit {limit} < body {bodyLength}");
+        Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/api/clips", form)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Same_hash_under_another_kind_is_409()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var text = await f.UploadTextAsync(c, key, "first as text");
+        var (meta, blob, thumb) = await PrivatePasteFactory.SealImageAsync(key, [1, 2, 3, 4]);
+
+        var response = await PrivatePasteFactory.PostClipAsync(c, meta with { Hash = text.Hash }, thumb, blob);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("That content was already stored as a different kind.", (await ProblemAsync(response)).Detail);
+        Assert.Empty(Directory.GetFiles(Path.Combine(f.DataDir, "blobs")));
+        Assert.Equal(ClipKind.Text, (await c.GetFromJsonAsync<ClipDto>($"/api/clips/{text.Id}", ProtocolJson.Options))!.Kind);
+    }
+
+    [Fact]
+    public async Task Bump_that_brings_a_thumb_records_it()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, blob, thumb) = await PrivatePasteFactory.SealImageAsync(key, [1, 2, 3, 4]);
+        var first = (await (await PrivatePasteFactory.PostClipAsync(c, meta, null, blob))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        Assert.False(first.HasThumb);
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{first.Id}/thumb")).StatusCode);
+
+        var again = (await (await PrivatePasteFactory.PostClipAsync(c, meta, thumb, blob))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+
+        Assert.Equal(first.Id, again.Id);
+        Assert.True(again.HasThumb);
+        Assert.Equal(thumb, await c.GetByteArrayAsync($"/api/clips/{first.Id}/thumb"));
+        Assert.Equal(HttpStatusCode.NoContent, (await c.DeleteAsync($"/api/clips/{first.Id}")).StatusCode);
+        Assert.Empty(Directory.GetFiles(Path.Combine(f.DataDir, "blobs")));
     }
 
     [Fact]

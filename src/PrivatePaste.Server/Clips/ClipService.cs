@@ -49,12 +49,35 @@ public sealed partial class ClipService(
     // upload sealed under the old key can't land after a reset (single-user server, so contention is negligible).
     private readonly SemaphoreSlim _storeLock = new(1, 1);
 
-    /// <summary>The largest sealed text or link payload: the text limit plus room for the JSON and the sealing.</summary>
-    public long MaxTextPayloadBytes => options.MaxTextBytes + 4096;
+    /// <summary>
+    /// The largest sealed text or link payload. The JSON escapes every non-ASCII character and some ASCII ones as
+    /// <c>\uXXXX</c>, so a UTF-8 byte can take up to 6 bytes; 4096 more cover the JSON and the sealing. The limit the
+    /// user sees is on the plaintext, through <see cref="ClipUploadMeta.SizeBytes"/>.
+    /// </summary>
+    public static long MaxTextPayloadBytesFor(ServerOptions options) => 6 * options.MaxTextBytes + 4096;
 
     /// <summary>The largest sealed image blob: the image limit plus the blob header and a tag per chunk.</summary>
-    public long MaxBlobBytes =>
+    public static long MaxBlobBytesFor(ServerOptions options) =>
         options.MaxImageBytes + 9 + 16 * ((options.MaxImageBytes + BlobCipher.ChunkSize - 1) / BlobCipher.ChunkSize);
+
+    /// <summary>The largest <c>meta</c> part: the base64 of the largest payload plus room for the other fields.</summary>
+    public static long MaxMetaBytesFor(ServerOptions options) => Base64Length(MaxTextPayloadBytesFor(options)) + 8192;
+
+    /// <summary>
+    /// The largest upload body: an image at its limit with the largest thumbnail, or the largest text, each with room
+    /// for the metadata and the multipart framing.
+    /// </summary>
+    public static long MaxRequestBodyBytesFor(ServerOptions options) =>
+        Math.Max(MaxBlobBytesFor(options) + MaxThumbBytes + 64 * 1024,
+            Base64Length(MaxTextPayloadBytesFor(options)) + 16 * 1024);
+
+    private static long Base64Length(long bytes) => (bytes + 2) / 3 * 4;
+
+    public long MaxTextPayloadBytes => MaxTextPayloadBytesFor(options);
+
+    public long MaxBlobBytes => MaxBlobBytesFor(options);
+
+    public long MaxMetaBytes => MaxMetaBytesFor(options);
 
     /// <summary>
     /// Stores a clip sealed by the client. The server checks only what it can see: the kind, the keyed hash, the key
@@ -93,15 +116,12 @@ public sealed partial class ClipService(
         {
             if (blobParts.Count != 0 || thumb is not null)
                 throw new ClipRejectedException(StatusCodes.Status400BadRequest, "A text clip has no blobs or thumbnail.");
-            if (payloadBytes > MaxTextPayloadBytes)
+            if (meta.SizeBytes > options.MaxTextBytes || payloadBytes > MaxTextPayloadBytes)
                 throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge,
                     $"Text exceeds the {options.MaxTextBytes} byte limit.");
         }
 
         var copiedAt = CopiedAt(meta.CopiedAt, meta.Backfill);
-        if (meta.Backfill)
-            await EnsureNotClearedAsync(copiedAt);
-
         UpsertResult result;
         await _storeLock.WaitAsync();
         try
@@ -112,6 +132,13 @@ public sealed partial class ClipService(
                 // Clients key off the title: they unlock with the new passphrase and drop what they had queued.
                 throw new ClipRejectedException(StatusCodes.Status409Conflict,
                     "Encryption was reset. Enter the new passphrase.", "Encryption was reset");
+            // Under the lock, so a backfill can't land between a clear recording its time and deleting.
+            if (meta.Backfill)
+                await EnsureNotClearedAsync(copiedAt);
+            // The same hash under another kind would pair one clip's row with another's blobs.
+            if (await clips.GetByHashAsync(meta.Hash) is { } existing && existing.Kind != kind)
+                throw new ClipRejectedException(StatusCodes.Status409Conflict,
+                    "That content was already stored as a different kind.");
 
             // Always (re)write: the upload carries the bytes anyway, and this repairs a blob that is missing or
             // damaged instead of trusting that it exists. Each part is sealed on its own, so new ones sit fine beside
@@ -276,8 +303,8 @@ public sealed partial class ClipService(
     // Blobs are keyed by content hash and a hash has exactly one clip row, so no surviving clip shares them.
     private void RemoveBlobs(ClipDto clip)
     {
-        // Tried even without HasThumb: a re-upload that brought a thumbnail writes it but keeps the row as it was.
-        TryDeleteBlob(ClipBlobs.Thumb(clip.Hash));
+        if (clip.HasThumb)
+            TryDeleteBlob(ClipBlobs.Thumb(clip.Hash));
         for (var n = 0; n < clip.BlobCount; n++)
             TryDeleteBlob(ClipBlobs.Blob(clip.Hash, n));
     }

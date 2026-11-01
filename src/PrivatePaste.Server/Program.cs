@@ -19,7 +19,7 @@ if (string.IsNullOrEmpty(builder.Configuration["ASPNETCORE_URLS"]) && string.IsN
     builder.WebHost.UseUrls("http://+:8080");
 
 var serverOptions = ServerOptions.FromConfiguration(builder.Configuration);
-var maxBodyBytes = serverOptions.MaxImageBytes + 1024 * 1024;
+var maxBodyBytes = ClipService.MaxRequestBodyBytesFor(serverOptions);
 
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = maxBodyBytes);
 builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = maxBodyBytes);
@@ -60,7 +60,7 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
         o.LoginPath = "/login";
         o.Cookie.HttpOnly = true;
         o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-        // Strict SameSite is defense in depth; cookie-authenticated unsafe API calls (including POST /api/clips/image)
+        // Strict SameSite is defense in depth; cookie-authenticated unsafe API calls (including POST /api/clips)
         // additionally require the antiforgery header (RequireAntiforgeryForCookieAuth).
         o.Cookie.SameSite = SameSiteMode.Strict;
         o.ExpireTimeSpan = TimeSpan.FromDays(30);

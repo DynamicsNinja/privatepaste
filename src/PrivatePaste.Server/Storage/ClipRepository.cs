@@ -38,6 +38,9 @@ public sealed class ClipRepository(PrivatePasteDb db)
             UpsertResult result;
             if (existing is not null)
             {
+                // A re-upload can bring a thumbnail the first one lacked; the row says so once the file is written.
+                if (clip.HasThumb)
+                    await ExecAsync(conn, tx, "UPDATE clips SET has_thumb = 1 WHERE id = @id", ("@id", existing));
                 var bumped = await BumpCoreAsync(conn, tx, Guid.Parse(existing), clip.SourceDeviceId,
                     clip.SourceDeviceName, clip.SourceDevicePlatform, clip.SourceUserId, clip.CopiedAt);
                 result = new UpsertResult(bumped!, false);
@@ -94,6 +97,16 @@ public sealed class ClipRepository(PrivatePasteDb db)
     {
         await using var conn = db.Open();
         return await GetCoreAsync(conn, null, id);
+    }
+
+    /// <summary>The clip with this keyed hash, if any (a hash has at most one row).</summary>
+    public async Task<ClipDto?> GetByHashAsync(string hash)
+    {
+        await using var conn = db.Open();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {Columns} FROM {From} WHERE c.hash = @h";
+        cmd.Parameters.AddWithValue("@h", hash);
+        return (await ReadClipsAsync(cmd)).SingleOrDefault();
     }
 
     public Task<ClipPage> ListAsync(string? cursor, int limit) =>

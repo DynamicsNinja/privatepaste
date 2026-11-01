@@ -55,8 +55,7 @@ public static partial class ClipEndpoints
                     {
                         if (meta is not null)
                             return Duplicate(name);
-                        // Base64 of the largest payload, plus room for the other fields.
-                        meta = await ReadBoundedAsync(section.Body, service.MaxTextPayloadBytes / 3 * 4 + 8192, "Clip metadata");
+                        meta = await ReadBoundedAsync(section.Body, service.MaxMetaBytes, "Clip metadata");
                     }
                     else if (name == "thumb")
                     {
@@ -66,8 +65,8 @@ public static partial class ClipEndpoints
                     }
                     else if (name is not null && BlobPart().Match(name) is { Success: true } match)
                     {
-                        if (!int.TryParse(match.Groups[1].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
-                            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, detail: $"Invalid part '{name}'.");
+                        // The pattern allows at most four digits, so this always fits.
+                        var n = int.Parse(match.Groups[1].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture);
                         if (blobs.ContainsKey(n))
                             return Duplicate(name);
                         blobs[n] = await ReadBoundedAsync(section.Body, service.MaxBlobBytes, "Blob");
