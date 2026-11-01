@@ -8,11 +8,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import android.graphics.Bitmap
+import android.graphics.Color
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -21,12 +27,16 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
+import xyz.ficdev.privatepaste.api.KeyResetException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.core.ServerUrl
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
 import xyz.ficdev.privatepaste.core.crypto.VaultKey
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipKind
+import xyz.ficdev.privatepaste.core.model.ServerLimits
 import xyz.ficdev.privatepaste.send.ClipSender
 import xyz.ficdev.privatepaste.send.SendResult
 import xyz.ficdev.privatepaste.storage.CryptoFile
@@ -44,6 +54,7 @@ import xyz.ficdev.privatepaste.sync.SessionManager
 import xyz.ficdev.privatepaste.sync.SignInResult
 import xyz.ficdev.privatepaste.sync.SyncEngine
 import xyz.ficdev.privatepaste.sync.SyncState
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.Clock
 import java.util.UUID
@@ -56,6 +67,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * key: a server without a vault gets one under [PASSPHRASE]; a server whose vault was set up otherwise fails the unlock.
  */
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class LocalServerE2eTest {
 
     @get:Rule val tmp = TemporaryFolder()
@@ -153,6 +165,133 @@ class LocalServerE2eTest {
         }
     }
 
+    /**
+     * Encryption end to end with the real client classes: set up, text and an image one session writes and another
+     * reads, a handover, then a reset that locks the first session out. Two sign-ins, to stay under the server's 5 per
+     * minute. Ends with a vault under [PASSPHRASE], which the test above relies on.
+     */
+    @Test
+    fun encryptionSetupUnlockHandoverAndReset() = runBlocking {
+        val first = Device("first")
+        val second = Device("second")
+        try {
+            // 1. The owner signs in and sets up encryption (or, on a server that has a vault already, resets it).
+            assertEquals(SignInResult.Ok, first.manager.signIn(baseUrl.toString(), "owner", password, "e2e-first"))
+            val firstApi = first.api()
+            if (firstApi.vault() == null) {
+                assertNull(first.manager.setUp(PASSPHRASE, PASSPHRASE))
+            } else {
+                val fresh = VaultKey.create()
+                firstApi.resetVault(PassphraseWrap.wrap(fresh, PASSPHRASE))
+                first.manager.useVaultKey(fresh)
+            }
+            val firstKey = checkNotNull(first.manager.vaultKey.value)
+            assertEquals(firstKey.keyId, firstApi.vault()?.keyId)
+            val codec = ClipCodec(firstKey)
+            val limits = checkNotNull(firstApi.serverInfo()).limits
+            val engine = first.engine(codec).also { this@LocalServerE2eTest.engine = it }
+            engine.start()
+            waitFor("first session connected") { engine.state.value == SyncState.CONNECTED }
+
+            // 2. A text clip goes up from Android.
+            val text = "e2e sealed text ${UUID.randomUUID()}"
+            val sealed = codec.encodeText(text, null, backfill = false)
+            val uploaded = firstApi.uploadClip(sealed.meta, sealed.thumb, sealed.blobs)
+            assertEquals(ClipKind.TEXT, uploaded.kind)
+            assertEquals(firstKey.keyId, uploaded.keyId)
+            assertEquals(text.toByteArray(Charsets.UTF_8).size.toLong(), uploaded.sizeBytes)
+            assertEquals(sealed.meta.hash, uploaded.hash)
+            assertEquals(false, uploaded.hasThumb)
+
+            // 3. A second session unlocks with the passphrase and reads it back decoded.
+            assertEquals(SignInResult.Ok, second.manager.signIn(baseUrl.toString(), "owner", password, "e2e-second"))
+            assertNull(second.manager.unlock(PASSPHRASE))
+            val secondApi = second.api()
+            val secondKey = checkNotNull(second.manager.vaultKey.value)
+            assertEquals(firstKey.keyId, secondKey.keyId)
+            val read = secondApi.clips(null).items.map(ClipCodec(secondKey)::decode).first { it.id == uploaded.id }
+            assertEquals(text, read.text)
+
+            // 4. A handover session 1 makes is taken by session 2, once.
+            val (created, qr) = first.manager.createHandover()
+            assertNull(second.manager.unlockWithQr(qr))
+            val handedKey = checkNotNull(second.manager.vaultKey.value)
+            assertEquals(firstKey.keyId, handedKey.keyId)
+            assertNotNull("a second take of the same code must fail", second.manager.unlockWithQr(qr))
+            assertNull(secondApi.takeHandover(created.id))
+            val codec2 = ClipCodec(checkNotNull(second.manager.vaultKey.value))
+            assertEquals(text, codec2.decode(secondApi.clips(null).items.first { it.id == uploaded.id }).text)
+
+            // 5. An image goes up from session 1; session 2 downloads, decrypts and compares thumb and blob.
+            val image = codec.encodeImage(testPng(), null, backfill = false, limits)
+            val imageClip = firstApi.uploadClip(image.meta, image.thumb, image.blobs)
+            assertEquals(ClipKind.IMAGE, imageClip.kind)
+            assertTrue(imageClip.hasThumb)
+            assertEquals(1, imageClip.blobCount)
+            val png = codec.decodeBlob(image.blobs.single())
+            assertEquals(png.size.toLong(), imageClip.sizeBytes)
+            val seen = codec2.decode(secondApi.clips(null).items.first { it.id == imageClip.id })
+            assertEquals(ClipKind.IMAGE, seen.kind)
+            assertEquals(IMAGE_WIDTH, seen.width)
+            assertEquals(IMAGE_HEIGHT, seen.height)
+            val sealedBlob = secondApi.blob(imageClip.id, 0)
+            val sealedThumb = secondApi.thumb(imageClip.id)
+            assertArrayEquals(image.blobs.single(), sealedBlob)   // the server stores ciphertext verbatim
+            assertArrayEquals(image.thumb, sealedThumb)
+            assertArrayEquals(png, codec2.decodeBlob(sealedBlob))
+            assertArrayEquals(codec.decodeThumb(image.thumb!!), codec2.decodeThumb(sealedThumb))
+
+            // 6. The owner resets encryption (as the web page does): session 1 hears it, and its next upload is refused.
+            val newKey = VaultKey.create()
+            secondApi.resetVault(PassphraseWrap.wrap(newKey, PASSPHRASE))
+            assertEquals(firstKey.keyId, withTimeout(TIMEOUT_MS) { engine.keyReset.first() })
+            val stale = codec.encodeText("e2e after reset ${UUID.randomUUID()}", null, backfill = false)
+            val refused = assertThrows(KeyResetException::class.java) {
+                runBlocking { firstApi.uploadClip(stale.meta, stale.thumb, stale.blobs) }
+            }
+            assertEquals(409, refused.status)
+            assertEquals("Encryption was reset", refused.title)
+            assertTrue(secondApi.clips(null).items.isEmpty())   // the reset wiped every clip
+            assertEquals(newKey.keyId, secondApi.vault()?.keyId)
+            newKey.close()
+        } finally {
+            runCatching { second.api().logout() }
+            runCatching { first.api().logout() }
+        }
+    }
+
+    /** One phone: its own session store, cache and queue, over the test's shared HTTP client. */
+    private inner class Device(name: String) {
+        private val keys = InMemoryKeyProvider()
+        val cache = HistoryCache(CryptoFile(File(tmp.newFolder(name), "cache.bin"), keys, KeyAliases.CACHE))
+        val queue = OutboundQueue(CryptoFile(File(tmp.newFolder("$name-queue"), "queue.bin"), keys, KeyAliases.QUEUE), tmp.newFolder("$name-images"), keys)
+        val thumbs = ThumbnailStore(tmp.newFolder("$name-thumbs"), keys)
+        val manager = SessionManager(
+            SessionStore(CryptoFile(File(tmp.newFolder("$name-session"), "session.bin"), keys, KeyAliases.SESSION)),
+            cache, thumbs, queue, apiFactory = { u, token -> PrivatePasteApi(u, token, client) },
+        )
+
+        fun api() = PrivatePasteApi(baseUrl, checkNotNull(manager.session.value).token, client)
+
+        fun engine(codec: ClipCodec): SyncEngine {
+            val api = api()
+            return SyncEngine(
+                api = api, cache = cache, queue = queue, thumbs = thumbs,
+                applier = ClipApplier { true }, flushQueue = { },
+                links = OkHttpLinkFactory(open = { api.webSocket(it) }),
+                codec = { codec }, ownDeviceId = checkNotNull(manager.session.value).deviceId,
+                capture = LocalCaptureClock(), clock = Clock.systemUTC(), backoff = Backoff(), scope = scope,
+            )
+        }
+    }
+
+    // Half red, half blue: not a flat colour, so a corrupted chunk would show.
+    private fun testPng(): ByteArray {
+        val bitmap = Bitmap.createBitmap(IMAGE_WIDTH, IMAGE_HEIGHT, Bitmap.Config.ARGB_8888)
+        for (y in 0 until IMAGE_HEIGHT) for (x in 0 until IMAGE_WIDTH) bitmap.setPixel(x, y, if (x < IMAGE_WIDTH / 2) Color.RED else Color.BLUE)
+        return ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+    }
+
     private suspend fun waitFor(what: String, condition: () -> Boolean) {
         val deadline = System.nanoTime() + TIMEOUT_MS * 1_000_000
         while (!condition()) {
@@ -163,6 +302,8 @@ class LocalServerE2eTest {
 
     private companion object {
         const val TIMEOUT_MS = 10_000L
-        const val PASSPHRASE = "local e2e passphrase only"
+        const val IMAGE_WIDTH = 600
+        const val IMAGE_HEIGHT = 300
+        const val PASSPHRASE = "correct horse battery staple"
     }
 }
