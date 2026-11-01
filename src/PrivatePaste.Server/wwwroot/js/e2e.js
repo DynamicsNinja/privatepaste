@@ -347,7 +347,8 @@ export function parseHandoverQr(text) {
     || !/^[A-Za-z0-9_-]{43}$/.test(k ?? ''))
     return null;
   const otk = fromBase64Url(k);
-  return otk.length === OTK_SIZE ? { id: id.toLowerCase(), otk, keyId: kid } : null;
+  // Canonical spelling only (no stray trailing bits), the same as the .NET and Kotlin parsers.
+  return otk.length === OTK_SIZE && toBase64Url(otk) === k ? { id: id.toLowerCase(), otk, keyId: kid } : null;
 }
 
 // ---- passphrase rule ----

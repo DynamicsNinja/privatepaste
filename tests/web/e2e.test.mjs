@@ -186,3 +186,29 @@ test('the list version in e2e.js is the start of the list SHA-256', () => {
   const digest = sha256(readFileSync(new URL(dir + 'common-passphrases.txt', import.meta.url)));
   assert.match(readFileSync(new URL(dir + 'e2e.js', import.meta.url), 'utf8'), new RegExp(`LIST_VERSION = '${digest.slice(0, 8)}'`));
 });
+
+test('handover with - and _ in the key text matches the vector and round-trips', async () => {
+  const h = vectors.handoverUrlSafe;
+  assert.match(h.qrText, /&k=[^&]*-[^&]*&/);
+  assert.match(h.qrText, /&k=[^&]*_[^&]*&/);
+  assert.equal(toHex(await e2e._createHandoverWithNonce(vault, hex(h.otk), hex(h.nonce))), h.blob);
+  assert.equal(toHex((await e2e.openHandover(hex(h.otk), hex(h.blob), vectors.vaultKey.keyId)).raw), vectors.vaultKey.vk);
+  assert.equal(e2e.handoverQrText(h.id, hex(h.otk), vectors.vaultKey.keyId), h.qrText);
+  const parsed = e2e.parseHandoverQr(h.qrText);
+  assert.equal(parsed.id, h.id);
+  assert.equal(toHex(parsed.otk), h.otk);
+});
+
+test('parseHandoverQr only accepts the canonical key spelling', () => {
+  const ok = vectors.handover.qrText;
+  // The last character of a 32-byte key carries two unused bits; the next character up sets one.
+  assert.equal(e2e.parseHandoverQr(ok.replace('Pj8&', 'Pj9&')), null);
+  assert.equal(e2e.parseHandoverQr(ok.replace('Pj8&', 'Pj8=&')), null);
+});
+
+test('thumb small item with the fixed nonce matches the vector, and opens', async () => {
+  const t = vectors.thumb;
+  assert.equal(toHex(await e2e._sealWithNonce(vault, t.purpose, hex(t.plaintext), hex(t.nonce))), t.sealed);
+  assert.equal(toHex(await e2e.openSmall(vault, 'thumb', hex(t.sealed))), t.plaintext);
+  await assert.rejects(() => e2e.openSmall(vault, 'payload', hex(t.sealed)));
+});

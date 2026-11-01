@@ -82,7 +82,8 @@ public static partial class Handover
         byte[] parsedOtk;
         try { parsedOtk = Base64Url.DecodeFromChars(kText); }
         catch (FormatException) { return false; }
-        if (parsedOtk.Length != OtkSize)
+        // Only the canonical spelling is accepted (no padding, whitespace or stray trailing bits), so every client agrees.
+        if (parsedOtk.Length != OtkSize || Base64Url.EncodeToString(parsedOtk) != kText)
             return false;
 
         id = parsedId;
