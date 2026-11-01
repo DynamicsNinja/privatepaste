@@ -28,6 +28,7 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
     private var seq = 0L
     private var appliedAt: Instant? = null
     private var appliedHash: String? = null
+    private var vaultKeyId: String? = null
 
     private val _items = MutableStateFlow<List<ClipDto>>(emptyList())
 
@@ -47,6 +48,14 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
 
     /** The hash of the clip that set [lastAppliedAt] (persisted). */
     val lastAppliedHash: String? get() = synchronized(gate) { appliedHash }
+
+    /**
+     * Id of the vault key the cached clips were opened with (persisted); null for an empty cache or one from before
+     * encryption. A cache whose key id isn't the server's holds history that no longer exists there.
+     */
+    var keyId: String?
+        get() = synchronized(gate) { vaultKeyId }
+        set(value) = synchronized(gate) { vaultKeyId = value }
 
     init {
         load()
@@ -124,7 +133,7 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
     fun save() {
         synchronized(saveLock) {
             val snapshot = synchronized(gate) {
-                Snapshot(seq, appliedAt, appliedHash, list.toList(), HashMap(tombstones))
+                Snapshot(seq, appliedAt, appliedHash, list.toList(), HashMap(tombstones), vaultKeyId)
             }
             try {
                 file.write(StorageJson.json.encodeToString(Snapshot.serializer(), snapshot).encodeToByteArray())
@@ -146,6 +155,7 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
                 seq = snap.highestSeq
                 appliedAt = snap.lastAppliedAt
                 appliedHash = snap.lastAppliedHash
+                vaultKeyId = snap.keyId
                 publish()
             }
         } catch (e: Exception) {
@@ -177,6 +187,7 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
         seq = 0
         appliedAt = null
         appliedHash = null
+        vaultKeyId = null
     }
 
     // Caller holds gate, so emissions follow the order of the changes.
@@ -191,6 +202,7 @@ class HistoryCache(private val file: CryptoFile, private val max: Int = 200) {
         val lastAppliedHash: String? = null,
         val items: List<ClipDto>,
         val tombstones: Map<String, Long> = emptyMap(),
+        val keyId: String? = null,
     )
 
     private companion object {

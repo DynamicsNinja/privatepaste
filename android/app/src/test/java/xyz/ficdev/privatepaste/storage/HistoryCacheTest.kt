@@ -296,4 +296,17 @@ class HistoryCacheTest {
         assertEquals(c.items.value, reloaded.items.value)
         assertFalse(File(tmp.root, "cache.bin.tmp").exists())
     }
+
+    @Test
+    fun keyIdPersistsAndClearForgetsIt() {
+        val c = cache()
+        assertNull(c.keyId)
+        c.keyId = "0011223344556677"
+        c.save()
+        assertEquals("0011223344556677", cache().keyId)
+
+        c.clear()
+        assertNull(c.keyId)
+        assertNull(cache().keyId)
+    }
 }

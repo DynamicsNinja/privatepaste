@@ -5,7 +5,7 @@ import java.io.File
 import java.io.IOException
 
 /**
- * Encrypted thumbnail PNGs, one file per content hash (under the [KeyAliases.CACHE] key). Keyed by hash, so a
+ * Thumbnail PNGs as shown (opened from the server's sealed ones, then encrypted again at rest here), one file per content hash (under the [KeyAliases.CACHE] key). Keyed by hash, so a
  * clip re-copied with the same content keeps its thumbnail. Best effort: failures are logged, never thrown.
  */
 class ThumbnailStore(private val dir: File, private val keys: KeyProvider) {

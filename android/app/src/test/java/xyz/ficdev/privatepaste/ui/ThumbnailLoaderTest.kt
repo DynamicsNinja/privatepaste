@@ -34,7 +34,7 @@ class ThumbnailLoaderTest {
     private var unauthorizedCalls = 0
 
     private val remote = object : ClipRemote {
-        override suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean) = ClipPage(emptyList())
+        override suspend fun clips(cursor: String?, limit: Int, pinned: Boolean) = ClipPage(emptyList())
         override suspend fun pin(id: String, pinned: Boolean): ClipDto = throw UnsupportedOperationException()
         override suspend fun restore(id: String): ClipDto? = null
         override suspend fun delete(id: String) = true

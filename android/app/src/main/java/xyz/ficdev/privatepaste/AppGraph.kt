@@ -34,7 +34,9 @@ import okhttp3.OkHttpClient
 import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.model.ClipKind
+import xyz.ficdev.privatepaste.core.model.ServerLimits
 import xyz.ficdev.privatepaste.send.ClipSender
 import xyz.ficdev.privatepaste.service.BatteryOptimization
 import xyz.ficdev.privatepaste.service.Notifications
@@ -49,6 +51,7 @@ import xyz.ficdev.privatepaste.storage.SessionStore
 import xyz.ficdev.privatepaste.storage.SettingsStore
 import xyz.ficdev.privatepaste.storage.StoredSession
 import xyz.ficdev.privatepaste.storage.ThumbnailStore
+import xyz.ficdev.privatepaste.storage.VaultKeyStore
 import xyz.ficdev.privatepaste.sync.Backoff
 import xyz.ficdev.privatepaste.sync.LocalCaptureClock
 import xyz.ficdev.privatepaste.sync.OkHttpLinkFactory
@@ -60,6 +63,7 @@ import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.UiDeps
 import java.io.File
 import java.io.IOException
+import java.security.GeneralSecurityException
 import java.time.Clock
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -91,6 +95,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         apiFactory = ::api,
         hints = PrefsSignInHints(app),
         settings = settings,
+        vaultKeys = VaultKeyStore(CryptoFile(File(dir, "vault.bin"), keys, KeyAliases.VAULT)),
     )
 
     private val lifecycle = Mutex()
@@ -120,11 +125,36 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
 
     private fun api(baseUrl: HttpUrl, token: String?) = PrivatePasteApi(baseUrl, token, client)
 
+    /** Seals and opens clips with the vault key held right now; null while locked. Read it per use, never keep it. */
+    private fun codec(): ClipCodec? = sessions.vaultKey.value?.let(::ClipCodec)
+
     /** Everything one session needs. A revoked engine stays signed out, so each session gets a new one. */
     inner class SessionGraph(val session: StoredSession) {
         val api: PrivatePasteApi = api(session.serverUrl.toHttpUrl(), session.token)
         private val capture = LocalCaptureClock()
-        val sender = ClipSender(api, queue, cache, capture, app::notifyUser, clock, isEnding = { ending })
+        val sender = ClipSender(
+            api, ::codec, ::limits, queue, cache, capture, app::notifyUser, clock,
+            onKeyReset = ::keyWasReset, isEnding = { ending },
+        )
+
+        @Volatile private var serverLimits: ServerLimits? = null
+
+        /** The server's limits, asked once per session. A server without `/api/server-info` gets the defaults. */
+        private suspend fun limits(): ServerLimits =
+            serverLimits ?: (api.serverInfo()?.limits ?: DEFAULT_LIMITS).also { serverLimits = it }
+
+        /** The full PNG of an image clip, fetched and opened. */
+        suspend fun image(id: String): ByteArray {
+            val codec = codec() ?: throw IOException("No vault key")
+            val sealed = api.blob(id, 0)
+            return withContext(Dispatchers.Default) { codec.decodeBlob(sealed) }
+        }
+
+        /** The server says the vault key was reset. Records which key, so a later key is never thrown away. */
+        private fun keyWasReset() {
+            val keyId = sessions.vaultKey.value?.keyId
+            appScope.launch { onKeyReset(this@SessionGraph, keyId) }   // not in [scope]: the handling stops the engine
+        }
 
         /** The engine's scope: IO for its file writes; a child of the app scope. */
         private val scope = CoroutineScope(SupervisorJob(appScope.coroutineContext.job) + Dispatchers.IO)
@@ -134,9 +164,10 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             cache = cache,
             queue = queue,
             thumbs = thumbs,
-            applier = ServiceClipApplier(app, { settings.deliveryMode }, clipboard, imageFiles, api::image),
+            applier = ServiceClipApplier(app, { settings.deliveryMode }, clipboard, imageFiles, ::image),
             flushQueue = sender::flushQueue,
             links = OkHttpLinkFactory(api::webSocket),
+            codec = ::codec,
             ownDeviceId = session.deviceId,
             capture = capture,
             clock = clock,
@@ -175,6 +206,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                 engine.revoked.first()
                 appScope.launch { onRevoked(this@SessionGraph) }   // not in [scope]: the teardown cancels it
             }
+            scope.launch { engine.keyReset.collect { keyWasReset() } }
+            // Task 18 shows this; until then the engine just stays stopped.
+            scope.launch { engine.updateRequired.collect { Log.i(TAG, "The server needs a newer app") } }
         }
 
         fun close() = scope.cancel()
@@ -234,6 +268,23 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         }
     }
 
+    /**
+     * The owner reset encryption: stop syncing, and forget the old key and the history it opened (the server wiped
+     * it). The session stays; syncing resumes once the phone has the new key. [keyId] is the key that was reset: a
+     * signal that arrives after another key was set up is ignored.
+     */
+    private suspend fun onKeyReset(g: SessionGraph, keyId: String?) = withContext(NonCancellable) {
+        lifecycle.withLock {
+            if (_current.value !== g || g.ending) return@withLock
+            if (sessions.vaultKey.value?.keyId != keyId) return@withLock
+            g.engine.stop()
+            sessions.onKeyReset()
+            withContext(Dispatchers.IO) { imageFiles.clear() }   // plaintext copies of the wiped history
+            Notifications.cancelClip(app)
+            Log.i(TAG, "Encryption was reset; waiting for the new key")
+        }
+    }
+
     // Caller holds lifecycle.
     private suspend fun end(g: SessionGraph) {
         g.markEnding()
@@ -253,7 +304,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                 ClipKind.TEXT, ClipKind.LINK -> clipboard.writeText(clip.text ?: return false)
                 ClipKind.IMAGE -> {
                     val png = withContext(Dispatchers.IO) { imageFiles.find(id)?.readBytes() }
-                        ?: g?.api?.image(id)
+                        ?: g?.image(id)
                         ?: return false
                     withContext(Dispatchers.IO) { clipboard.writeImage(id, png) }
                 }
@@ -270,6 +321,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             false
         } catch (e: IOException) {
             Log.w(TAG, "Cannot copy the clip (${e.javaClass.simpleName})")
+            false
+        } catch (e: GeneralSecurityException) {
+            Log.w(TAG, "Cannot open the image to copy (${e.javaClass.simpleName})")
             false
         }
     }
@@ -298,6 +352,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override val cache: HistoryCache? get() = this@AppGraph.cache.takeIf { _current.value != null }
         override val thumbs: ThumbnailStore? get() = this@AppGraph.thumbs.takeIf { _current.value != null }
         override fun api(): PrivatePasteApi? = _current.value?.api
+        override fun codec(): ClipCodec? = this@AppGraph.codec().takeIf { _current.value != null }
         override val clipboard = this@AppGraph.clipboard
         override val settings = this@AppGraph.settings
         override val startService: () -> Unit = { SyncService.start(app) }
@@ -323,5 +378,8 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
 
     private companion object {
         const val TAG = "AppGraph"
+
+        /** The server's defaults (PP_MAX_TEXT_KB, PP_MAX_IMAGE_MB). */
+        val DEFAULT_LIMITS = ServerLimits(textKb = 1024, imageMb = 20)
     }
 }

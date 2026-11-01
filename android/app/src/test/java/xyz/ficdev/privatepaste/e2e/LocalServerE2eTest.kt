@@ -23,6 +23,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.core.ServerUrl
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
+import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
+import xyz.ficdev.privatepaste.core.crypto.VaultKey
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.send.ClipSender
 import xyz.ficdev.privatepaste.send.SendResult
@@ -49,7 +52,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * End-to-end check of the real client classes against a LOCAL server. Skipped unless `PP_E2E_URL` is set, e.g.
  * `PP_E2E_URL=http://localhost:5299` with the server started with `PP_PASSWORD=dev` (see README "Local development").
- * It refuses any host other than localhost, so it can never touch a production server.
+ * It refuses any host other than localhost, so it can never touch a production server. Both clients share one vault
+ * key: a server without a vault gets one under [PASSPHRASE]; a server whose vault was set up otherwise fails the unlock.
  */
 @RunWith(RobolectricTestRunner::class)
 class LocalServerE2eTest {
@@ -92,14 +96,20 @@ class LocalServerE2eTest {
         val session = checkNotNull(manager.session.value)
         val phoneDeviceId = session.deviceId
         val phoneApi = PrivatePasteApi(baseUrl, session.token, client)
+        val key = phoneApi.vault()?.let { PassphraseWrap.unwrap(it, PASSPHRASE) }
+            ?: VaultKey.create().also { phoneApi.putVault(PassphraseWrap.wrap(it, PASSPHRASE)) }
+        val codec = ClipCodec(key)
 
         val capture = LocalCaptureClock()
-        val sender = ClipSender(phoneApi, queue, cache, capture, { }, Clock.systemUTC())
+        val sender = ClipSender(
+            phoneApi, { codec }, { phoneApi.serverInfo()!!.limits }, queue, cache, capture, { }, Clock.systemUTC(),
+        )
         val engine = SyncEngine(
             api = phoneApi, cache = cache, queue = queue, thumbs = thumbs,
             applier = ClipApplier { clip -> applied += clip; cache.markApplied(clip.lastCopiedAt, clip.hash); true },
             flushQueue = { sender.flushQueue() },
             links = OkHttpLinkFactory(open = { phoneApi.webSocket(it) }),
+            codec = { codec },
             ownDeviceId = phoneDeviceId, capture = capture, clock = Clock.systemUTC(), backoff = Backoff(), scope = scope,
         )
         this@LocalServerE2eTest.engine = engine
@@ -113,13 +123,14 @@ class LocalServerE2eTest {
         try {
             // 3. The PC uploads text; the phone applies it.
             val fromPc = "e2e from pc ${UUID.randomUUID()}"
-            pc.uploadText(fromPc, null, backfill = false)
+            val sealed = codec.encodeText(fromPc, null, backfill = false)
+            pc.uploadClip(sealed.meta, sealed.thumb, sealed.blobs)
             waitFor("phone applies the pc clip") { applied.any { it.text == fromPc } }
 
             // 4. The phone sends text; the PC sees it in the history.
             val fromPhone = "e2e from phone ${UUID.randomUUID()}"
             assertEquals(SendResult.Sent, sender.sendText(fromPhone))
-            val phoneClip = pc.clips(null).items.first { it.text == fromPhone }
+            val phoneClip = pc.clips(null).items.map(codec::decode).first { it.text == fromPhone }
             assertEquals(phoneDeviceId, phoneClip.sourceDeviceId)
 
             // 5. A delete on the PC reaches the phone's cache.
@@ -135,7 +146,9 @@ class LocalServerE2eTest {
             assertEquals(SyncState.SIGNED_OUT, engine.state.value)
         } finally {
             // Best-effort cleanup of the pc device and its clips.
-            runCatching { pc.clips(null).items.filter { it.text?.startsWith("e2e from ") == true }.forEach { pc.delete(it.id) } }
+            runCatching {
+                pc.clips(null).items.map(codec::decode).filter { it.text?.startsWith("e2e from ") == true }.forEach { pc.delete(it.id) }
+            }
             runCatching { pc.logout() }
         }
     }
@@ -150,5 +163,6 @@ class LocalServerE2eTest {
 
     private companion object {
         const val TIMEOUT_MS = 10_000L
+        const val PASSPHRASE = "local e2e passphrase only"
     }
 }

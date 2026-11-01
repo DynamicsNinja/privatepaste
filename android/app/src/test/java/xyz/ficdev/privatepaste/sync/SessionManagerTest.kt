@@ -27,6 +27,12 @@ import xyz.ficdev.privatepaste.storage.OutboundQueue
 import xyz.ficdev.privatepaste.storage.SessionStore
 import xyz.ficdev.privatepaste.storage.StoredSession
 import xyz.ficdev.privatepaste.storage.ThumbnailStore
+import xyz.ficdev.privatepaste.storage.VaultKeyStore
+import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
+import xyz.ficdev.privatepaste.core.crypto.VaultKey
+import xyz.ficdev.privatepaste.core.crypto.WrongPassphraseException
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import java.io.File
 import java.net.InetAddress
 import java.time.Instant
@@ -43,6 +49,7 @@ class SessionManagerTest {
     private lateinit var cache: HistoryCache
     private lateinit var queue: OutboundQueue
     private lateinit var thumbs: ThumbnailStore
+    private lateinit var vault: VaultKeyStore
     private lateinit var url: String
 
     @Before
@@ -53,6 +60,7 @@ class SessionManagerTest {
         cache = HistoryCache(CryptoFile(File(tmp.root, "cache.bin"), keys, KeyAliases.CACHE))
         queue = OutboundQueue(CryptoFile(File(tmp.root, "queue.bin"), keys, KeyAliases.QUEUE), tmp.newFolder("queue-images"), keys)
         thumbs = ThumbnailStore(tmp.newFolder("thumbs"), keys)
+        vault = VaultKeyStore(CryptoFile(File(tmp.root, "vault.bin"), keys, KeyAliases.VAULT))
     }
 
     @After
@@ -65,6 +73,7 @@ class SessionManagerTest {
         store, cache, thumbs, queue,
         apiFactory = { baseUrl, token -> PrivatePasteApi(baseUrl, token, client) },
         hints = hints,
+        vaultKeys = vault,
     )
 
     private fun json(body: String, code: Int = 200) =
@@ -80,6 +89,7 @@ class SessionManagerTest {
         cache.save()
         queue.enqueueText("queued", Instant.parse("2026-10-01T00:00:00Z"))
         thumbs.put("hash-old", byteArrayOf(1))
+        vault.save(VaultKey.create())
     }
 
     private fun assertLocalDataCleared() {
@@ -90,6 +100,7 @@ class SessionManagerTest {
         assertNull(thumbs.get("hash-old"))
         val reloaded = HistoryCache(CryptoFile(File(tmp.root, "cache.bin"), keys, KeyAliases.CACHE))
         assertTrue(reloaded.items.value.isEmpty())
+        assertNull("the vault key is deleted", vault.load())
     }
 
     @Test
@@ -205,5 +216,74 @@ class SessionManagerTest {
         assertNull(store.load())
         assertLocalDataCleared()
         assertNull(m.lastServerUrl)
+    }
+
+    @Test
+    fun signOutDeletesVaultKey(): Unit = runBlocking {
+        val m = manager()
+        server.enqueue(json("""{"deviceId":"dev-1","token":"tok-1"}"""))
+        assertEquals(SignInResult.Ok, m.signIn(url, "Ana", "dev", "Pixel 9"))
+        val key = VaultKey.create()
+        m.useVaultKey(key)
+        assertEquals(key.keyId, m.vaultKey.value!!.keyId)
+        assertEquals(key.keyId, vault.load()!!.keyId)
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        m.signOut()
+
+        assertNull(m.vaultKey.value)
+        assertNull(vault.load())
+        assertThrows("the key in memory is wiped", IllegalStateException::class.java) { key.export() }
+    }
+
+    @Test
+    fun onRevokedDeletesVaultKey(): Unit = runBlocking {
+        val m = manager()
+        m.useVaultKey(VaultKey.create())
+        m.onRevoked()
+        assertNull(m.vaultKey.value)
+        assertNull(vault.load())
+    }
+
+    @Test
+    fun theStoredKeyIsLoadedOnStartAndAReplacedOneIsClosed(): Unit = runBlocking {
+        val first = VaultKey.create()
+        vault.save(first)
+        val m = manager()
+        val loaded = m.vaultKey.value!!
+        assertEquals(first.keyId, loaded.keyId)
+
+        val second = VaultKey.create()
+        m.useVaultKey(second)
+        assertEquals(second.keyId, vault.load()!!.keyId)
+        assertThrows(IllegalStateException::class.java) { loaded.export() }
+    }
+
+    @Test
+    fun keyResetForgetsTheKeyAndTheLocalData(): Unit = runBlocking {
+        val m = manager()
+        server.enqueue(json("""{"deviceId":"dev-1","token":"tok-1"}"""))
+        assertEquals(SignInResult.Ok, m.signIn(url, "Ana", "dev", "Pixel 9"))
+        seedLocalData()
+        m.useVaultKey(VaultKey.create())
+
+        m.onKeyReset()
+
+        assertNotNull("still signed in", m.session.value)
+        assertNull(m.vaultKey.value)
+        assertLocalDataCleared()
+    }
+
+    @Test
+    fun unlockVaultUnwrapsAndStoresTheKey(): Unit = runBlocking {
+        val key = VaultKey.create()
+        val wrap = PassphraseWrap.wrap(key, "correct horse battery")
+        val m = manager()
+        assertThrows(WrongPassphraseException::class.java) { runBlocking { m.unlockVault(wrap, "wrong horse battery") } }
+        assertNull(m.vaultKey.value)
+
+        m.unlockVault(wrap, "correct horse battery")
+        assertEquals(key.keyId, m.vaultKey.value!!.keyId)
+        assertEquals(key.keyId, vault.load()!!.keyId)
     }
 }

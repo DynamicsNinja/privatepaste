@@ -18,6 +18,7 @@ interface KeyProvider {
 /** Key aliases. Each kind of data has its own key; thumbnails share the cache key, queued images the queue key. */
 object KeyAliases {
     const val SESSION = "privatepaste.session"
+    const val VAULT = "privatepaste.vault"
     const val CACHE = "privatepaste.cache"
     const val QUEUE = "privatepaste.queue"
 }

@@ -20,6 +20,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowToast
 import java.util.concurrent.TimeUnit
 
@@ -46,6 +47,7 @@ private fun awaitFinish(isFinishing: () -> Boolean) {
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = TestSenderApp::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ShareActivityTest {
     @get:Rule val tmp = TemporaryFolder()
     private lateinit var f: SenderFixture
@@ -86,14 +88,14 @@ class ShareActivityTest {
 
         assertEquals("Sent to your devices", awaitToast())
         assertEquals(1, f.server.requestCount)
-        assertTrue(f.server.takeRequest().body.readUtf8().contains("bold words"))
+        assertEquals("bold words", f.uploaded(f.server.takeRequest()).text)
     }
 
     @Test
     fun shareActivityImagePathSendsBytesFromContentUri() {
-        f.respondWith { f.json(f.clipJson("i", "")) }
+        f.respondWith { f.echo(it, "i") }
         val uri = android.net.Uri.parse("content://media/external/images/media/7")
-        val bytes = ByteArray(200) { (it * 3).toByte() }
+        val bytes = SenderFixture.png(12, 8)
         val app = ApplicationProvider.getApplicationContext<Application>()
         shadowOf(app.contentResolver).registerInputStream(uri, java.io.ByteArrayInputStream(bytes))
         val intent = Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri)
@@ -102,9 +104,9 @@ class ShareActivityTest {
         awaitFinish { controller.get().isFinishing }
 
         assertEquals("Sent to your devices", awaitToast())
-        val req = f.server.takeRequest()
-        assertEquals("/api/clips/image", req.path)
-        assertTrue(req.body.readByteString().indexOf(okio.ByteString.of(*bytes)) >= 0)
+        val upload = f.uploaded(f.server.takeRequest())
+        assertEquals("image", upload.meta.kind)
+        assertEquals(12, f.cache.items.value.single().width)
     }
 
     @Test

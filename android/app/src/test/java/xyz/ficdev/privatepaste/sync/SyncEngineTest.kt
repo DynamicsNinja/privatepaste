@@ -28,6 +28,13 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import xyz.ficdev.privatepaste.api.ApiException
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import xyz.ficdev.privatepaste.api.KeyResetException
+import xyz.ficdev.privatepaste.api.UpdateRequiredException
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
+import xyz.ficdev.privatepaste.core.crypto.SealedBox
+import xyz.ficdev.privatepaste.core.crypto.VaultKey
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.SyncPage
@@ -44,6 +51,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.Base64
 import kotlin.random.Random
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -60,6 +68,8 @@ class SyncEngineTest {
     private lateinit var cache: HistoryCache
     private lateinit var queue: OutboundQueue
     private lateinit var thumbs: ThumbnailStore
+    private val vaultKey = VaultKey.create()
+    private var codec: ClipCodec? = ClipCodec(vaultKey)
     private val api = FakeApi()
     private val links = FakeLinks()
     private val capture = LocalCaptureClock()
@@ -80,7 +90,7 @@ class SyncEngineTest {
 
     // ---------------------------------------------------------------- fakes
 
-    private class FakeApi : SyncApi {
+    private inner class FakeApi : SyncApi {
         val pages = ArrayDeque<SyncPage>()
         val syncCalls = mutableListOf<Long>()
         var syncError: Exception? = null
@@ -100,7 +110,7 @@ class SyncEngineTest {
             thumbCalls += id
             thumbGate?.await()
             thumbError?.let { throw it }
-            return "png-$id".toByteArray()
+            return SealedBox.seal(vaultKey, "thumb", "png-$id".toByteArray())
         }
     }
 
@@ -181,6 +191,7 @@ class SyncEngineTest {
             }
         },
         links = links,
+        codec = { codec },
         ownDeviceId = own,
         capture = capture,
         clock = VirtualClock(testScheduler, base),
@@ -195,11 +206,29 @@ class SyncEngineTest {
         device: String? = other,
         kind: ClipKind = ClipKind.TEXT,
         hash: String = "h-$id-$seq",
-    ) = ClipDto(
-        id = id, seq = seq, kind = kind, text = if (kind == ClipKind.IMAGE) null else "text $id",
-        hash = hash, width = if (kind == ClipKind.IMAGE) 10 else null, height = if (kind == ClipKind.IMAGE) 10 else null,
-        sizeBytes = 6, sourceDeviceId = device, lastCopiedAt = base.plusSeconds(minute * 60),
+    ) = sealed(
+        ClipDto(
+            id = id, seq = seq, kind = kind, text = if (kind == ClipKind.IMAGE) null else "text $id",
+            hash = hash, width = if (kind == ClipKind.IMAGE) 10 else null, height = if (kind == ClipKind.IMAGE) 10 else null,
+            sizeBytes = 6, sourceDeviceId = device, lastCopiedAt = base.plusSeconds(minute * 60),
+        ),
     )
+
+    /**
+     * The clip as the server sends it (sealed payload and key id) while keeping the plaintext fields too, so it
+     * equals what the engine caches after decoding. [onWire] drops the plaintext, as a real server does.
+     */
+    private fun sealed(clip: ClipDto, key: VaultKey = vaultKey): ClipDto {
+        val json = buildJsonObject {
+            clip.text?.let { put("text", it) }
+            clip.width?.let { put("width", it) }
+            clip.height?.let { put("height", it) }
+        }.toString()
+        val payload = Base64.getEncoder().encodeToString(SealedBox.seal(key, "payload", json.toByteArray()))
+        return clip.copy(payload = payload, keyId = key.keyId)
+    }
+
+    private fun ClipDto.onWire() = copy(text = null, width = null, height = null)
 
     private fun page(vararg clips: ClipDto, deleted: List<String> = emptyList(), latest: Long, hasMore: Boolean = false) =
         SyncPage(clips.toList(), deleted, latest, hasMore)
@@ -943,5 +972,136 @@ class SyncEngineTest {
         advanceTimeBy(30_000)
         runCurrent()
         assertEquals(3, flushes)
+    }
+
+    // ---------------------------------------------------------------- end-to-end encryption
+
+    @Test
+    fun decodesBeforeCaching() = runTest {
+        cache.markApplied(base, "previous")
+        val secret = clip("a", 1).copy(text = "the secret")
+        api.pages += page(sealed(secret).onWire(), clip("img", 2, kind = ClipKind.IMAGE, hash = "hash-img").onWire(), latest = 2)
+        engine().start()
+        runCurrent()
+
+        val held = cache.items.value.associateBy { it.id }
+        assertEquals("the secret", held.getValue("a").text)
+        assertEquals(10, held.getValue("img").width)
+        assertEquals(10, held.getValue("img").height)
+        assertEquals(vaultKey.keyId, cache.keyId)
+        // The applier gets the opened clip too.
+        assertEquals(listOf("img"), applied.map { it.id })
+        assertEquals(10, applied.single().width)
+
+        links.last.push(WsEvent.ClipCreated(sealed(clip("b", 3).copy(text = "pushed")).onWire(), live = true))
+        runCurrent()
+        assertEquals("pushed", cache.items.value.first { it.id == "b" }.text)
+        assertEquals("pushed", applied.last().text)
+        // The thumbnail is stored opened, ready to show.
+        assertArrayEquals("png-img".toByteArray(), thumbs.get("hash-img"))
+    }
+
+    @Test
+    fun aClipThatDoesNotOpenIsCachedAsUnknownAndNeverApplied() = runTest {
+        cache.markApplied(base, "previous")
+        val broken = clip("a", 1).copy(payload = "AAAA")
+        api.pages += page(broken.onWire(), latest = 1)
+        engine().start()
+        runCurrent()
+
+        assertEquals(ClipKind.UNKNOWN, cache.items.value.single().kind)
+        assertTrue(applied.isEmpty())
+    }
+
+    @Test
+    fun keyResetStopsAndEmits() = runTest {
+        val engine = engine()
+        var resets = 0
+        backgroundScope.launch { engine.keyReset.collect { resets++ } }
+        engine.start()
+        runCurrent()
+        assertEquals(SyncState.CONNECTED, engine.state.value)
+
+        links.last.push(WsEvent.VaultReset)
+        runCurrent()
+
+        assertEquals(1, resets)
+        assertTrue(links.last.closed)
+        assertEquals(SyncState.OFFLINE, engine.state.value)
+        advanceTimeBy(10 * 60_000)
+        assertEquals("no reconnect with the old key", 1, links.connects)
+
+        // Once there is a key again, a start syncs again.
+        codec = ClipCodec(VaultKey.create())
+        engine.start()
+        runCurrent()
+        assertEquals(2, links.connects)
+        assertEquals(SyncState.CONNECTED, engine.state.value)
+    }
+
+    @Test
+    fun aClipUnderAnotherKeyIsAKeyReset() = runTest {
+        val engine = engine()
+        var resets = 0
+        backgroundScope.launch { engine.keyReset.collect { resets++ } }
+        api.pages += page(clip("mine", 1), sealed(clip("foreign", 2), VaultKey.create()).onWire(), latest = 2)
+        engine.start()
+        runCurrent()
+
+        assertEquals(1, resets)
+        assertTrue("the foreign clip is not cached", cache.items.value.none { it.id == "foreign" })
+        assertEquals(0, flushes)
+        advanceTimeBy(10 * 60_000)
+        assertEquals(1, links.connects)
+        assertEquals(SyncState.OFFLINE, engine.state.value)
+    }
+
+    @Test
+    fun aKeyResetDuringTheFlushStops() = runTest {
+        val engine = engine()
+        var resets = 0
+        backgroundScope.launch { engine.keyReset.collect { resets++ } }
+        flushError = KeyResetException("Encryption was reset.")
+        engine.start()
+        runCurrent()
+
+        assertEquals(1, resets)
+        advanceTimeBy(10 * 60_000)
+        assertEquals(1, links.connects)
+    }
+
+    @Test
+    fun updateRequiredStopsAndEmits() = runTest {
+        val engine = engine()
+        var updates = 0
+        backgroundScope.launch { engine.updateRequired.collect { updates++ } }
+        api.syncError = UpdateRequiredException("Update PrivatePaste to keep syncing.")
+        engine.start()
+        runCurrent()
+
+        assertEquals(1, updates)
+        advanceTimeBy(10 * 60_000)
+        assertEquals(1, links.connects)
+        assertEquals(SyncState.OFFLINE, engine.state.value)
+
+        // A 426 on the WebSocket upgrade is the same signal.
+        api.syncError = null
+        links.failure = UpdateRequiredException("Update PrivatePaste to keep syncing.")
+        engine.start()
+        runCurrent()
+        assertEquals(2, updates)
+        advanceTimeBy(10 * 60_000)
+        assertEquals(2, links.connects)
+    }
+
+    @Test
+    fun withoutAKeyTheEngineDoesNotConnect() = runTest {
+        codec = null
+        val engine = engine()
+        engine.start()
+        runCurrent()
+        advanceTimeBy(10 * 60_000)
+        assertEquals(0, links.connects)
+        assertEquals(SyncState.OFFLINE, engine.state.value)
     }
 }

@@ -11,6 +11,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import xyz.ficdev.privatepaste.core.ContentHash
 import xyz.ficdev.privatepaste.core.model.VaultWrap
@@ -87,14 +88,36 @@ class VaultCryptoTest {
         assertEquals(UUID.fromString(handover.str("id")), qr!!.id)
         assertArrayEquals(handover.bytes("otk"), qr.otk)
         assertEquals(vk.str("keyId"), qr.keyId)
+
+        // An otk whose base64url uses '-' and '_' (and whose last character carries spare bits).
+        val urlSafe = section("handoverUrlSafe")
+        assertEquals(urlSafe.str("blob"), Handover.wrap(key, urlSafe.bytes("otk"), urlSafe.bytes("nonce")).hex())
+        assertEquals(
+            urlSafe.str("qrText"),
+            Handover.qrText(UUID.fromString(urlSafe.str("id")), urlSafe.bytes("otk"), vk.str("keyId")),
+        )
+        val urlSafeQr = Handover.parseQr(urlSafe.str("qrText"))
+        assertNotNull(urlSafeQr)
+        assertEquals(UUID.fromString(urlSafe.str("id")), urlSafeQr!!.id)
+        assertArrayEquals(urlSafe.bytes("otk"), urlSafeQr.otk)
+        assertEquals(vk.str("keyId"), urlSafeQr.keyId)
+        assertEquals(vk.str("keyId"), Handover.unwrap(urlSafeQr.otk, urlSafe.bytes("blob"), urlSafeQr.keyId).keyId)
+
+        val thumb = section("thumb")
+        val sealedThumb = SealedBox.seal(key, thumb.str("purpose"), thumb.bytes("plaintext"), thumb.bytes("nonce"))
+        assertEquals(thumb.str("sealed"), sealedThumb.hex())
+        assertArrayEquals(thumb.bytes("plaintext"), SealedBox.open(key, thumb.str("purpose"), thumb.bytes("sealed")))
     }
 
-    // The argon2 and passphraseWrap arrays are filled by a later .NET task; until then this loop has nothing to do.
-    // Expected entry shapes: argon2 {passphrase, salt (hex), memoryKiB, iterations, parallelism, key (hex)} and
+    // Entry shapes: argon2 {passphrase, salt (hex), memoryKiB, iterations, parallelism, key (hex)} and
     // passphraseWrap {passphrase, vk (hex), wrap (a VaultWrap as on the wire)}.
     @Test
     fun argon2VectorsMatch() {
-        for (case in vectors["argon2"] as? JsonArray ?: JsonArray(emptyList())) {
+        val argon2 = vectors.getValue("argon2") as JsonArray
+        val wraps = vectors.getValue("passphraseWrap") as JsonArray
+        assertTrue("argon2 vectors are present", argon2.isNotEmpty())
+        assertTrue("passphraseWrap vectors are present", wraps.isNotEmpty())
+        for (case in argon2) {
             val c = case.jsonObject
             val kek = PassphraseWrap.deriveKek(
                 c.str("passphrase"), c.bytes("salt"),
@@ -102,7 +125,7 @@ class VaultCryptoTest {
             )
             assertEquals(c.str("key"), kek.hex())
         }
-        for (case in vectors["passphraseWrap"] as? JsonArray ?: JsonArray(emptyList())) {
+        for (case in wraps) {
             val c = case.jsonObject
             val wrap = Json.decodeFromJsonElement(VaultWrap.serializer(), c.getValue("wrap"))
             val key = PassphraseWrap.unwrap(wrap, c.str("passphrase"))
@@ -186,6 +209,8 @@ class VaultCryptoTest {
         assertNull(Handover.parseQr(good.replace("&k=ICEi", "&k=ICEiX")))
         assertNull(Handover.parseQr(good.replace("&kid=13dee80fba1d5400", "")))
         assertNotNull(Handover.parseQr("$good&future=1"))
+        // Only the canonical encoding: "...Pj9" decodes to the same bytes as "...Pj8" but isn't what qrText writes.
+        assertNull(Handover.parseQr(good.replace("Pj8&", "Pj9&")))
     }
 
     @Test

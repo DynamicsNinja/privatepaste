@@ -92,7 +92,7 @@ class CopyActivityTest {
 
     @Test
     fun unauthorizedImageFetchRevokesAndStillFinishes() {
-        server.other = { r -> if (r.path == "/api/clips/i9/image") MockResponse().setResponseCode(401) else null }
+        server.other = { r -> if (r.path == "/api/clips/i9/blobs/0") MockResponse().setResponseCode(401) else null }
         app.graph.cache.upsert(clip("i9", ClipKind.IMAGE, text = null), fromSync = true)
         Notifications.postClip(app, clip("i9", ClipKind.IMAGE, text = null))
 

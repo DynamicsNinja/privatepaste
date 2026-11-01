@@ -3,6 +3,7 @@ package xyz.ficdev.privatepaste.ui
 import android.content.Intent
 import kotlinx.coroutines.flow.StateFlow
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
 import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.SettingsStore
@@ -42,6 +43,9 @@ interface UiDeps {
 
     /** A client for the current session, or null while signed out. */
     fun api(): PrivatePasteApi?
+
+    /** Opens and seals clips with this phone's vault key; null while signed out or locked. */
+    fun codec(): ClipCodec? = null
 
     val clipboard: ClipboardWriter
 

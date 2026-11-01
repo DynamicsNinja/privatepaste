@@ -14,7 +14,7 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * Row thumbnails, by content hash: an in-memory LRU of [capacity] decoded bitmaps, then the encrypted
- * [ThumbnailStore], then `GET /api/clips/{id}/thumbnail` (stored for next time). Failures give null.
+ * [ThumbnailStore], then the server's sealed thumbnail, opened by [remote] (stored opened for next time). Failures give null.
  */
 class ThumbnailLoader(
     private val store: ThumbnailStore?,

@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -28,6 +29,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.ficdev.privatepaste.api.ApiException
+import xyz.ficdev.privatepaste.api.KeyResetException
+import xyz.ficdev.privatepaste.api.UpdateRequiredException
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.WsEvent
@@ -59,6 +63,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * All timing uses [clock] and the dispatcher of [scope]; in tests both follow virtual time. Blocking file IO runs on
  * [scope]'s dispatcher, so give it an IO-capable one.
  *
+ * Every clip is opened with [codec] before it reaches the cache, the applier or the thumbnails. Without a codec (no
+ * vault key on this phone) a run ends at once. A `vault.reset` message, or a clip sealed under another key id, ends
+ * the run and emits [keyReset]; a 426 (REST or WebSocket upgrade) ends it and emits [updateRequired]. Unlike a revoke,
+ * the engine can be started again afterwards (with a new key, or after an update).
+ *
  * The host must stop the engine before clearing the session (sign-out), so no save runs after the clear.
  */
 class SyncEngine(
@@ -69,6 +78,7 @@ class SyncEngine(
     private val applier: ClipApplier,
     private val flushQueue: suspend () -> Unit,
     private val links: LinkFactory,
+    private val codec: () -> ClipCodec?,
     private val ownDeviceId: String,
     private val capture: LocalCaptureClock,
     private val clock: Clock,
@@ -86,7 +96,20 @@ class SyncEngine(
         emit(Unit)
     }
 
-    private enum class Outcome { FAILED, REVOKED }
+    private val keyResets = Channel<Unit>(Channel.CONFLATED)
+
+    /** The vault key no longer matches the server's (reset by the owner); the run has ended. For a single collector. */
+    val keyReset: Flow<Unit> = keyResets.receiveAsFlow()
+
+    private val updates = Channel<Unit>(Channel.CONFLATED)
+
+    /** The server needs a newer app (426); the run has ended. For a single collector. */
+    val updateRequired: Flow<Unit> = updates.receiveAsFlow()
+
+    private enum class Outcome { FAILED, REVOKED, KEY_RESET, UPDATE_REQUIRED, LOCKED }
+
+    /** Ends the connection as a key reset. */
+    private class KeyResetSignal : Exception("The vault key was reset")
 
     private val lock = Any()
     private var job: Job? = null                      // the current run; guarded by lock
@@ -213,7 +236,7 @@ class SyncEngine(
         val self = currentCoroutineContext().job
         var mine: CoroutineScope? = null
         try {
-            val revoked = coroutineScope {
+            val end = coroutineScope {
                 mine = this
                 workers = this
                 pruneThumbnails()
@@ -223,9 +246,17 @@ class SyncEngine(
                     coroutineContext.cancelChildren()   // thumbnail fetches; coroutineScope waits for them
                 }
             }
-            if (revoked) {
-                saveIfDirty()     // before the host hears of it and clears the cache
-                signOut()
+            when (end) {
+                Outcome.REVOKED -> {
+                    saveIfDirty()     // before the host hears of it and clears the cache
+                    signOut()
+                }
+                Outcome.KEY_RESET, Outcome.UPDATE_REQUIRED -> {
+                    saveIfDirty()     // likewise
+                    _state.value = SyncState.OFFLINE
+                    (if (end == Outcome.KEY_RESET) keyResets else updates).trySend(Unit)
+                }
+                else -> _state.value = SyncState.OFFLINE
             }
         } catch (e: CancellationException) {
             throw e
@@ -240,14 +271,16 @@ class SyncEngine(
         }
     }
 
-    /** Returns true when revoked; otherwise runs until cancelled. */
-    private suspend fun loop(): Boolean {
+    /** Returns how the run ended (revoked, key reset, update required or locked); otherwise runs until cancelled. */
+    private suspend fun loop(): Outcome {
         while (true) {
             currentCoroutineContext().ensureActive()
             wake.tryReceive()     // this attempt is the fresh start a pending nudge asks for
             nudged.set(false)
             _state.value = SyncState.CONNECTING
-            if (connectOnce() == Outcome.REVOKED || revokeRequested.get()) return true
+            val outcome = connectOnce()
+            if (outcome == Outcome.REVOKED || revokeRequested.get()) return Outcome.REVOKED
+            if (outcome != Outcome.FAILED) return outcome
             if (nudged.getAndSet(false)) {
                 backoff.reset()   // the network just changed: retry at once, with fresh delays
                 continue
@@ -255,7 +288,7 @@ class SyncEngine(
             val wait = backoff.next()
             _state.value = SyncState.OFFLINE
             val woke = withTimeoutOrNull(wait) { wake.receive() } != null
-            if (revokeRequested.get()) return true
+            if (revokeRequested.get()) return Outcome.REVOKED
             if (woke) backoff.reset()
         }
     }
@@ -278,12 +311,15 @@ class SyncEngine(
     }
 
     private suspend fun connection(): Outcome {
+        val codec = codec() ?: return Outcome.LOCKED   // nothing could be opened: wait for a key
         val link = try {
             links.connect()
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiException.Unauthorized) {
             return Outcome.REVOKED
+        } catch (e: UpdateRequiredException) {
+            return Outcome.UPDATE_REQUIRED
         } catch (e: Exception) {
             report("Could not connect to the server", e)
             return Outcome.FAILED
@@ -292,14 +328,14 @@ class SyncEngine(
         var connectedAt: Instant? = null
         try {
             coroutineScope {
-                catchUp()
+                catchUp(codec)
                 runFlush()
                 val pings = Pings(clock.instant())
                 connectedAt = clock.instant()
                 _state.value = SyncState.CONNECTED
                 live = Live(link, pings, this)
                 val monitor = launch { monitor(link, pings) }
-                link.events.collect { handle(it, pings) }
+                link.events.collect { handle(it, pings, codec) }
                 monitor.cancel()  // the server closed the socket (1001 or another non-1008 code)
             }
             return Outcome.FAILED
@@ -309,6 +345,12 @@ class SyncEngine(
             return Outcome.REVOKED
         } catch (e: RevokedException) {
             return Outcome.REVOKED
+        } catch (e: KeyResetSignal) {
+            return Outcome.KEY_RESET
+        } catch (e: KeyResetException) {
+            return Outcome.KEY_RESET
+        } catch (e: UpdateRequiredException) {
+            return Outcome.UPDATE_REQUIRED
         } catch (e: Exception) {
             report("Connection to the server lost", e)
             return Outcome.FAILED
@@ -322,7 +364,17 @@ class SyncEngine(
         }
     }
 
-    private suspend fun catchUp() {
+    /**
+     * Opens a clip from the server. One sealed under another key means the owner reset encryption: everything this
+     * device holds is gone from the server, so the connection ends as a key reset instead of caching it.
+     */
+    private fun open(codec: ClipCodec, wire: ClipDto): ClipDto {
+        if (wire.keyId != null && wire.keyId != codec.keyId) throw KeyResetSignal()
+        return codec.decode(wire)
+    }
+
+    private suspend fun catchUp(codec: ClipCodec) {
+        cache.keyId = codec.keyId
         val caught = ArrayList<ClipDto>()
         // A clip already held with the same copy time came back for another reason (a pin or unpin): it is not a copy, so it
         // never goes to the clipboard, even when it is the newest clip and was never applied here (as on the desktop).
@@ -330,10 +382,11 @@ class SyncEngine(
         while (true) {
             val before = cache.highestSeq
             val page = api.sync(before)
-            for (clip in page.clips) {
+            for (wire in page.clips) {
+                val clip = open(codec, wire)
                 cache.upsert(clip, fromSync = true)
                 caught += clip
-                requestThumbnail(clip)
+                requestThumbnail(clip, codec)
             }
             // The server's latestSeq is its global counter, also on a truncated page, whose tombstones only reach its
             // last clip: continue from there, and from latestSeq once the last page is read.
@@ -365,15 +418,15 @@ class SyncEngine(
         apply(newest)
     }
 
-    private suspend fun handle(event: WsEvent, pings: Pings) {
+    private suspend fun handle(event: WsEvent, pings: Pings, codec: ClipCodec) {
         when (event) {
             is WsEvent.Pong -> pings.pong()
             is WsEvent.ClipCreated -> {
-                val clip = event.clip
+                val clip = open(codec, event.clip)
                 val changed = cache.upsert(clip, fromSync = true)   // recorded before the apply, which a stop can cancel
                 markDirty()
                 saveIfDue()
-                requestThumbnail(clip)
+                requestThumbnail(clip, codec)
                 // Never a stale clip: one whose delete (tombstone) or newer version came first, or one older than the
                 // top of the history (a late broadcast, or a newer copy made here).
                 val top = cache.items.value.firstOrNull()
@@ -398,12 +451,17 @@ class SyncEngine(
                 markDirty()
                 saveIfDue()
             }
+            WsEvent.VaultReset -> throw KeyResetSignal()
             WsEvent.Unknown -> Unit
         }
     }
 
-    /** 401 and cancellation propagate; any other failure is logged and the clip skipped. */
+    /**
+     * 401 and cancellation propagate; any other failure is logged and the clip skipped. An [ClipKind.UNKNOWN] clip
+     * (a newer kind, or one that didn't open) is never handed over.
+     */
     private suspend fun apply(clip: ClipDto) {
+        if (clip.kind == ClipKind.UNKNOWN) return
         try {
             if (applier.apply(clip)) {
                 cache.markApplied(clip.lastCopiedAt, clip.hash)
@@ -440,7 +498,10 @@ class SyncEngine(
         }
     }
 
-    /** Runs [flushQueue]. A 401 and cancellation propagate; other failures are logged (the queue keeps its items). */
+    /**
+     * Runs [flushQueue]. A 401, a key reset, a 426 and cancellation propagate; other failures are logged (the queue
+     * keeps its items).
+     */
     private suspend fun runFlush() {
         try {
             flushQueue()
@@ -448,13 +509,20 @@ class SyncEngine(
             throw e
         } catch (e: ApiException.Unauthorized) {
             throw e
+        } catch (e: KeyResetException) {
+            throw e
+        } catch (e: UpdateRequiredException) {
+            throw e
         } catch (e: Exception) {
             report("Could not send the queued clips", e)
         }
     }
 
-    /** Fetches an image clip's thumbnail in the background, at most [MAX_THUMBNAIL_FETCHES] at a time. */
-    private fun requestThumbnail(clip: ClipDto) {
+    /**
+     * Fetches an image clip's sealed thumbnail in the background, at most [MAX_THUMBNAIL_FETCHES] at a time, and
+     * stores it opened.
+     */
+    private fun requestThumbnail(clip: ClipDto, codec: ClipCodec) {
         if (clip.kind != ClipKind.IMAGE) return
         val ws = workers ?: return
         if (!thumbsInFlight.add(clip.hash)) return
@@ -463,7 +531,7 @@ class SyncEngine(
                 thumbSlots.withPermit {
                     if (cache.items.value.none { it.hash == clip.hash }) return@withPermit   // gone meanwhile
                     if (thumbs.get(clip.hash) != null) return@withPermit
-                    thumbs.put(clip.hash, api.thumb(clip.id))
+                    thumbs.put(clip.hash, codec.decodeThumb(api.thumb(clip.id)))
                 }
             } catch (e: CancellationException) {
                 throw e

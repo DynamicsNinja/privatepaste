@@ -39,7 +39,7 @@ class HistoryViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val base = Instant.parse("2026-10-28T10:00:00Z")
 
-    /** Everything the fakes see, in order: "copyText:..", "copyImage:id", "restore:id", "clips:q|cursor", ... */
+    /** Everything the fakes see, in order: "copyText:..", "copyImage:id", "restore:id", "clips:[P:]|cursor", ... */
     private val events = mutableListOf<String>()
 
     private val cache = MutableStateFlow<List<ClipDto>>(emptyList())
@@ -204,40 +204,37 @@ class HistoryViewModelTest {
     }
 
     @Test
-    fun searchMergesCachedHitsFirstAndDedupes() = runTest(dispatcher) {
-        cache.value = listOf(clip("a", 3, "Hello world"), clip("b", 2, "other"), clip("c", 1, "say HELLO"))
-        remote.pages["hello|"] = ClipPage(listOf(clip("x", 0, "hello from the server"), clip("a", 3, "Hello world")), null)
+    fun searchFiltersCachedAndLoadedClipsOnThisPhone() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 30, "Hello world"), clip("b", 20, "other"), clip("c", 10, "say HELLO"))
+        remote.pages["|"] = ClipPage(listOf(clip("a", 30, "Hello world"), clip("x", 5, "hello from an older page"), clip("y", 4, "nope")), null)
         val vm = collecting(vm())
+        vm.onNearEnd()
+        advanceUntilIdle()
+        assertEquals(listOf("a", "b", "c", "x", "y"), vm.ids())
+        events.clear()
 
         vm.onQueryChange("hello")
-        advanceTimeBy(299)
         runCurrent()
-        assertEquals(listOf("a", "c"), vm.ids())   // cached hits show at once
-        assertTrue(events.isEmpty())
-
-        advanceTimeBy(2)
+        assertEquals(listOf("a", "c", "x"), vm.ids())   // case-insensitive, at once, deduped by id
         advanceUntilIdle()
-        assertEquals(listOf("clips:hello|"), events)
-        assertEquals(listOf("a", "c", "x"), vm.ids())
+        assertEquals("the server holds only ciphertext: search never asks it", emptyList<String>(), events)
+
+        vm.onQueryChange("")
+        advanceUntilIdle()
+        assertEquals(listOf("a", "b", "c", "x", "y"), vm.ids())
     }
 
     @Test
-    fun searchIsDebouncedAndNeedsTwoCharacters() = runTest(dispatcher) {
-        cache.value = listOf(clip("a", 1, "hello"))
+    fun searchSkipsClipsWithoutText() = runTest(dispatcher) {
+        cache.value = listOf(
+            clip("img", 3, text = null, kind = ClipKind.IMAGE),
+            clip("u", 2, text = null, kind = ClipKind.UNKNOWN),
+            clip("t", 1, "a picture of text"),
+        )
         val vm = collecting(vm())
-
-        vm.onQueryChange("h")
+        vm.onQueryChange("pic")
         advanceUntilIdle()
-        assertEquals(listOf("a"), vm.ids())
-        assertTrue(events.isEmpty())
-
-        vm.onQueryChange("he")
-        advanceTimeBy(100)
-        vm.onQueryChange("hel")
-        advanceTimeBy(100)
-        vm.onQueryChange("hell")
-        advanceUntilIdle()
-        assertEquals(listOf("clips:hell|"), events)
+        assertEquals(listOf("t"), vm.ids())
     }
 
     @Test
@@ -262,16 +259,15 @@ class HistoryViewModelTest {
     }
 
     @Test
-    fun searchResultsPageWithTheirCursor() = runTest(dispatcher) {
-        remote.pages["ab|"] = ClipPage(listOf(clip("x1", 5, "ab 1")), "n1")
-        remote.pages["ab|n1"] = ClipPage(listOf(clip("x2", 4, "ab 2")), null)
+    fun scrollingWhileSearchingLoadsNoPages() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 5, "ab"))
+        remote.pages["|"] = ClipPage(listOf(clip("x1", 4, "ab 1")), "n1")
         val vm = collecting(vm())
         vm.onQueryChange("ab")
-        advanceUntilIdle()
         vm.onNearEnd()
         advanceUntilIdle()
-        assertEquals(listOf("x1", "x2"), vm.ids())
-        assertEquals(listOf("clips:ab|", "clips:ab|n1"), events)
+        assertEquals(listOf("a"), vm.ids())
+        assertEquals(emptyList<String>(), events)
     }
 
     @Test
@@ -400,28 +396,21 @@ class HistoryViewModelTest {
     }
 
     @Test
-    fun staleSearchResponseIsDropped() = runTest(dispatcher) {
-        cache.value = listOf(clip("a", 9, "abc cached"))
+    fun staleTabResponseIsDropped() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 9, "cached"))
         val gate = CompletableDeferred<Unit>()
-        remote.gates["ab|"] = gate
-        remote.pages["ab|"] = ClipPage(listOf(clip("old", 5, "ab from the server")), null)
-        remote.pages["abc|"] = ClipPage(listOf(clip("new", 4, "abc from the server")), null)
+        remote.gates["P:|"] = gate
+        remote.pages["P:|"] = ClipPage(listOf(pinned(clip("old", 5, "pinned on the server"), 1)), null)
         val vm = collecting(vm())
 
-        vm.onQueryChange("ab")
-        advanceTimeBy(301)
+        vm.onTab(HistoryTab.PINNED)
         runCurrent()
-        assertEquals(listOf("clips:ab|"), events)   // in flight, suspended
+        assertEquals(listOf("clips:P:|"), events)   // in flight, suspended
 
-        vm.onQueryChange("abc")
-        advanceTimeBy(100)
-        gate.complete(Unit)                          // the "ab" answer arrives after the query moved on
-        runCurrent()
-        assertEquals(listOf("a"), vm.ids())
-
+        vm.onTab(HistoryTab.HISTORY)
+        gate.complete(Unit)                          // the Pinned answer arrives after the tab moved on
         advanceUntilIdle()
-        assertEquals(listOf("clips:ab|", "clips:abc|"), events)
-        assertEquals(listOf("a", "new"), vm.ids())
+        assertEquals(listOf("a"), vm.ids())
     }
 
     @Test
@@ -449,7 +438,7 @@ class HistoryViewModelTest {
 
     private inner class FakeRemote : ClipRemote {
         val pages = HashMap<String, ClipPage>()
-        /** A response for a "q|cursor" key waits until its gate completes. */
+        /** A response for a "[P:]|cursor" key waits until its gate completes. */
         val gates = HashMap<String, CompletableDeferred<Unit>>()
         val images = HashMap<String, ByteArray>()
         var failRestore = false
@@ -469,8 +458,8 @@ class HistoryViewModelTest {
             return held.copy(seq = held.seq + 100, pinnedAt = if (pinned) base.plusSeconds(3600).toString() else null)
         }
 
-        override suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean): ClipPage {
-            val key = (if (pinned) "P:" else "") + "${q.orEmpty()}|${cursor.orEmpty()}"
+        override suspend fun clips(cursor: String?, limit: Int, pinned: Boolean): ClipPage {
+            val key = (if (pinned) "P:" else "") + "|${cursor.orEmpty()}"
             events += "clips:$key"
             gates[key]?.await()
             return pages[key] ?: ClipPage(emptyList(), null)

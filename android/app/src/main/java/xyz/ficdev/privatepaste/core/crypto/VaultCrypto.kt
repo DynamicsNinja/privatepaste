@@ -277,7 +277,10 @@ object Handover {
     fun qrText(id: UUID, otk: ByteArray, keyId: String): String =
         "${QR_PREFIX}id=$id&k=${Base64.getUrlEncoder().withoutPadding().encodeToString(otk)}&kid=$keyId"
 
-    /** Null when [text] isn't a handover code. A repeated field makes the code ambiguous, so it is rejected; unknown fields are ignored. */
+    /**
+     * Null when [text] isn't a handover code. A repeated field makes the code ambiguous, so it is rejected; unknown
+     * fields are ignored. `k` must be the canonical unpadded base64url of the key.
+     */
     fun parseQr(text: String): HandoverQr? {
         if (!text.startsWith(QR_PREFIX)) return null
         var idText: String? = null
@@ -301,6 +304,9 @@ object Handover {
             return null
         }
         if (otk.size != OTK_SIZE) return null
+        // Canonical only: the decoder ignores the spare low bits of the last character, so "...Pj9" would open the
+        // same key as "...Pj8". Every client accepts exactly the text qrText writes.
+        if (Base64.getUrlEncoder().withoutPadding().encodeToString(otk) != kText) return null
         return HandoverQr(UUID.fromString(idText), otk, kidText)
     }
 }

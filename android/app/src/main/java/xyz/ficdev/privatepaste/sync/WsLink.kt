@@ -11,6 +11,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import xyz.ficdev.privatepaste.api.ApiException
+import xyz.ficdev.privatepaste.api.UpdateRequiredException
 import xyz.ficdev.privatepaste.core.model.ProtocolJson
 import xyz.ficdev.privatepaste.core.model.WsEvent
 import java.io.IOException
@@ -38,8 +39,8 @@ interface WsLink {
 
 fun interface LinkFactory {
     /**
-     * Opens a link. Throws [ApiException.Unauthorized] when the upgrade is refused with 401, and another exception
-     * (IOException, timeout) on any other failure.
+     * Opens a link. Throws [ApiException.Unauthorized] when the upgrade is refused with 401, [UpdateRequiredException]
+     * on 426, and another exception (IOException, timeout) on any other failure.
      */
     suspend fun connect(): WsLink
 }
@@ -79,8 +80,12 @@ class OkHttpLinkFactory(
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     if (cont.isActive) {
                         cont.resumeWithException(
-                            if (response?.code == 401) ApiException.Unauthorized()
-                            else IOException("WebSocket connect failed (${response?.code ?: t.javaClass.simpleName})", t),
+                            when (response?.code) {
+                                401 -> ApiException.Unauthorized()
+                                // The same terminal signal as a REST 426: this build is too old for the server.
+                                426 -> UpdateRequiredException(UPDATE_REQUIRED)
+                                else -> IOException("WebSocket connect failed (${response?.code ?: t.javaClass.simpleName})", t)
+                            },
                         )
                     } else {
                         link.fail(t)
@@ -96,6 +101,7 @@ class OkHttpLinkFactory(
     private companion object {
         const val DEFAULT_CAPACITY = 256
         const val NORMAL_CLOSURE = 1000
+        const val UPDATE_REQUIRED = "Update PrivatePaste to keep syncing."
     }
 }
 

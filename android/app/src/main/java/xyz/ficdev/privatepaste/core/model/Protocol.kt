@@ -143,6 +143,9 @@ sealed interface WsEvent {
     data class ClipDeleted(val id: String, val seq: Long) : WsEvent
     data object Pong : WsEvent
 
+    /** The owner reset encryption: every clip is gone and this device's vault key no longer opens anything new. */
+    data object VaultReset : WsEvent
+
     /** Any other message type, or a message that could not be parsed. */
     data object Unknown : WsEvent
 }
@@ -187,6 +190,7 @@ object ProtocolJson {
                 seq = obj.getValue("seq").jsonPrimitive.long,
             )
             "pong" -> WsEvent.Pong
+            "vault.reset" -> WsEvent.VaultReset
             else -> WsEvent.Unknown
         }
     } catch (e: CancellationException) {

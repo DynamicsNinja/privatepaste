@@ -18,6 +18,7 @@ import org.junit.Before
 import org.junit.Test
 import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
+import xyz.ficdev.privatepaste.api.UpdateRequiredException
 import xyz.ficdev.privatepaste.core.model.WsEvent
 import java.io.IOException
 
@@ -82,6 +83,30 @@ class OkHttpLinkTest {
                 fail("expected Unauthorized")
             } catch (_: ApiException.Unauthorized) {
             }
+        }
+    }
+
+    @Test
+    fun upgradeRefusedWith426IsUpdateRequired(): Unit = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(426))
+        withTimeout(10_000) {
+            try {
+                factory().connect()
+                fail("expected UpdateRequiredException")
+            } catch (e: UpdateRequiredException) {
+                assertEquals("Update PrivatePaste to keep syncing.", e.message)
+            }
+        }
+    }
+
+    @Test
+    fun vaultResetMessageArrives(): Unit = runBlocking {
+        server.enqueue(MockResponse().withWebSocketUpgrade(serverSocket(listOf("""{"type":"vault.reset"}"""), 1000)))
+        withTimeout(10_000) {
+            val link = factory().connect()
+            assertTrue(link.send("""{"type":"ping"}"""))
+            assertEquals(listOf(WsEvent.VaultReset, WsEvent.Pong), link.events.toList())
+            link.close(1000, "")
         }
     }
 

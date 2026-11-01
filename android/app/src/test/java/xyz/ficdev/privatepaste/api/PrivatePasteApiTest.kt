@@ -98,9 +98,9 @@ class PrivatePasteApiTest {
         server.enqueue(MockResponse().setResponseCode(204))
         server.enqueue(json("""{"items":[],"nextCursor":null}"""))
         server.enqueue(json("""{"clips":[],"deletedIds":[],"latestSeq":0,"hasMore":false}"""))
-        server.enqueue(MockResponse().setBody("png"))
+        server.enqueue(MockResponse().setBody("sealed"))
         val a = api()
-        a.logout(); a.clips(null); a.sync(0); a.image("x")
+        a.logout(); a.clips(null); a.sync(0); a.blob("x", 0)
         repeat(4) { assertEquals("Bearer tok", take().getHeader("Authorization")) }
     }
 
@@ -144,16 +144,16 @@ class PrivatePasteApiTest {
 
     @Test fun status413CarriesDetail() = runBlocking<Unit> {
         server.enqueue(problem(413, "Text is too large.", "Payload Too Large"))
-        val e = assertThrowsApi<ApiException.Rejected> { api().uploadText("x", null, false) }
+        val e = assertThrowsApi<ApiException.Rejected> { api().uploadClip(meta, null, emptyList()) }
         assertEquals(413, e.status)
         assertEquals("Text is too large.", e.message)
     }
 
     @Test fun rejectedFallsBackToTitleThenGeneric() = runBlocking<Unit> {
         server.enqueue(problem(400, null, "Bad Request"))
-        assertEquals("Bad Request", assertThrowsApi<ApiException.Rejected> { api().uploadText("x", null, false) }.message)
+        assertEquals("Bad Request", assertThrowsApi<ApiException.Rejected> { api().uploadClip(meta, null, emptyList()) }.message)
         server.enqueue(MockResponse().setResponseCode(400).setBody("<html>"))
-        val e = assertThrowsApi<ApiException.Rejected> { api().uploadText("x", null, false) }
+        val e = assertThrowsApi<ApiException.Rejected> { api().uploadClip(meta, null, emptyList()) }
         assertEquals(400, e.status)
         assertTrue(e.message!!.isNotBlank())
     }
@@ -195,42 +195,6 @@ class PrivatePasteApiTest {
     @Test fun networkFailureIsTransient() = runBlocking<Unit> {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
         assertThrowsApi<ApiException.Transient> { api().clips(null) }
-    }
-
-    @Test fun uploadTextBody() = runBlocking<Unit> {
-        server.enqueue(json(clipJson))
-        api().uploadText("hello", null, false)
-        val live = Json.parseToJsonElement(take().body.readUtf8()).jsonObject
-        assertEquals("hello", live["text"]!!.jsonPrimitive.content)
-        assertEquals("false", live["backfill"]!!.jsonPrimitive.content)
-        assertFalse(live.containsKey("copiedAt"))
-
-        server.enqueue(json(clipJson))
-        api().uploadText("hello", Instant.parse("2026-10-28T10:00:00Z"), true)
-        val back = Json.parseToJsonElement(take().body.readUtf8()).jsonObject
-        assertEquals("2026-10-28T10:00:00Z", back["copiedAt"]!!.jsonPrimitive.content)
-        assertEquals("true", back["backfill"]!!.jsonPrimitive.content)
-    }
-
-    @Test fun liveImageUploadHasOnlyFilePart() = runBlocking<Unit> {
-        server.enqueue(json(clipJson))
-        api().uploadImage(byteArrayOf(1, 2, 3), "a.png", "image/png", null, false)
-        val req = take()
-        assertEquals("/api/clips/image", req.path)
-        val body = req.body.readUtf8()
-        assertTrue(body.contains("name=\"file\"; filename=\"a.png\""))
-        assertTrue(body.contains("Content-Type: image/png"))
-        assertFalse(body.contains("name=\"copiedAt\""))
-        assertFalse(body.contains("name=\"backfill\""))
-    }
-
-    @Test fun backfillImageUploadHasAllParts() = runBlocking<Unit> {
-        server.enqueue(json(clipJson))
-        api().uploadImage(byteArrayOf(1, 2, 3), "a.jpg", "image/jpeg", Instant.parse("2026-10-28T10:00:00Z"), true)
-        val body = take().body.readUtf8()
-        assertTrue(body.contains("name=\"file\"; filename=\"a.jpg\""))
-        assertTrue(body.contains("name=\"copiedAt\"\r\n\r\n2026-10-28T10:00:00Z"))
-        assertTrue(body.contains("name=\"backfill\"\r\n\r\ntrue"))
     }
 
     @Test fun restoreMaps404ToNull() = runBlocking<Unit> {
@@ -291,13 +255,10 @@ class PrivatePasteApiTest {
     }
 
     @Test fun imageAndThumbnailBytes() = runBlocking<Unit> {
-        server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(1, 2, 3))))
-        assertArrayEquals(byteArrayOf(1, 2, 3), api().image("c1"))
         server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(9))))
         assertArrayEquals(byteArrayOf(9), api().thumb("c1"))
         server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(7, 7))))
         assertArrayEquals(byteArrayOf(7, 7), api().blob("c1", 0))
-        assertEquals("/api/clips/c1/image", take().path)
         assertEquals("/api/clips/c1/thumb", take().path)
         assertEquals("/api/clips/c1/blobs/0", take().path)
     }

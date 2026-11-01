@@ -37,7 +37,6 @@ import xyz.ficdev.privatepaste.core.model.VaultWrap
 import xyz.ficdev.privatepaste.sync.SyncApi
 import java.io.IOException
 import java.time.Duration
-import java.time.Instant
 import java.util.Base64
 import kotlin.coroutines.resumeWithException
 
@@ -71,36 +70,6 @@ class PrivatePasteApi(
     suspend fun logout() {
         val request = request("api/auth/logout").post(ByteArray(0).toRequestBody()).build()
         execute(request, requestTimeout) { }
-    }
-
-    @Deprecated("Plaintext upload; the server no longer has this endpoint. Task 17 moves callers to uploadClip.")
-    suspend fun uploadText(text: String, copiedAt: Instant?, backfill: Boolean): ClipDto {
-        val body = buildJsonObject {
-            put("text", text)
-            if (backfill && copiedAt != null) put("copiedAt", copiedAt.toString())
-            put("backfill", backfill)
-        }
-        val request = request("api/clips/text").post(jsonBody(body)).build()
-        val timeout = uploadTimeout(text.toByteArray(Charsets.UTF_8).size.toLong())
-        return execute(request, timeout) { decode(it, ClipDto.serializer()) }
-    }
-
-    @Deprecated("Plaintext upload; the server no longer has this endpoint. Task 17 moves callers to uploadClip.")
-    suspend fun uploadImage(
-        bytes: ByteArray,
-        fileName: String,
-        mime: String,
-        copiedAt: Instant?,
-        backfill: Boolean,
-    ): ClipDto {
-        val form = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", fileName, bytes.toRequestBody(mime.toMediaType()))
-        if (backfill) {
-            if (copiedAt != null) form.addFormDataPart("copiedAt", copiedAt.toString())
-            form.addFormDataPart("backfill", "true")
-        }
-        val request = request("api/clips/image").post(form.build()).build()
-        return execute(request, uploadTimeout(bytes.size.toLong())) { decode(it, ClipDto.serializer()) }
     }
 
     suspend fun clips(cursor: String?, limit: Int = 50, pinned: Boolean = false): ClipPage {
@@ -141,9 +110,6 @@ class PrivatePasteApi(
         }
         return execute(get(url), requestTimeout) { decode(it, SyncPage.serializer()) }
     }
-
-    @Deprecated("Plaintext image; the server no longer has this endpoint. Task 17 moves callers to blob(id, 0).")
-    suspend fun image(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("image") })
 
     /** The sealed thumbnail (ciphertext). */
     override suspend fun thumb(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("thumb") })

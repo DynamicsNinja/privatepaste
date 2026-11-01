@@ -4,18 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -25,6 +20,7 @@ import xyz.ficdev.privatepaste.R
 import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ClipPage
@@ -33,24 +29,34 @@ import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.UiText
 import kotlin.coroutines.CoroutineContext
 
-/** The server calls the history screen makes. Production adapts [PrivatePasteApi]; tests pass a fake. */
+/**
+ * The server calls the history screen makes, with every clip and image already opened. Production adapts
+ * [PrivatePasteApi]; tests pass a fake.
+ */
 interface ClipRemote {
-    suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean = false): ClipPage
+    suspend fun clips(cursor: String?, limit: Int, pinned: Boolean = false): ClipPage
     suspend fun pin(id: String, pinned: Boolean): ClipDto
     suspend fun restore(id: String): ClipDto?
     suspend fun delete(id: String): Boolean
+
+    /** The thumbnail PNG. */
     suspend fun thumbnail(id: String): ByteArray
+
+    /** The full PNG of an image clip. */
     suspend fun image(id: String): ByteArray
 }
 
-fun PrivatePasteApi.asClipRemote(): ClipRemote = object : ClipRemote {
-    override suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean) =
-        this@asClipRemote.clips(cursor, limit, pinned)  // q: search is on-device from Task 17
-    override suspend fun pin(id: String, pinned: Boolean) = this@asClipRemote.pin(id, pinned)
-    override suspend fun restore(id: String) = this@asClipRemote.restore(id)
+/** Opens what the server sends with [codec]: the server holds only ciphertext. */
+fun PrivatePasteApi.asClipRemote(codec: ClipCodec): ClipRemote = object : ClipRemote {
+    override suspend fun clips(cursor: String?, limit: Int, pinned: Boolean): ClipPage {
+        val page = this@asClipRemote.clips(cursor, limit, pinned)
+        return page.copy(items = page.items.map(codec::decode))
+    }
+    override suspend fun pin(id: String, pinned: Boolean) = codec.decode(this@asClipRemote.pin(id, pinned))
+    override suspend fun restore(id: String) = this@asClipRemote.restore(id)?.let(codec::decode)
     override suspend fun delete(id: String) = this@asClipRemote.delete(id)
-    override suspend fun thumbnail(id: String) = this@asClipRemote.thumb(id)
-    override suspend fun image(id: String) = this@asClipRemote.image(id)
+    override suspend fun thumbnail(id: String) = codec.decodeThumb(this@asClipRemote.thumb(id))
+    override suspend fun image(id: String) = codec.decodeBlob(this@asClipRemote.blob(id, 0))
 }
 
 /** The local clipboard. Production adapts [ClipboardWriter]. */
@@ -79,11 +85,12 @@ data class HistoryState(
 )
 
 /**
- * History list (and its Pinned tab, which lists only pinned clips, newest pinned first): the local cache shows at once; a query of 2+ characters also asks the server after a 300 ms
- * debounce, and the server results follow the cached hits, deduped by id. Older pages load with `nextCursor` when
- * the list nears its end. Taps copy locally first, then bump the clip on the server in the background.
+ * History list (and its Pinned tab, which lists only pinned clips, newest pinned first): the local cache shows at
+ * once, and older server pages follow it, deduped by id, loading with `nextCursor` when the list nears its end (the
+ * Pinned tab loads its first page at once: pins can be older than the cache). The server holds only ciphertext, so
+ * search runs on this phone: a query filters the cached and loaded clips by their text, ignoring case, and never
+ * asks the server. Taps copy locally first, then bump the clip on the server in the background.
  */
-@OptIn(FlowPreview::class)
 class HistoryViewModel(
     cached: StateFlow<List<ClipDto>>,
     private val lastAppliedHash: () -> String?,
@@ -97,9 +104,8 @@ class HistoryViewModel(
     private val onUnauthorized: () -> Unit = {},
 ) : ViewModel() {
 
-    /** Server results for one normalized query on one tab; [loaded] once the first page arrived. */
+    /** Server pages for one tab; [loaded] once the first page arrived. */
     private data class Remote(
-        val query: String,
         val pinned: Boolean = false,
         val items: List<ClipDto> = emptyList(),
         val next: String? = null,
@@ -111,7 +117,7 @@ class HistoryViewModel(
     private data class Local(val deleted: Set<String> = emptySet(), val updated: Map<String, ClipDto> = emptyMap())
 
     private val query = MutableStateFlow("")
-    private val remotePages = MutableStateFlow(Remote(""))
+    private val remotePages = MutableStateFlow(Remote())
     private val local = MutableStateFlow(Local())
     private var pageJob: Job? = null
 
@@ -127,11 +133,10 @@ class HistoryViewModel(
             // A change this phone made counts until the cache or a server page holds the same or a newer version.
             fun ClipDto.fresh() = changes.updated[id]?.takeIf { it.seq >= seq } ?: this
             val base = cache.map { it.fresh() }
-            val hits = if (needle.isEmpty()) base else base.filter { it.text?.contains(needle, ignoreCase = true) == true }
-            val fromServer = if (page.query == needle) page.items.map { it.fresh() } else emptyList()
-            val ids = hits.mapTo(HashSet()) { it.id }
-            val merged = (hits + fromServer.filter { ids.add(it.id) })
-                .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) }
+            val fromServer = page.items.map { it.fresh() }
+            val ids = base.mapTo(HashSet()) { it.id }
+            val merged = (base + fromServer.filter { ids.add(it.id) })
+                .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) && it.matches(needle) }
             val items = if (pinnedTab) merged.sortedWith(PINNED_FIRST) else merged
             val newest = cache.firstOrNull()
             HistoryState(
@@ -140,60 +145,38 @@ class HistoryViewModel(
                 items = items,
                 liveClipId = newest?.takeIf { it.id !in changes.deleted && it.hash == lastAppliedHash() }?.id,
                 syncState = sync,
-                loadingMore = page.query == needle && page.loading,
+                loadingMore = page.loading,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryState(syncState = syncState.value))
 
-    init {
-        viewModelScope.launch {
-            // The tab is part of the key, so switching tabs also loads the new tab's first page.
-            combine(query, remotePages.map { it.pinned }.distinctUntilChanged()) { raw, pinned -> raw to pinned }
-                .debounce(SEARCH_DEBOUNCE_MS)
-                .collectLatest { (raw, pinned) ->
-                    val q = raw.trim()
-                    val page = remotePages.value
-                    // The Pinned tab lists from the server even without a query: pins can be older than the cache.
-                    val wanted = q.length >= MIN_SERVER_QUERY || (pinned && q.isEmpty())
-                    if (wanted && page.query == q && page.pinned == pinned && !page.loaded && !page.loading) load(q, null)
-                }
-        }
-    }
-
     fun onQueryChange(value: String) {
-        val old = query.value.trim()
         query.value = value
-        if (value.trim() != old) {
-            pageJob?.cancel()
-            remotePages.value = Remote(value.trim(), remotePages.value.pinned)
-        }
     }
 
     fun onTab(tab: HistoryTab) {
         val pinned = tab == HistoryTab.PINNED
         if (remotePages.value.pinned == pinned) return
         pageJob?.cancel()
-        remotePages.value = Remote(query.value.trim(), pinned)
+        remotePages.value = Remote(pinned)
+        if (pinned) pageJob = viewModelScope.launch { load(null) }
     }
 
-    /** The list is near its end: load the next server page. */
+    /** The list is near its end: load the next server page. While searching, only what is already here is searched. */
     fun onNearEnd() {
-        val q = query.value.trim()
         val page = remotePages.value
-        if (page.query != q || page.loading) return
-        if (q.isNotEmpty() && (q.length < MIN_SERVER_QUERY || !page.loaded)) return   // the debounce loads page 1
-        if (page.pinned && !page.loaded) return
+        if (query.value.isNotBlank() || page.loading) return
         if (page.loaded && page.next == null) return
-        pageJob = viewModelScope.launch { load(q, page.next) }
+        pageJob = viewModelScope.launch { load(page.next) }
     }
 
-    private suspend fun load(q: String, cursor: String?) {
+    private suspend fun load(cursor: String?) {
         val api = remote() ?: return
         val pinned = remotePages.value.pinned
-        // The tab or query may change while a page is in flight; only the page that asked still wants the answer.
-        fun Remote.mine() = query == q && this.pinned == pinned
+        // The tab may change while a page is in flight; only the tab that asked still wants the answer.
+        fun Remote.mine() = this.pinned == pinned
         remotePages.update { if (it.mine()) it.copy(loading = true) else it }
         try {
-            val result = withContext(io) { api.clips(q.ifEmpty { null }, cursor, PAGE_SIZE, pinned) }
+            val result = withContext(io) { api.clips(cursor, PAGE_SIZE, pinned) }
             remotePages.update {
                 if (!it.mine()) it
                 else it.copy(items = it.items + result.items, next = result.nextCursor, loaded = true, loading = false)
@@ -300,6 +283,9 @@ class HistoryViewModel(
         }
     }
 
+    /** On-device search: the clip's text contains [needle], ignoring case. Images and unknown clips have no text. */
+    private fun ClipDto.matches(needle: String) = needle.isEmpty() || text?.contains(needle, ignoreCase = true) == true
+
     private fun isOnline() = syncState.value != SyncState.OFFLINE && syncState.value != SyncState.SIGNED_OUT
 
     private suspend fun fetchImage(api: ClipRemote, id: String): ByteArray? = try {
@@ -314,8 +300,6 @@ class HistoryViewModel(
     }
 
     private companion object {
-        const val SEARCH_DEBOUNCE_MS = 300L
-        const val MIN_SERVER_QUERY = 2
         const val PAGE_SIZE = 50
         const val NOT_FOUND = 404
     }

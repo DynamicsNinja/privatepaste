@@ -77,7 +77,7 @@ class AppGraphTest {
         val release = java.util.concurrent.CountDownLatch(1)
         val started = java.util.concurrent.CountDownLatch(1)
         server.other = { req ->
-            if (req.path == "/api/clips/text") {
+            if (req.path == "/api/clips") {
                 started.countDown()
                 release.await(10, java.util.concurrent.TimeUnit.SECONDS)
                 MockResponse().setResponseCode(503)   // offline: a live send would queue the clip
