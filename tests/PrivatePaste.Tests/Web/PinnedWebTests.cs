@@ -29,77 +29,69 @@ public class PinnedWebTests
             fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value))
                 .Append(new("__RequestVerificationToken", token))));
 
-    [Fact]
-    public async Task Pinned_tab_lists_only_pinned_clips()
+    [Theory]
+    [InlineData("/", "history")]
+    [InlineData("/?tab=pinned", "pinned")]
+    [InlineData("/?tab=PINNED&q=alpha", "pinned")]
+    public async Task The_shell_tells_the_browser_which_tab_to_load(string path, string tab)
     {
         using var factory = new PrivatePasteFactory();
-        var api = await factory.LoginAsync();
-        var plain = await factory.UploadTextAsync(api, "plain-clip-text");
-        var pinned = await factory.UploadTextAsync(api, "pinned-clip-text");
-        (await api.PostAsync($"/api/clips/{pinned.Id}/pin", null)).EnsureSuccessStatusCode();
         var web = await WebLoginAsync(factory);
 
-        var tab = await web.GetStringAsync("/?tab=pinned");
-        Assert.Contains($"data-id=\"{pinned.Id}\"", tab);
-        Assert.DoesNotContain($"data-id=\"{plain.Id}\"", tab);
-
-        var history = await web.GetStringAsync("/");
-        Assert.Contains($"data-id=\"{plain.Id}\"", history);
-        Assert.Contains($"data-id=\"{pinned.Id}\"", history);
+        var html = await web.GetStringAsync(path);
+        Assert.Matches($"<div id=\"history\" data-page=\"history\" data-tab=\"{tab}\"", html);
+        var tabs = Regex.Match(html, "<div class=\"tabs\".*?</div>", RegexOptions.Singleline).Value;
+        Assert.Single(Regex.Matches(tabs, "aria-current=\"page\""));
+        Assert.Matches($"<a [^>]*aria-current=\"page\"[^>]*>{(tab == "pinned" ? "Pinned" : "History")}</a>", tabs);
     }
 
     [Fact]
-    public async Task Pinned_tab_ignores_the_search_query()
+    public async Task The_row_template_offers_pin_and_the_pinned_marker()
     {
         using var factory = new PrivatePasteFactory();
-        var api = await factory.LoginAsync();
-        var ids = new List<Guid>();
-        foreach (var text in new[] { "alpha one", "beta two" })
-        {
-            var clip = await factory.UploadTextAsync(api, text);
-            (await api.PostAsync($"/api/clips/{clip.Id}/pin", null)).EnsureSuccessStatusCode();
-            ids.Add(clip.Id);
-        }
         var web = await WebLoginAsync(factory);
 
-        var html = await web.GetStringAsync("/?tab=pinned&q=alpha");
-        Assert.All(ids, id => Assert.Contains($"data-id=\"{id}\"", html));
+        var row = Regex.Match(await web.GetStringAsync("/"), "<template id=\"clip-row\">(.*?)</template>",
+            RegexOptions.Singleline).Groups[1].Value;
+        Assert.Single(Regex.Matches(row, "class=\"pin-marker\""));
+        Assert.Matches("<button type=\"button\" class=\"ghost pin-toggle\" aria-pressed=\"false\">.*?<span class=\"sr-only\">Pin</span></button>", row);
     }
 
     [Fact]
-    public async Task History_marks_pinned_clips_and_offers_pin_or_unpin()
-    {
-        using var factory = new PrivatePasteFactory();
-        var api = await factory.LoginAsync();
-        await factory.UploadTextAsync(api, "loose clip");
-        var pinned = await factory.UploadTextAsync(api, "kept clip");
-        await api.PostAsync($"/api/clips/{pinned.Id}/pin", null);
-        var web = await WebLoginAsync(factory);
-
-        var html = await web.GetStringAsync("/");
-        Assert.Single(Regex.Matches(html, "class=\"pin-marker\""));
-        Assert.Contains(">Pin</span>", html);
-        Assert.Contains(">Unpin</span>", html);
-    }
-
-    [Fact]
-    public async Task Pin_and_unpin_from_web_toggle_the_clip()
+    public async Task Pin_and_unpin_through_the_api_with_a_cookie_toggle_the_clip()
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
         var clip = await factory.UploadTextAsync(api, "toggle me");
         var web = await WebLoginAsync(factory);
         var token = await TokenFromAsync(web, "/");
+        HttpRequestMessage Request(HttpMethod method)
+        {
+            var request = new HttpRequestMessage(method, $"/api/clips/{clip.Id}/pin");
+            request.Headers.Add("RequestVerificationToken", token);
+            request.Headers.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
+            return request;
+        }
 
-        var pin = await PostFormAsync(web, "/?handler=Pin", token, ("id", clip.Id.ToString()));
-        Assert.Equal(HttpStatusCode.Redirect, pin.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await web.SendAsync(Request(HttpMethod.Post))).StatusCode);
         var after = await api.GetFromJsonAsync<ClipDto>($"/api/clips/{clip.Id}", ProtocolJson.Options);
         Assert.NotNull(after!.PinnedAt);
 
-        var unpin = await PostFormAsync(web, "/?handler=Unpin", token, ("id", clip.Id.ToString()));
-        Assert.Equal(HttpStatusCode.Redirect, unpin.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await web.SendAsync(Request(HttpMethod.Delete))).StatusCode);
         after = await api.GetFromJsonAsync<ClipDto>($"/api/clips/{clip.Id}", ProtocolJson.Options);
         Assert.Null(after!.PinnedAt);
+    }
+
+    [Fact]
+    public async Task Nav_has_a_hidden_lock_between_settings_and_sign_out()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = await WebLoginAsync(factory);
+        var html = await web.GetStringAsync("/");
+        var settings = html.IndexOf(">Settings</a>", StringComparison.Ordinal);
+        var lockButton = html.IndexOf("<button type=\"button\" class=\"link\" id=\"lock\" hidden>Lock</button>", StringComparison.Ordinal);
+        var signOut = html.IndexOf(">Sign out</button>", StringComparison.Ordinal);
+        Assert.True(settings > 0 && settings < lockButton && lockButton < signOut);
     }
 
     [Fact]

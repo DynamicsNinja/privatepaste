@@ -1,81 +1,78 @@
 @page
 @model IndexModel
+@inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersions
 @{
     ViewData["Title"] = "History";
-    // Only the true top of history gets the "just arrived" highlight, not the first row of a search or a later page.
-    var highlightFirst = string.IsNullOrEmpty(Model.Q) && !Request.Query.ContainsKey("cursor");
-    var first = true;
+    // Modules are loaded by URL from history.js and site.js, so they get the same content hash as asp-append-version:
+    // behind Cloudflare an unversioned module could stay old while the page that loads it is new.
+    string Versioned(string path) => FileVersions.AddFileVersionToPath(Request.PathBase, path);
+    var searchLabel = Model.PinnedTab ? "Search pinned clips" : "Search history";
 }
-<div class="tabs" role="navigation" aria-label="History views">
-    <a asp-page="/Index" asp-route-q="@Model.Q" aria-current="@(Model.PinnedTab ? null : "page")">History</a>
-    <a asp-page="/Index" asp-route-tab="pinned" asp-route-q="@Model.Q" aria-current="@(Model.PinnedTab ? "page" : null)">Pinned</a>
+@* Everything below is filled in by js/history.js and js/vault-ui.js: the server never sees a clip's content. *@
+<div id="history" data-page="history" data-tab="@(Model.PinnedTab ? "pinned" : "history")"
+     data-e2e="@Versioned("/js/e2e.js")" data-vault-ui="@Versioned("/js/vault-ui.js")" data-history="@Versioned("/js/history.js")">
+
+    <section class="vault-panel" id="unlock" hidden>
+        <h1>Unlock your history</h1>
+        <form id="unlock-form" class="passphrase-form">
+            <p class="error" id="unlock-error" role="alert" hidden></p>
+            <label for="unlock-passphrase">Passphrase</label>
+            <input type="password" id="unlock-passphrase" autocomplete="current-password" required>
+            <button type="submit" class="primary">Unlock</button>
+        </form>
+    </section>
+
+    <section class="vault-panel" id="setup" hidden>
+        <h1>Set up encryption</h1>
+        <p class="muted hint">Use at least 12 characters. A short sentence works well.</p>
+        <form id="setup-form" class="passphrase-form">
+            <p class="error" id="setup-error" role="alert" hidden></p>
+            <label for="setup-passphrase">Passphrase</label>
+            <input type="password" id="setup-passphrase" autocomplete="new-password" required>
+            <label for="setup-repeat">Repeat passphrase</label>
+            <input type="password" id="setup-repeat" autocomplete="new-password" required>
+            <button type="submit" class="primary">Set up</button>
+        </form>
+    </section>
+
+    <p class="muted empty" id="no-vault" hidden>Ask the owner to set up encryption.</p>
+    <p class="error" id="history-error" role="alert" hidden></p>
+
+    <div id="clips-view" hidden>
+        <div class="tabs" role="navigation" aria-label="History views">
+            <a asp-page="/Index" aria-current="@(Model.PinnedTab ? null : "page")">History</a>
+            <a asp-page="/Index" asp-route-tab="pinned" aria-current="@(Model.PinnedTab ? "page" : null)">Pinned</a>
+        </div>
+        <form class="search" id="search" role="search">
+            <input type="search" id="search-input" name="q" value="@Model.Q" placeholder="@searchLabel" aria-label="@searchLabel">
+            <button type="submit">Search</button>
+        </form>
+        <p class="muted empty" id="history-empty" hidden></p>
+        <ul class="clips" id="clips"></ul>
+        <div class="list-footer">
+            <button type="button" id="load-more" hidden>Load more</button>
+            <button type="button" id="search-older" hidden>Search older clips</button>
+        </div>
+    </div>
+
+    <template id="clip-row">
+        <li class="clip">
+            <span class="kind"></span>
+            <div class="body">
+                <div class="meta"><span class="pin-marker" title="Pinned">@UiIcons.Pin("pin-icon")<span class="sr-only">Pinned</span></span><span class="person-chip"></span></div>
+            </div>
+            <div class="actions">
+                <button type="button" class="copy icon-button" aria-label="Copy" title="Copy">@UiIcons.Copy("btn-icon idle-icon")@UiIcons.Check("btn-icon done-icon")</button>
+                <button type="button" class="ghost pin-toggle" aria-pressed="false">@UiIcons.Pin("pin-icon")<span class="sr-only">Pin</span></button>
+                <button type="button" class="ghost delete icon-button" aria-label="Delete" title="Delete">@UiIcons.Trash("btn-icon")</button>
+            </div>
+        </li>
+    </template>
+    <template id="kind-icons">
+        <svg data-kind="image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>
+        <svg data-kind="link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>
+        <svg data-kind="text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
+    </template>
+    <template id="platform-icons">@foreach (var icon in PlatformIcons.All){@PlatformIcons.Svg(icon.Key)}</template>
 </div>
-<form method="get" class="search" role="search">
-    @if (Model.PinnedTab)
-    {
-        <input type="hidden" name="tab" value="pinned">
-    }
-    <input type="search" name="q" value="@Model.Q" placeholder="@(Model.PinnedTab ? "Search pinned clips" : "Search history")" aria-label="@(Model.PinnedTab ? "Search pinned clips" : "Search history")">
-    <button type="submit">Search</button>
-</form>
-
-@if (Model.Items.Count == 0)
-{
-    <p class="muted empty">@(!string.IsNullOrEmpty(Model.Q) ? "No clips match that search." : Model.PinnedTab ? "No pinned clips. Pin a clip to keep it through Clear history and auto-delete." : "Nothing here yet. Copy something on a signed-in device and it shows up here.")</p>
-}
-
-<ul class="clips">
-@foreach (var clip in Model.Items)
-{
-    var kind = clip.Kind.ToString().ToLowerInvariant();
-    var isPinned = clip.PinnedAt is not null;
-    <li class="clip@(first && highlightFirst ? " newest" : "")" data-id="@clip.Id" data-kind="@kind">
-        <span class="kind" title="@clip.Kind">
-            @switch (clip.Kind)
-            {
-                case ClipKind.Image:
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>
-                    break;
-                case ClipKind.Link:
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>
-                    break;
-                default:
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
-                    break;
-            }
-        </span>
-        <div class="body">
-            @if (clip.Kind == ClipKind.Image)
-            {
-                <img class="thumb" src="/api/clips/@clip.Id/thumbnail" loading="lazy" alt="Image clip @clip.Width x @clip.Height">
-            }
-            else if (clip.Kind == ClipKind.Link && IndexModel.IsSafeUrl(clip.Text))
-            {
-                <a href="@clip.Text" rel="noopener noreferrer" target="_blank">@IndexModel.Preview(clip.Text)</a>
-            }
-            else
-            {
-                <pre class="text">@IndexModel.Preview(clip.Text)</pre>
-            }
-            <div class="meta">@if (isPinned && !Model.PinnedTab) {<span class="pin-marker" title="Pinned">@UiIcons.Pin("pin-icon")<span class="sr-only">Pinned</span></span>}@if (clip.SourceUserName is not null) {<span class="person-chip">@clip.SourceUserName</span>}@PlatformIcons.Svg(clip.SourceDevicePlatform)@clip.SourceDeviceName, <time datetime="@clip.LastCopiedAt.ToString("o")">@Model.Ago(clip.LastCopiedAt)</time></div>
-        </div>
-        <div class="actions">
-            <button type="button" class="copy icon-button" aria-label="Copy" title="Copy">@UiIcons.Copy("btn-icon idle-icon")@UiIcons.Check("btn-icon done-icon")</button>
-            <form method="post" asp-page-handler="@(isPinned ? "Unpin" : "Pin")" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute">
-                <input type="hidden" name="id" value="@clip.Id">
-                <button type="submit" class="ghost pin-toggle" aria-pressed="@(isPinned ? "true" : "false")">@UiIcons.Pin("pin-icon")<span class="sr-only">@(isPinned ? "Unpin" : "Pin")</span></button>
-            </form>
-            <form method="post" asp-page-handler="Delete" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute">
-                <input type="hidden" name="id" value="@clip.Id">
-                <button type="submit" class="ghost delete icon-button" aria-label="Delete" title="Delete">@UiIcons.Trash("btn-icon")</button>
-            </form>
-        </div>
-    </li>
-    first = false;
-}
-</ul>
-
-@if (Model.NextCursor is not null)
-{
-    <p><a class="more" asp-page="/Index" asp-route-q="@Model.Q" asp-route-tab="@Model.TabRoute" asp-route-cursor="@Model.NextCursor">Load more</a></p>
-}
+<script type="module" src="/js/history.js" asp-append-version="true"></script>

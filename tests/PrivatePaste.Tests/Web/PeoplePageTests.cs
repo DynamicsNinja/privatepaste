@@ -356,24 +356,23 @@ public class PeoplePageTests
         Assert.DoesNotContain(AnaPassword, html);
     }
 
+    // The browser draws the person chip from sourceUserName (tests/web/history.playwright.mjs checks the drawing).
     [Fact]
-    public async Task History_TwoPeople_RowShowsPersonChip()
+    public async Task History_TwoPeople_ClipsCarryThePersonName()
     {
         using var f = new PrivatePasteFactory();
         await f.AddPersonAsync("Ana");
-        await f.UploadTextAsync(await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword), "from ana");
-        var html = await (await f.LoginWebAsync()).GetStringAsync("/");
-        Assert.Contains("class=\"person-chip\">Ana<", html);
-        Assert.Matches("class=\"person-chip\">Ana</span><svg class=\"platform\" data-platform=\"android\"", html);
+        var clip = await f.UploadTextAsync(await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword), "from ana");
+        var page = await (await f.LoginAsync()).GetFromJsonAsync<ClipPage>("/api/clips", ProtocolJson.Options);
+        Assert.Equal("Ana", Assert.Single(page!.Items, c => c.Id == clip.Id).SourceUserName);
     }
 
     [Fact]
-    public async Task History_OnePerson_NoPersonChip()
+    public async Task History_OnePerson_ClipsCarryNoPersonName()
     {
         using var f = new PrivatePasteFactory();
         var clip = await f.UploadTextAsync(await f.LoginAsync(), "only me");
-        var html = await (await f.LoginWebAsync()).GetStringAsync("/");
-        Assert.Contains($"data-id=\"{clip.Id}\"", html);
-        Assert.DoesNotContain("person-chip", html);
+        var page = await (await f.LoginAsync()).GetFromJsonAsync<ClipPage>("/api/clips", ProtocolJson.Options);
+        Assert.Null(Assert.Single(page!.Items, c => c.Id == clip.Id).SourceUserName);
     }
 }

@@ -23,7 +23,9 @@ const HASHWASM_VERSION = '4.12.0';
 const LIST_VERSION = '8ce67ae3';
 
 const ARGON2 = { memoryKiB: 65536, iterations: 3, parallelism: 1, hashLength: 32, saltSize: 16 };
-// Bounds for a wrap read from the server, so a hostile record can't make the browser hang or run out of memory.
+// Bounds for a wrap read from the server, the same on every client and the server: nothing weaker than what the
+// clients write, and nothing so heavy that a hostile record could make the browser hang or run out of memory.
+const ARGON2_MIN = { memoryKiB: 65536, iterations: 3, parallelism: 1 };
 const ARGON2_MAX = { memoryKiB: 262144, iterations: 10, parallelism: 8 };
 
 export const MIN_PASSPHRASE_LENGTH = 12;
@@ -32,6 +34,14 @@ export class WrongPassphraseError extends Error {
   constructor() {
     super('Wrong passphrase.');
     this.name = 'WrongPassphraseError';
+  }
+}
+
+/** The wrap's settings or layout are outside what this client accepts (not a wrong passphrase). */
+export class UnsupportedWrapError extends Error {
+  constructor() {
+    super('Unsupported passphrase wrap.');
+    this.name = 'UnsupportedWrapError';
   }
 }
 
@@ -266,15 +276,16 @@ export async function _wrapWithPassphrase(vault, passphrase, salt, nonce) {
 export const wrapWithPassphrase = (vault, passphrase) =>
   _wrapWithPassphrase(vault, passphrase, randomBytes(ARGON2.saltSize), randomBytes(NONCE_SIZE));
 
-/** @throws {WrongPassphraseError} The passphrase doesn't open the wrap. */
+/**
+ * @throws {WrongPassphraseError} The passphrase doesn't open the wrap.
+ * @throws {UnsupportedWrapError} The wrap's settings are outside the bounds every client accepts.
+ */
 export async function unwrapWithPassphrase(wrapDto, passphrase) {
   const kdf = wrapDto?.kdf;
-  if (kdf?.alg !== 'argon2id'
-    || !Number.isInteger(kdf.memoryKiB) || kdf.memoryKiB < 8 || kdf.memoryKiB > ARGON2_MAX.memoryKiB
-    || !Number.isInteger(kdf.iterations) || kdf.iterations < 1 || kdf.iterations > ARGON2_MAX.iterations
-    || !Number.isInteger(kdf.parallelism) || kdf.parallelism < 1 || kdf.parallelism > ARGON2_MAX.parallelism
+  const within = name => Number.isInteger(kdf[name]) && kdf[name] >= ARGON2_MIN[name] && kdf[name] <= ARGON2_MAX[name];
+  if (kdf?.alg !== 'argon2id' || !within('memoryKiB') || !within('iterations') || !within('parallelism')
     || typeof wrapDto.keyId !== 'string')
-    throw new Error('Unsupported passphrase wrap.');
+    throw new UnsupportedWrapError();
   // Lengths .NET AesGcm demands, so the browser rejects what .NET rejects.
   let salt, nonce, wrapped;
   try {
@@ -282,9 +293,9 @@ export async function unwrapWithPassphrase(wrapDto, passphrase) {
     nonce = fromBase64(wrapDto.nonce);
     wrapped = fromBase64(wrapDto.wrappedKey);
   } catch {
-    throw new Error('Unsupported passphrase wrap.');
+    throw new UnsupportedWrapError();
   }
-  if (salt.length !== ARGON2.saltSize || nonce.length !== NONCE_SIZE) throw new Error('Unsupported passphrase wrap.');
+  if (salt.length !== ARGON2.saltSize || nonce.length !== NONCE_SIZE) throw new UnsupportedWrapError();
   const key = await passphraseKey(passphrase, salt, kdf);
   let vk;
   try {

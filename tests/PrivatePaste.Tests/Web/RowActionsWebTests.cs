@@ -1,23 +1,20 @@
-using System.Net.Http.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using PrivatePaste.Protocol;
 using PrivatePaste.Server.Pages;
 
 namespace PrivatePaste.Tests.Web;
 
 public class RowActionsWebTests
 {
+    // Rows are built in the browser from this template, so the buttons' names and icons are checked here.
     private static async Task<string> RowHtmlAsync()
     {
         using var factory = new PrivatePasteFactory();
-        var api = await factory.LoginAsync();
-        await factory.UploadTextAsync(api, "row-actions-clip");
         var web = await factory.LoginWebAsync();
         var html = await web.GetStringAsync("/");
-        var row = Regex.Match(html, "<li class=\"clip[^\"]*\".*?</li>", RegexOptions.Singleline);
-        Assert.True(row.Success, "No clip row on the history page");
-        return row.Value;
+        var row = Regex.Match(html, "<template id=\"clip-row\">\\s*(<li class=\"clip\".*?</li>)", RegexOptions.Singleline);
+        Assert.True(row.Success, "No clip row template on the history page");
+        return row.Groups[1].Value;
     }
 
     private static string Button(string row, string cssClass)

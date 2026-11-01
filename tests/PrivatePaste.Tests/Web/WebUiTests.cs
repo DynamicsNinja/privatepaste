@@ -88,55 +88,69 @@ public class WebUiTests
     }
 
     [Fact]
-    public async Task Login_then_index_lists_clips()
+    public async Task Index_RendersShellWithoutClipData()
     {
         using var factory = new PrivatePasteFactory();
         var clip = await factory.UploadTextAsync(await factory.LoginAsync(), "hello web");
         var web = await WebLoginAsync(factory);
         var response = await web.GetAsync("/");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains($"data-id=\"{clip.Id}\"", await response.Content.ReadAsStringAsync());
+        var html = await response.Content.ReadAsStringAsync();
+        // The browser fetches and decrypts the clips; the page itself carries none of them.
+        Assert.Contains("data-page=\"history\"", html);
+        Assert.DoesNotContain(clip.Id.ToString(), html);
+        Assert.DoesNotContain(clip.Payload!, html);
+        Assert.DoesNotContain(clip.Hash, html);
     }
 
     [Fact]
-    public async Task Index_ignores_the_search_query()
+    public async Task Index_HasNoServerPinHandlers()
     {
         using var factory = new PrivatePasteFactory();
-        var api = await factory.LoginAsync();
-        var a = await factory.UploadTextAsync(api, "docker compose up");
-        var b = await factory.UploadTextAsync(api, "grocery list");
-        var body = await (await (await WebLoginAsync(factory)).GetAsync("/?q=compose")).Content.ReadAsStringAsync();
-        Assert.Contains($"data-id=\"{a.Id}\"", body);
-        Assert.Contains($"data-id=\"{b.Id}\"", body);
-    }
-
-    [Fact]
-    public async Task Index_paginates_with_load_more()
-    {
-        using var factory = new PrivatePasteFactory();
-        var api = await factory.LoginAsync();
-        for (var i = 0; i < 51; i++)
-            await factory.UploadTextAsync(api, $"clip-number-{i:D3}");
+        var clip = await factory.UploadTextAsync(await factory.LoginAsync(), "pin me");
         var web = await WebLoginAsync(factory);
-        var first = await web.GetStringAsync("/");
-        Assert.Contains("Load more", first);
-        Assert.Equal(50, Regex.Matches(first, "<li class=\"clip").Count);
-        var cursor = Regex.Match(first, "href=\"/\\?cursor=([^\"]+)\"").Groups[1].Value;
-        var second = await web.GetStringAsync("/?cursor=" + System.Net.WebUtility.HtmlDecode(cursor));
-        Assert.Single(Regex.Matches(second, "<li class=\"clip"));
-        Assert.DoesNotContain("Load more", second);
+        var token = await TokenFromAsync(web, "/");
+        foreach (var handler in new[] { "Pin", "Unpin", "Delete" })
+        {
+            var response = await PostFormAsync(web, $"/?handler={handler}", token, ("id", clip.Id.ToString()));
+            Assert.True(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest,
+                $"POST /?handler={handler} gave {(int)response.StatusCode}");
+        }
+        var after = await (await factory.LoginAsync()).GetFromJsonAsync<ClipDto>($"/api/clips/{clip.Id}", ProtocolJson.Options);
+        Assert.Null(after!.PinnedAt);
     }
 
     [Fact]
-    public async Task Delete_from_web_removes_clip()
+    public async Task Index_ships_the_shell_the_browser_fills()
+    {
+        using var factory = new PrivatePasteFactory();
+        var html = await (await WebLoginAsync(factory)).GetStringAsync("/");
+        Assert.Contains("Unlock your history", html);
+        Assert.Contains("Set up encryption", html);
+        Assert.Contains("Repeat passphrase", html);
+        Assert.Contains("Use at least 12 characters. A short sentence works well.", html);
+        Assert.Contains("Ask the owner to set up encryption.", html);
+        Assert.Contains("<template id=\"clip-row\">", html);
+        Assert.Matches("<script type=\"module\" src=\"/js/history.js\\?v=[^\"]+\"></script>", html);
+        // The modules history.js loads are versioned too, or Cloudflare could pair a new page with an old module.
+        Assert.Matches("data-e2e=\"/js/e2e.js\\?v=[^\"]+\"", html);
+        Assert.Matches("data-vault-ui=\"/js/vault-ui.js\\?v=[^\"]+\"", html);
+    }
+
+    [Fact]
+    public async Task Delete_through_the_api_with_a_cookie_removes_the_clip()
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
         var clip = await factory.UploadTextAsync(api, "to be deleted");
         var web = await WebLoginAsync(factory);
         var token = await TokenFromAsync(web, "/");
-        var response = await PostFormAsync(web, "/?handler=Delete", token, ("id", clip.Id.ToString()));
-        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await web.DeleteAsync($"/api/clips/{clip.Id}")).StatusCode);
+        var request = new HttpRequestMessage(HttpMethod.Delete, $"/api/clips/{clip.Id}");
+        request.Headers.Add("RequestVerificationToken", token);
+        request.Headers.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
+        Assert.Equal(HttpStatusCode.NoContent, (await web.SendAsync(request)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await api.GetAsync($"/api/clips/{clip.Id}")).StatusCode);
     }
 
@@ -169,18 +183,14 @@ public class WebUiTests
     }
 
     [Fact]
-    public async Task History_shows_the_source_platform_icon_before_the_device_name()
+    public async Task History_ships_every_platform_icon_for_the_rows()
     {
         using var factory = new PrivatePasteFactory();
-        await factory.UploadTextAsync(await factory.LoginAsync("Pixel", "android"), "from android");
-        await factory.UploadTextAsync(await factory.LoginAsync("Desk", "windows"), "from windows");
-        await factory.UploadTextAsync(await factory.LoginAsync("Fridge", "tizen"), "from elsewhere");
-        var web = await WebLoginAsync(factory);
-
-        var html = await web.GetStringAsync("/");
-        Assert.Matches("<svg class=\"platform\" data-platform=\"android\"[^>]*aria-label=\"Android\">.*?</svg>Pixel, <time", html);
-        Assert.Matches("<svg class=\"platform\" data-platform=\"windows\"[^>]*aria-label=\"Windows\">.*?</svg>Desk, <time", html);
-        Assert.Matches("<svg class=\"platform\" data-platform=\"unknown\"[^>]*aria-label=\"Unknown device\">.*?</svg>Fridge, <time", html);
+        var html = await (await WebLoginAsync(factory)).GetStringAsync("/");
+        var icons = Regex.Match(html, "<template id=\"platform-icons\">(.*?)</template>", RegexOptions.Singleline);
+        Assert.True(icons.Success, "No platform icon template");
+        foreach (var icon in PrivatePaste.Server.Pages.PlatformIcons.All)
+            Assert.Contains(PrivatePaste.Server.Pages.PlatformIcons.Svg(icon.Key).ToString()!, icons.Groups[1].Value);
     }
 
     [Fact]
