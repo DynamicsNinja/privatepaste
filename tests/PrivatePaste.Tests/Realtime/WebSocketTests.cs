@@ -64,13 +64,6 @@ public class WebSocketTests
     private static Task SendTextAsync(WebSocket socket, string text) =>
         socket.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None);
 
-    private static async Task<ClipDto> PostText(HttpClient c, string text, bool backfill = false)
-    {
-        var r = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, backfill), ProtocolJson.Options);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
-
     [Fact]
     public async Task Connect_without_token_rejected()
     {
@@ -95,7 +88,7 @@ public class WebSocketTests
         var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
         using var b = await ConnectAsync(factory, tokenB);
 
-        var clip = await PostText(a, "hi");
+        var clip = await factory.UploadTextAsync(a, "hi");
 
         var (_, raw) = await ReceiveAsync(b);
         Assert.Contains("\"sourceDevicePlatform\":\"android\"", raw);
@@ -104,7 +97,8 @@ public class WebSocketTests
         Assert.Equal(WsTypes.ClipCreated, msg.Type);
         Assert.True(msg.Live);
         Assert.Equal(clip.Id, msg.Clip!.Id);
-        Assert.Equal("hi", msg.Clip.Text);
+        Assert.Null(msg.Clip.Text);
+        Assert.Equal("hi", ClipPayload.Open(await factory.VaultKeyAsync(), msg.Clip.Payload!).Text);
     }
 
     [Fact]
@@ -114,7 +108,7 @@ public class WebSocketTests
         var (a, _, tokenA) = await factory.LoginDeviceAsync("A");
         using var wsA = await ConnectAsync(factory, tokenA);
 
-        var clip = await PostText(a, "mine");
+        var clip = await factory.UploadTextAsync(a, "mine");
 
         Assert.Equal(clip.Id, (await ReceiveMessageAsync(wsA)).Clip!.Id);
     }
@@ -127,7 +121,7 @@ public class WebSocketTests
         var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
         using var b = await ConnectAsync(factory, tokenB);
 
-        await PostText(a, "old", backfill: true);
+        await factory.UploadTextAsync(a, "old", backfill: true);
 
         var msg = await ReceiveMessageAsync(b);
         Assert.Equal(WsTypes.ClipCreated, msg.Type);
@@ -135,19 +129,14 @@ public class WebSocketTests
     }
 
     [Fact]
-    public async Task Image_backfill_fields_after_file_pushed_with_live_false()
+    public async Task Image_backfill_pushed_with_live_false()
     {
         using var factory = new PrivatePasteFactory();
         var (a, _, _) = await factory.LoginDeviceAsync("A");
         var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
         using var b = await ConnectAsync(factory, tokenB);
-        var form = new MultipartFormDataContent
-        {
-            { new ByteArrayContent(Images.TestImages.MakePng(8, 8).ToArray()), "file", "x.png" },
-            { new StringContent("true"), "backfill" },
-        };
 
-        (await a.PostAsync("/api/clips/image", form)).EnsureSuccessStatusCode();
+        await factory.UploadImageAsync(a, await factory.VaultKeyAsync(), [1, 2, 3, 4], factory.Clock.GetUtcNow(), backfill: true);
 
         var msg = await ReceiveMessageAsync(b);
         Assert.Equal(WsTypes.ClipCreated, msg.Type);
@@ -160,7 +149,7 @@ public class WebSocketTests
         using var factory = new PrivatePasteFactory();
         var (a, _, _) = await factory.LoginDeviceAsync("A");
         var (_, _, tokenB) = await factory.LoginDeviceAsync("B");
-        var clip = await PostText(a, "bye");
+        var clip = await factory.UploadTextAsync(a, "bye");
         using var b = await ConnectAsync(factory, tokenB);
 
         (await a.DeleteAsync($"/api/clips/{clip.Id}")).EnsureSuccessStatusCode();
@@ -238,9 +227,9 @@ public class WebSocketTests
         using var c = await ConnectAsync(factory, tokenC);
         b.Abort();
 
-        await PostText(a, "still works");
+        var clip = await factory.UploadTextAsync(a, "still works");
 
-        Assert.Equal("still works", (await ReceiveMessageAsync(c)).Clip!.Text);
+        Assert.Equal(clip.Id, (await ReceiveMessageAsync(c)).Clip!.Id);
     }
 
     [Fact]

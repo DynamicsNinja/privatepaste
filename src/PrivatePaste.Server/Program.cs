@@ -10,7 +10,6 @@ using PrivatePaste.Server.Api;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Clips;
 using PrivatePaste.Server.Config;
-using PrivatePaste.Server.Images;
 using PrivatePaste.Server.Realtime;
 using PrivatePaste.Server.Storage;
 
@@ -20,7 +19,7 @@ if (string.IsNullOrEmpty(builder.Configuration["ASPNETCORE_URLS"]) && string.IsN
     builder.WebHost.UseUrls("http://+:8080");
 
 var serverOptions = ServerOptions.FromConfiguration(builder.Configuration);
-var maxBodyBytes = serverOptions.MaxImageBytes + 1024 * 1024;
+var maxBodyBytes = ClipService.MaxRequestBodyBytesFor(serverOptions);
 
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = maxBodyBytes);
 builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = maxBodyBytes);
@@ -33,7 +32,6 @@ builder.Services.AddSingleton<SettingsRepository>();
 builder.Services.AddSingleton<VaultRepository>();
 builder.Services.AddSingleton<HandoverStore>();
 builder.Services.AddSingleton<BlobStore>();
-builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<OwnerBootstrap>();
@@ -63,7 +61,7 @@ builder.Services.AddAuthentication(AuthSchemes.DeviceToken)
         o.LoginPath = "/login";
         o.Cookie.HttpOnly = true;
         o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-        // Strict SameSite is defense in depth; cookie-authenticated unsafe API calls (including POST /api/clips/image)
+        // Strict SameSite is defense in depth; cookie-authenticated unsafe API calls (including POST /api/clips)
         // additionally require the antiforgery header (RequireAntiforgeryForCookieAuth).
         o.Cookie.SameSite = SameSiteMode.Strict;
         o.ExpireTimeSpan = TimeSpan.FromDays(30);

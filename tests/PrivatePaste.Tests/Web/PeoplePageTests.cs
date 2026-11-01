@@ -15,13 +15,6 @@ public class PeoplePageTests
             fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value))
                 .Append(new("__RequestVerificationToken", token))));
 
-    private static async Task<ClipDto> UploadAsync(HttpClient api, string text)
-    {
-        var response = await api.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
-
     private static int Count(string html, string pattern) => Regex.Matches(html, pattern).Count;
 
     [Fact]
@@ -368,7 +361,7 @@ public class PeoplePageTests
     {
         using var f = new PrivatePasteFactory();
         await f.AddPersonAsync("Ana");
-        await UploadAsync(await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword), "from ana");
+        await f.UploadTextAsync(await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword), "from ana");
         var html = await (await f.LoginWebAsync()).GetStringAsync("/");
         Assert.Contains("class=\"person-chip\">Ana<", html);
         Assert.Matches("class=\"person-chip\">Ana</span><svg class=\"platform\" data-platform=\"android\"", html);
@@ -378,9 +371,9 @@ public class PeoplePageTests
     public async Task History_OnePerson_NoPersonChip()
     {
         using var f = new PrivatePasteFactory();
-        await UploadAsync(await f.LoginAsync(), "only me");
+        var clip = await f.UploadTextAsync(await f.LoginAsync(), "only me");
         var html = await (await f.LoginWebAsync()).GetStringAsync("/");
-        Assert.Contains("only me", html);
+        Assert.Contains($"data-id=\"{clip.Id}\"", html);
         Assert.DoesNotContain("person-chip", html);
     }
 }

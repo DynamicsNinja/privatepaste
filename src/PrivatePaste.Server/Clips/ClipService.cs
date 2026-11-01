@@ -1,7 +1,7 @@
-using System.Text;
+using System.Text.RegularExpressions;
 using PrivatePaste.Protocol;
+using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Server.Config;
-using PrivatePaste.Server.Images;
 using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Server.Clips;
@@ -22,89 +22,158 @@ public sealed class ClipRejectedException(int statusCode, string message, string
 
 public static class ClipBlobs
 {
-    /// <summary>Blobs are keyed by content hash so a clip row is only visible once its blobs exist.</summary>
-    public static string Image(string hash) => $"{hash}.png";
+    // Blobs are keyed by the clip's hash so a clip row is only visible once its blobs exist. They hold what the client
+    // sent: ciphertext the server can't open.
+    public static string Thumb(string hash) => $"{hash}.thumb";
 
-    public static string Thumbnail(string hash) => $"{hash}.thumb.png";
+    public static string Blob(string hash, int n) => $"{hash}.b{n}";
 }
 
-public sealed class ClipService(
+public sealed partial class ClipService(
     ClipRepository clips,
     SettingsRepository settings,
+    VaultRepository vault,
     BlobStore blobs,
-    ImageProcessor images,
     IClipBroadcaster broadcaster,
     ServerOptions options,
     TimeProvider time,
     ILogger<ClipService> logger)
 {
-    // Serializes blob-write + upsert and blob deletion (single-user server, so contention is negligible).
-    private readonly SemaphoreSlim _imageLock = new(1, 1);
+    /// <summary>The largest sealed thumbnail accepted.</summary>
+    public const int MaxThumbBytes = 1024 * 1024;
 
-    public async Task<ClipDto> AddTextAsync(TextClipUpload upload, DeviceIdentity device)
+    /// <summary>The largest sealed payload accepted on an image clip, which holds only its size.</summary>
+    public const int MaxImagePayloadBytes = 4096;
+
+    // Serializes an upload's key check, blob writes and upsert against blob deletion and the encryption reset, so an
+    // upload sealed under the old key can't land after a reset (single-user server, so contention is negligible).
+    private readonly SemaphoreSlim _storeLock = new(1, 1);
+
+    /// <summary>
+    /// The largest sealed text or link payload. The JSON escapes every non-ASCII character and some ASCII ones as
+    /// <c>\uXXXX</c>, so a UTF-8 byte can take up to 6 bytes; 4096 more cover the JSON and the sealing. The limit the
+    /// user sees is on the plaintext, through <see cref="ClipUploadMeta.SizeBytes"/>.
+    /// </summary>
+    public static long MaxTextPayloadBytesFor(ServerOptions options) => 6 * options.MaxTextBytes + 4096;
+
+    /// <summary>The largest sealed image blob: the image limit plus the blob header and a tag per chunk.</summary>
+    public static long MaxBlobBytesFor(ServerOptions options) =>
+        options.MaxImageBytes + 9 + 16 * ((options.MaxImageBytes + BlobCipher.ChunkSize - 1) / BlobCipher.ChunkSize);
+
+    /// <summary>The largest <c>meta</c> part: the base64 of the largest payload plus room for the other fields.</summary>
+    public static long MaxMetaBytesFor(ServerOptions options) => Base64Length(MaxTextPayloadBytesFor(options)) + 8192;
+
+    /// <summary>
+    /// The largest upload body: an image at its limit with the largest thumbnail, or the largest text, each with room
+    /// for the metadata and the multipart framing.
+    /// </summary>
+    public static long MaxRequestBodyBytesFor(ServerOptions options) =>
+        Math.Max(MaxBlobBytesFor(options) + MaxThumbBytes + 64 * 1024,
+            Base64Length(MaxTextPayloadBytesFor(options)) + 16 * 1024);
+
+    private static long Base64Length(long bytes) => (bytes + 2) / 3 * 4;
+
+    public long MaxTextPayloadBytes => MaxTextPayloadBytesFor(options);
+
+    public long MaxBlobBytes => MaxBlobBytesFor(options);
+
+    public long MaxMetaBytes => MaxMetaBytesFor(options);
+
+    /// <summary>
+    /// Stores a clip sealed by the client. The server checks only what it can see: the kind, the keyed hash, the key
+    /// id and the sizes. A clip with the same hash is bumped instead of added again.
+    /// </summary>
+    public async Task<ClipDto> AddAsync(ClipUploadMeta meta, byte[]? thumb, IReadOnlyList<byte[]> blobParts, DeviceIdentity device)
     {
-        if (string.IsNullOrWhiteSpace(upload.Text))
-            throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Text is empty.");
-
-        var text = ContentHash.NormalizeText(upload.Text);
-        var size = Encoding.UTF8.GetByteCount(text);
-        if (size > options.MaxTextBytes)
-            throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge,
-                $"Text exceeds the {options.MaxTextBytes} byte limit.");
-
-        var copiedAt = CopiedAt(upload.CopiedAt, upload.Backfill);
-        if (upload.Backfill)
-            await EnsureNotClearedAsync(copiedAt);
-
-        var result = await clips.UpsertAsync(new NewClip(ContentClassifier.ClassifyText(text), text,
-            ContentHash.ForText(text), null, null, size, device.Id, device.Name, device.Platform, copiedAt, device.UserId));
-        await broadcaster.ClipChangedAsync(result.Clip, live: !upload.Backfill);
-        return result.Clip;
-    }
-
-    /// <summary>Adds an image already read into memory with <see cref="BufferImageAsync"/>.</summary>
-    public async Task<ClipDto> AddImageAsync(MemoryStream image, DateTimeOffset? copiedAt, bool backfill, DeviceIdentity device)
-    {
-        ProcessedImage processed;
-        try
+        var kind = meta.Kind switch
         {
-            image.Position = 0;
-            processed = images.Process(image);
-        }
-        catch (ImageTooLargeException ex)
+            "text" => ClipKind.Text,
+            "link" => ClipKind.Link,
+            "image" => ClipKind.Image,
+            _ => throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Unknown clip kind."),
+        };
+        if (meta.Hash is null || !HashPattern().IsMatch(meta.Hash))
+            throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Invalid hash.");
+        if (string.IsNullOrEmpty(meta.KeyId))
+            throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Missing key id.");
+        if (meta.SizeBytes < 0)
+            throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Invalid size.");
+        var payloadBytes = PayloadLength(meta.Payload);
+
+        if (kind == ClipKind.Image)
         {
-            throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge, ex.Message);
+            if (blobParts.Count != 1)
+                throw new ClipRejectedException(StatusCodes.Status400BadRequest, "An image clip has exactly one blob.");
+            if (blobParts[0].Length > MaxBlobBytes)
+                throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge,
+                    $"Image exceeds the {options.MaxImageBytes} byte limit.");
+            if (thumb is { Length: > MaxThumbBytes })
+                throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge, "Thumbnail is too large.");
+            if (payloadBytes > MaxImagePayloadBytes)
+                throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge, "Payload is too large.");
         }
-        catch (InvalidImageException ex)
+        else
         {
-            throw new ClipRejectedException(StatusCodes.Status400BadRequest, ex.Message);
+            if (blobParts.Count != 0 || thumb is not null)
+                throw new ClipRejectedException(StatusCodes.Status400BadRequest, "A text clip has no blobs or thumbnail.");
+            if (meta.SizeBytes > options.MaxTextBytes || payloadBytes > MaxTextPayloadBytes)
+                throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge,
+                    $"Text exceeds the {options.MaxTextBytes} byte limit.");
         }
 
-        var effectiveCopiedAt = CopiedAt(copiedAt, backfill);
-        if (backfill)
-            await EnsureNotClearedAsync(effectiveCopiedAt);
-
+        var copiedAt = CopiedAt(meta.CopiedAt, meta.Backfill);
         UpsertResult result;
-        await _imageLock.WaitAsync();
+        await _storeLock.WaitAsync();
         try
         {
-            // Always (re)write: the upload carries the bytes anyway, and this repairs a blob that is missing or
-            // damaged (e.g. left truncated by a crash before writes were atomic) instead of trusting that it exists.
-            await blobs.WriteAsync(ClipBlobs.Image(processed.Hash), processed.Png);
-            await blobs.WriteAsync(ClipBlobs.Thumbnail(processed.Hash), processed.ThumbnailPng);
+            var current = await vault.GetAsync()
+                ?? throw new ClipRejectedException(StatusCodes.Status409Conflict, "Set up encryption first.");
+            if (current.KeyId != meta.KeyId)
+                // Clients key off the title: they unlock with the new passphrase and drop what they had queued.
+                throw new ClipRejectedException(StatusCodes.Status409Conflict,
+                    "Encryption was reset. Enter the new passphrase.", "Encryption was reset");
+            // Under the lock, so a backfill can't land between a clear recording its time and deleting.
+            if (meta.Backfill)
+                await EnsureNotClearedAsync(copiedAt);
+            // The same hash under another kind would pair one clip's row with another's blobs.
+            if (await clips.GetByHashAsync(meta.Hash) is { } existing && existing.Kind != kind)
+                throw new ClipRejectedException(StatusCodes.Status409Conflict,
+                    "That content was already stored as a different kind.");
 
-            result = await clips.UpsertAsync(new NewClip(ClipKind.Image, null, processed.Hash, processed.Width,
-                processed.Height, processed.Png.Length, device.Id, device.Name, device.Platform, effectiveCopiedAt,
-                device.UserId));
+            // Always (re)write: the upload carries the bytes anyway, and this repairs a blob that is missing or
+            // damaged instead of trusting that it exists. Each part is sealed on its own, so new ones sit fine beside
+            // a bumped clip's stored payload.
+            if (thumb is not null)
+                await blobs.WriteAsync(ClipBlobs.Thumb(meta.Hash), thumb);
+            for (var n = 0; n < blobParts.Count; n++)
+                await blobs.WriteAsync(ClipBlobs.Blob(meta.Hash, n), blobParts[n]);
+
+            result = await clips.UpsertAsync(new NewClip(kind, null, meta.Hash, null, null, meta.SizeBytes, device.Id,
+                device.Name, device.Platform, copiedAt, device.UserId, meta.Payload, meta.KeyId, thumb is not null,
+                blobParts.Count));
         }
         finally
         {
-            _imageLock.Release();
+            _storeLock.Release();
         }
 
-        await broadcaster.ClipChangedAsync(result.Clip, live: !backfill);
+        await broadcaster.ClipChangedAsync(result.Clip, live: !meta.Backfill);
         return result.Clip;
     }
+
+    /// <summary>The decoded size of a base64 payload; 400 when it is missing or not base64.</summary>
+    private static int PayloadLength(string? payload)
+    {
+        if (string.IsNullOrEmpty(payload))
+            throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Missing payload.");
+        var buffer = new byte[payload.Length / 4 * 3 + 3];
+        if (!Convert.TryFromBase64String(payload, buffer, out var length))
+            throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Payload is not base64.");
+        return length;
+    }
+
+    [GeneratedRegex(@"^[0-9a-f]{64}\z")]
+    private static partial Regex HashPattern();
 
     public async Task<ClipDto?> RestoreAsync(Guid id, DeviceIdentity device)
     {
@@ -153,13 +222,13 @@ public sealed class ClipService(
 
     /// <summary>
     /// Stores the new vault wrap and deletes everything, atomically (see <see cref="ClipRepository.ResetAllAsync"/>),
-    /// then the image blobs, best effort. Used when the owner resets encryption, after which no old clip could be
+    /// then the blobs, best effort. Used when the owner resets encryption, after which no old clip could be
     /// opened anyway. The caller announces it with <see cref="IClipBroadcaster.VaultResetAsync"/>, so no per-clip
     /// deletes are sent.
     /// </summary>
     public async Task ResetAllAsync(VaultWrapDto wrap)
     {
-        await _imageLock.WaitAsync();
+        await _storeLock.WaitAsync();
         try
         {
             foreach (var clip in await clips.ResetAllAsync(wrap))
@@ -167,7 +236,7 @@ public sealed class ClipService(
         }
         finally
         {
-            _imageLock.Release();
+            _storeLock.Release();
         }
     }
 
@@ -177,7 +246,7 @@ public sealed class ClipService(
     private async Task<int> DeleteUnpinnedAsync(DateTimeOffset? olderThan)
     {
         IReadOnlyList<(ClipDto Clip, long Seq)> deleted;
-        await _imageLock.WaitAsync();
+        await _storeLock.WaitAsync();
         try
         {
             deleted = await clips.DeleteUnpinnedAsync(olderThan);
@@ -186,7 +255,7 @@ public sealed class ClipService(
         }
         finally
         {
-            _imageLock.Release();
+            _storeLock.Release();
         }
 
         foreach (var (clip, seq) in deleted)
@@ -211,7 +280,7 @@ public sealed class ClipService(
     public async Task<bool> DeleteAsync(Guid id)
     {
         long seq;
-        await _imageLock.WaitAsync();
+        await _storeLock.WaitAsync();
         try
         {
             var clip = await clips.GetAsync(id);
@@ -222,7 +291,7 @@ public sealed class ClipService(
         }
         finally
         {
-            _imageLock.Release();
+            _storeLock.Release();
         }
 
         await broadcaster.ClipDeletedAsync(id, seq);
@@ -234,9 +303,10 @@ public sealed class ClipService(
     // Blobs are keyed by content hash and a hash has exactly one clip row, so no surviving clip shares them.
     private void RemoveBlobs(ClipDto clip)
     {
-        if (clip.Kind != ClipKind.Image) return;
-        TryDeleteBlob(ClipBlobs.Image(clip.Hash));
-        TryDeleteBlob(ClipBlobs.Thumbnail(clip.Hash));
+        if (clip.HasThumb)
+            TryDeleteBlob(ClipBlobs.Thumb(clip.Hash));
+        for (var n = 0; n < clip.BlobCount; n++)
+            TryDeleteBlob(ClipBlobs.Blob(clip.Hash, n));
     }
 
     private void TryDeleteBlob(string name)
@@ -257,34 +327,5 @@ public sealed class ClipService(
         if (!backfill) return now;
         var at = requested ?? now;
         return at < now ? at : now;
-    }
-
-    /// <summary>
-    /// Reads an uploaded image into memory (never to disk), rejecting it with 413 as soon as it exceeds
-    /// <see cref="ServerOptions.MaxImageBytes"/>.
-    /// </summary>
-    public async Task<MemoryStream> BufferImageAsync(Stream input)
-    {
-        var buffer = new MemoryStream();
-        try
-        {
-            var chunk = new byte[81920];
-            int read;
-            while ((read = await input.ReadAsync(chunk)) > 0)
-            {
-                if (buffer.Length + read > options.MaxImageBytes)
-                    throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge,
-                        $"Image exceeds the {options.MaxImageBytes} byte limit.");
-                buffer.Write(chunk, 0, read);
-            }
-
-            buffer.Position = 0;
-            return buffer;
-        }
-        catch
-        {
-            buffer.Dispose();
-            throw;
-        }
     }
 }

@@ -2,14 +2,13 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using PrivatePaste.Protocol;
-using PrivatePaste.Tests.Images;
 
 namespace PrivatePaste.Tests.Api;
 
 public class HistoryEndpointsTests
 {
-    private static Task<HttpResponseMessage> Backfill(HttpClient c, string text, DateTimeOffset at) =>
-        c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, at, true), ProtocolJson.Options);
+    private static async Task<HttpResponseMessage> Backfill(PrivatePasteFactory f, HttpClient c, string text, DateTimeOffset at) =>
+        await PrivatePasteFactory.PostClipAsync(c, PrivatePasteFactory.TextMeta(await f.VaultKeyAsync(), text, at, backfill: true));
 
     private static Task<SettingsDto?> GetSettings(HttpClient c) =>
         c.GetFromJsonAsync<SettingsDto>("/api/settings", ProtocolJson.Options);
@@ -19,9 +18,9 @@ public class HistoryEndpointsTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var keep = await PinEndpointsTests.PostText(c, "keep");
-        await PinEndpointsTests.PostText(c, "drop one");
-        await PinEndpointsTests.PostText(c, "drop two");
+        var keep = await f.UploadTextAsync(c, "keep");
+        await f.UploadTextAsync(c, "drop one");
+        await f.UploadTextAsync(c, "drop two");
         await c.PostAsync($"/api/clips/{keep.Id}/pin", null);
         f.Clock.Advance(TimeSpan.FromSeconds(1));   // a clear only deletes clips copied before it
 
@@ -40,9 +39,9 @@ public class HistoryEndpointsTests
         // A live upload that lands while the clear runs has a copy time at or after the clear: it must not vanish.
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        await PinEndpointsTests.PostText(c, "before");
+        await f.UploadTextAsync(c, "before");
         f.Clock.Advance(TimeSpan.FromMinutes(1));
-        var racing = await PinEndpointsTests.PostText(c, "racing");
+        var racing = await f.UploadTextAsync(c, "racing");
 
         var r = await c.PostAsync("/api/history/clear", null);
         using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
@@ -60,15 +59,15 @@ public class HistoryEndpointsTests
         var (app, client) = await PinEndpointsTests.RecordedClientAsync(f, rec);
         using var _ = app;
 
-        var text = await PinEndpointsTests.PostText(client, "t");
-        var form = new MultipartFormDataContent { { new ByteArrayContent(TestImages.MakePng(4, 4).ToArray()), "file", "x.png" } };
-        var img = (await (await client.PostAsync("/api/clips/image", form)).Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/clips/{img.Id}/image")).StatusCode);
+        var text = await f.UploadTextAsync(client, "t");
+        var (img, _, _) = await f.UploadImageAsync(client, await f.VaultKeyAsync(), [1, 2, 3, 4]);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/clips/{img.Id}/blobs/0")).StatusCode);
         f.Clock.Advance(TimeSpan.FromSeconds(1));
 
         await client.PostAsync("/api/history/clear", null);
 
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/clips/{img.Id}/image")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/clips/{img.Id}/blobs/0")).StatusCode);
+        Assert.Empty(Directory.GetFiles(Path.Combine(f.DataDir, "blobs")));
         Assert.Equivalent(new[] { text.Id, img.Id }, rec.Deleted);
     }
 
@@ -78,11 +77,11 @@ public class HistoryEndpointsTests
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
         var before = f.Clock.GetUtcNow().AddMinutes(-5);
-        await PinEndpointsTests.PostText(c, "x");
+        await f.UploadTextAsync(c, "x");
         f.Clock.Advance(TimeSpan.FromMinutes(10));
         await c.PostAsync("/api/history/clear", null);
 
-        var r = await Backfill(c, "old", before);
+        var r = await Backfill(f, c, "old", before);
         Assert.Equal(HttpStatusCode.Gone, r.StatusCode);
         using var problem = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
         Assert.Equal("Cleared", problem.RootElement.GetProperty("title").GetString());
@@ -90,19 +89,14 @@ public class HistoryEndpointsTests
         Assert.Equal("History was cleared after this clip was copied, so it wasn't added.",
             problem.RootElement.GetProperty("detail").GetString());
 
-        var form = new MultipartFormDataContent
-        {
-            { new StringContent(before.ToString("O")), "copiedAt" },
-            { new StringContent("true"), "backfill" },
-            { new ByteArrayContent(TestImages.MakePng(4, 4).ToArray()), "file", "x.png" },
-        };
-        Assert.Equal(HttpStatusCode.Gone, (await c.PostAsync("/api/clips/image", form)).StatusCode);
+        var (meta, blob, thumb) = await PrivatePasteFactory.SealImageAsync(await f.VaultKeyAsync(), [1, 2, 3, 4], before, backfill: true);
+        Assert.Equal(HttpStatusCode.Gone, (await PrivatePasteFactory.PostClipAsync(c, meta, thumb, blob)).StatusCode);
 
         Assert.Empty((await c.GetFromJsonAsync<ClipPage>("/api/clips", ProtocolJson.Options))!.Items);
 
         f.Clock.Advance(TimeSpan.FromMinutes(2));
-        Assert.Equal(HttpStatusCode.OK, (await Backfill(c, "after", f.Clock.GetUtcNow().AddMinutes(-1))).StatusCode);
-        await PinEndpointsTests.PostText(c, "live");
+        Assert.Equal(HttpStatusCode.OK, (await Backfill(f, c, "after", f.Clock.GetUtcNow().AddMinutes(-1))).StatusCode);
+        await f.UploadTextAsync(c, "live");
     }
 
     [Fact]
@@ -132,7 +126,7 @@ public class HistoryEndpointsTests
         await c.PutAsJsonAsync("/api/settings", new SettingsDto(7), ProtocolJson.Options);
         var now = f.Clock.GetUtcNow();
 
-        Assert.Equal(HttpStatusCode.Gone, (await Backfill(c, "ancient", now.AddDays(-8))).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await Backfill(c, "recent", now.AddDays(-6))).StatusCode);
+        Assert.Equal(HttpStatusCode.Gone, (await Backfill(f, c, "ancient", now.AddDays(-8))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Backfill(f, c, "recent", now.AddDays(-6))).StatusCode);
     }
 }

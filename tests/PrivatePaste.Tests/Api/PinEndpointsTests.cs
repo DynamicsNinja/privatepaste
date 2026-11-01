@@ -50,19 +50,13 @@ public class PinEndpointsTests
         return (app, client);
     }
 
-    internal static async Task<ClipDto> PostText(HttpClient c, string text)
-    {
-        var r = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
 
     [Fact]
     public async Task Pin_and_unpin_return_the_clip_and_404_when_missing()
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var clip = await PostText(c, "keep me");
+        var clip = await f.UploadTextAsync(c, "keep me");
 
         var pin = await c.PostAsync($"/api/clips/{clip.Id}/pin", null);
         Assert.Equal(HttpStatusCode.OK, pin.StatusCode);
@@ -85,7 +79,7 @@ public class PinEndpointsTests
         var (app, client) = await RecordedClientAsync(f, rec);
         using var _ = app;
 
-        var clip = await PostText(client, "a");
+        var clip = await f.UploadTextAsync(client, "a");
         rec.Changed.Clear();
 
         await client.PostAsync($"/api/clips/{clip.Id}/pin", null);
@@ -107,11 +101,11 @@ public class PinEndpointsTests
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
-        var a = await PostText(c, "alpha");
+        var a = await f.UploadTextAsync(c, "alpha");
         f.Clock.Advance(TimeSpan.FromMinutes(1));
-        var b = await PostText(c, "bravo");
+        var b = await f.UploadTextAsync(c, "bravo");
         f.Clock.Advance(TimeSpan.FromMinutes(1));
-        var d = await PostText(c, "delta");
+        var d = await f.UploadTextAsync(c, "delta");
 
         f.Clock.Advance(TimeSpan.FromMinutes(1));
         await c.PostAsync($"/api/clips/{a.Id}/pin", null);
@@ -126,8 +120,7 @@ public class PinEndpointsTests
         Assert.Equal(2, pinned.Items.Count);
         Assert.DoesNotContain(pinned.Items, i => i.Id == b.Id);
 
-        // A q parameter is ignored: search is client-side now.
-        var searched = (await c.GetFromJsonAsync<ClipPage>("/api/clips?pinned=true&q=alp", ProtocolJson.Options))!;
-        Assert.Equal(2, searched.Items.Count);
+        // Search runs on the devices: the server can't read the clips.
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.GetAsync("/api/clips?pinned=true&q=alp")).StatusCode);
     }
 }

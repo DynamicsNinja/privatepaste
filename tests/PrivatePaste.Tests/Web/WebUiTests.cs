@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using PrivatePaste.Protocol;
@@ -33,13 +34,6 @@ public class WebUiTests
                 .Append(new("__RequestVerificationToken", token))));
 
     private static Task<HttpClient> WebLoginAsync(PrivatePasteFactory factory) => factory.LoginWebAsync();
-
-    private static async Task<ClipDto> UploadTextAsync(HttpClient api, string text)
-    {
-        var response = await api.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
 
     private static HttpRequestMessage ApiPost(string url, string token)
     {
@@ -97,30 +91,11 @@ public class WebUiTests
     public async Task Login_then_index_lists_clips()
     {
         using var factory = new PrivatePasteFactory();
-        await UploadTextAsync(await factory.LoginAsync(), "hello web");
+        var clip = await factory.UploadTextAsync(await factory.LoginAsync(), "hello web");
         var web = await WebLoginAsync(factory);
         var response = await web.GetAsync("/");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("hello web", await response.Content.ReadAsStringAsync());
-    }
-
-    [Fact]
-    public async Task Index_html_encodes_clip_text()
-    {
-        using var factory = new PrivatePasteFactory();
-        await UploadTextAsync(await factory.LoginAsync(), "<script>alert(1)</script>");
-        var body = await (await (await WebLoginAsync(factory)).GetAsync("/")).Content.ReadAsStringAsync();
-        Assert.Contains("&lt;script&gt;", body);
-        Assert.DoesNotContain("<script>alert(1)", body);
-    }
-
-    [Fact]
-    public async Task Index_renders_links_as_safe_anchors()
-    {
-        using var factory = new PrivatePasteFactory();
-        await UploadTextAsync(await factory.LoginAsync(), "https://example.com/a");
-        var body = await (await (await WebLoginAsync(factory)).GetAsync("/")).Content.ReadAsStringAsync();
-        Assert.Contains("<a href=\"https://example.com/a\" rel=\"noopener noreferrer\" target=\"_blank\">", body);
+        Assert.Contains($"data-id=\"{clip.Id}\"", await response.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -128,11 +103,11 @@ public class WebUiTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        await UploadTextAsync(api, "docker compose up");
-        await UploadTextAsync(api, "grocery list");
+        var a = await factory.UploadTextAsync(api, "docker compose up");
+        var b = await factory.UploadTextAsync(api, "grocery list");
         var body = await (await (await WebLoginAsync(factory)).GetAsync("/?q=compose")).Content.ReadAsStringAsync();
-        Assert.Contains("docker compose up", body);
-        Assert.Contains("grocery list", body);
+        Assert.Contains($"data-id=\"{a.Id}\"", body);
+        Assert.Contains($"data-id=\"{b.Id}\"", body);
     }
 
     [Fact]
@@ -141,14 +116,14 @@ public class WebUiTests
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
         for (var i = 0; i < 51; i++)
-            await UploadTextAsync(api, $"clip-number-{i:D3}");
+            await factory.UploadTextAsync(api, $"clip-number-{i:D3}");
         var web = await WebLoginAsync(factory);
         var first = await web.GetStringAsync("/");
         Assert.Contains("Load more", first);
-        Assert.Equal(50, Regex.Matches(first, "clip-number-").Count);
+        Assert.Equal(50, Regex.Matches(first, "<li class=\"clip").Count);
         var cursor = Regex.Match(first, "href=\"/\\?cursor=([^\"]+)\"").Groups[1].Value;
         var second = await web.GetStringAsync("/?cursor=" + System.Net.WebUtility.HtmlDecode(cursor));
-        Assert.Single(Regex.Matches(second, "clip-number-"));
+        Assert.Single(Regex.Matches(second, "<li class=\"clip"));
         Assert.DoesNotContain("Load more", second);
     }
 
@@ -157,7 +132,7 @@ public class WebUiTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        var clip = await UploadTextAsync(api, "to be deleted");
+        var clip = await factory.UploadTextAsync(api, "to be deleted");
         var web = await WebLoginAsync(factory);
         var token = await TokenFromAsync(web, "/");
         var response = await PostFormAsync(web, "/?handler=Delete", token, ("id", clip.Id.ToString()));
@@ -169,7 +144,7 @@ public class WebUiTests
     public async Task Restore_via_cookie_requires_antiforgery()
     {
         using var factory = new PrivatePasteFactory();
-        var clip = await UploadTextAsync(await factory.LoginAsync(), "restore me");
+        var clip = await factory.UploadTextAsync(await factory.LoginAsync(), "restore me");
         var web = await WebLoginAsync(factory);
         var token = await TokenFromAsync(web, "/");
 
@@ -189,7 +164,7 @@ public class WebUiTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        var clip = await UploadTextAsync(api, "bearer ok");
+        var clip = await factory.UploadTextAsync(api, "bearer ok");
         Assert.Equal(HttpStatusCode.OK, (await api.PostAsync($"/api/clips/{clip.Id}/restore", null)).StatusCode);
     }
 
@@ -197,9 +172,9 @@ public class WebUiTests
     public async Task History_shows_the_source_platform_icon_before_the_device_name()
     {
         using var factory = new PrivatePasteFactory();
-        await UploadTextAsync(await factory.LoginAsync("Pixel", "android"), "from android");
-        await UploadTextAsync(await factory.LoginAsync("Desk", "windows"), "from windows");
-        await UploadTextAsync(await factory.LoginAsync("Fridge", "tizen"), "from elsewhere");
+        await factory.UploadTextAsync(await factory.LoginAsync("Pixel", "android"), "from android");
+        await factory.UploadTextAsync(await factory.LoginAsync("Desk", "windows"), "from windows");
+        await factory.UploadTextAsync(await factory.LoginAsync("Fridge", "tizen"), "from elsewhere");
         var web = await WebLoginAsync(factory);
 
         var html = await web.GetStringAsync("/");
@@ -266,25 +241,32 @@ public class WebUiTests
     }
 
     [Fact]
-    public async Task Image_upload_via_cookie_requires_antiforgery_without_buffering_the_body()
+    public async Task Clip_upload_via_cookie_requires_antiforgery_without_buffering_the_body()
     {
         using var factory = new PrivatePasteFactory();
+        var key = await factory.VaultKeyAsync();
         var web = await WebLoginAsync(factory);
         var token = await TokenFromAsync(web, "/");
-        var bytes = Images.TestImages.MakePng(200, 200).ToArray();
-        Assert.True(bytes.Length > 100 * 1024);
-        MultipartFormDataContent Form() => new() { { new ByteArrayContent(bytes), "file", "x.png" } };
+        var image = new byte[200 * 1024];
+        Random.Shared.NextBytes(image);
+        var (meta, blob, thumb) = await PrivatePasteFactory.SealImageAsync(key, image);
+        MultipartFormDataContent Form() => new()
+        {
+            { new StringContent(JsonSerializer.Serialize(meta, ProtocolJson.Options)), "meta" },
+            { new ByteArrayContent(thumb), "thumb", "thumb" },
+            { new ByteArrayContent(blob), "blob0", "blob0" },
+        };
 
         var created = new System.Collections.Concurrent.ConcurrentBag<string>();
         using (var watcher = new FileSystemWatcher(Path.GetTempPath(), "ASPNETCORE_*") { EnableRaisingEvents = true })
         {
             watcher.Created += (_, e) => created.Add(e.FullPath);
-            Assert.Equal(HttpStatusCode.BadRequest, (await web.PostAsync("/api/clips/image", Form())).StatusCode);
+            Assert.Equal(HttpStatusCode.BadRequest, (await web.PostAsync("/api/clips", Form())).StatusCode);
             await Task.Delay(300);
         }
         Assert.Empty(created);
 
-        var with = new HttpRequestMessage(HttpMethod.Post, "/api/clips/image") { Content = Form() };
+        var with = new HttpRequestMessage(HttpMethod.Post, "/api/clips") { Content = Form() };
         with.Headers.Add("RequestVerificationToken", token);
         Assert.Equal(HttpStatusCode.OK, (await web.SendAsync(with)).StatusCode);
     }

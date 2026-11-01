@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -12,6 +14,7 @@ using Microsoft.Extensions.Time.Testing;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
 using PrivatePaste.Server.Auth;
+using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Tests;
 
@@ -28,6 +31,7 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
     private readonly string _dataDir;
     private readonly bool _ownsDataDir;
     private readonly IReadOnlyDictionary<string, string> _settings;
+    private VaultKey? _vaultKey;
 
     /// <param name="dataDir">An existing data directory to reuse (a restart); it is left in place on dispose.</param>
     public PrivatePasteFactory(IReadOnlyDictionary<string, string>? settings = null, string? dataDir = null)
@@ -91,6 +95,97 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
         return wrap;
     }
 
+    /// <summary>Sets up a vault with a new key as the owner and returns the key, for uploading clips.</summary>
+    public static async Task<VaultKey> SetUpVaultAsync(HttpClient ownerClient)
+    {
+        var key = VaultKey.Create();
+        await EnsureVaultAsync(ownerClient, key);
+        return key;
+    }
+
+    /// <summary>
+    /// The vault key shared by this factory's tests. The first call stores a vault for it straight in the database, so
+    /// any person's device can upload under it without the owner setting it up first.
+    /// </summary>
+    public async Task<VaultKey> VaultKeyAsync()
+    {
+        if (_vaultKey is null)
+        {
+            var key = VaultKey.Create();
+            Assert.True(await Services.GetRequiredService<VaultRepository>().CreateAsync(RandomWrap(key.KeyId)),
+                "A vault already exists");
+            _vaultKey = key;
+        }
+
+        return _vaultKey;
+    }
+
+    /// <summary>Uploads <paramref name="text"/> sealed under <see cref="VaultKeyAsync"/>'s key.</summary>
+    public async Task<ClipDto> UploadTextAsync(HttpClient client, string text, DateTimeOffset? copiedAt = null,
+        bool backfill = false) =>
+        await UploadTextAsync(client, await VaultKeyAsync(), text, copiedAt, backfill);
+
+    /// <summary>Seals <paramref name="text"/> as a client would and uploads it; fails the test unless it is stored.</summary>
+    public async Task<ClipDto> UploadTextAsync(HttpClient client, VaultKey key, string text, DateTimeOffset? copiedAt = null,
+        bool backfill = false) =>
+        await ReadClipAsync(await PostClipAsync(client, TextMeta(key, text, copiedAt, backfill)));
+
+    /// <summary>
+    /// Seals <paramref name="image"/> (any bytes: the server never opens it) and a thumbnail as a client would and
+    /// uploads them; fails the test unless it is stored. Returns the clip and the sealed blob and thumbnail sent.
+    /// </summary>
+    public async Task<(ClipDto Clip, byte[] Blob, byte[] Thumb)> UploadImageAsync(HttpClient client, VaultKey key,
+        byte[] image, DateTimeOffset? copiedAt = null, bool backfill = false)
+    {
+        var (meta, blob, thumb) = await SealImageAsync(key, image, copiedAt, backfill);
+        return (await ReadClipAsync(await PostClipAsync(client, meta, thumb, blob)), blob, thumb);
+    }
+
+    /// <summary>The upload metadata a client sends for <paramref name="text"/>.</summary>
+    public static ClipUploadMeta TextMeta(VaultKey key, string text, DateTimeOffset? copiedAt = null, bool backfill = false)
+    {
+        var normalized = ContentHash.NormalizeText(text);
+        var kind = ContentClassifier.ClassifyText(normalized) == ClipKind.Link ? "link" : "text";
+        return new ClipUploadMeta(kind, key.KeyId, KeyedHash.For(key, ContentHash.ForText(normalized)),
+            ClipPayload.Seal(key, new ClipPayload { Text = normalized }), Encoding.UTF8.GetByteCount(normalized),
+            copiedAt, backfill);
+    }
+
+    /// <summary>The metadata, sealed blob and sealed thumbnail a client sends for an image.</summary>
+    public static async Task<(ClipUploadMeta Meta, byte[] Blob, byte[] Thumb)> SealImageAsync(VaultKey key, byte[] image,
+        DateTimeOffset? copiedAt = null, bool backfill = false)
+    {
+        using var sealedBlob = new MemoryStream();
+        await BlobCipher.EncryptAsync(key, new MemoryStream(image), sealedBlob, CancellationToken.None);
+        var thumb = SealedBox.Seal(key, "thumb", image.AsSpan(0, Math.Min(image.Length, 64)));
+        var meta = new ClipUploadMeta("image", key.KeyId,
+            KeyedHash.For(key, Convert.ToHexStringLower(SHA256.HashData(image))),
+            ClipPayload.Seal(key, new ClipPayload { Width = 4, Height = 4 }), image.Length, copiedAt, backfill);
+        return (meta, sealedBlob.ToArray(), thumb);
+    }
+
+    /// <summary>Posts an upload as a client would: the metadata as JSON, then the optional thumbnail and blobs.</summary>
+    public static Task<HttpResponseMessage> PostClipAsync(HttpClient client, ClipUploadMeta meta, byte[]? thumb = null,
+        params byte[][] blobs)
+    {
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent(JsonSerializer.Serialize(meta, ProtocolJson.Options), Encoding.UTF8, "application/json"), "meta" },
+        };
+        if (thumb is not null)
+            form.Add(new ByteArrayContent(thumb), "thumb", "thumb");
+        for (var n = 0; n < blobs.Length; n++)
+            form.Add(new ByteArrayContent(blobs[n]), $"blob{n}", $"blob{n}");
+        return client.PostAsync("/api/clips", form);
+    }
+
+    private static async Task<ClipDto> ReadClipAsync(HttpResponseMessage response)
+    {
+        Assert.True(response.IsSuccessStatusCode,
+            $"{(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+        return (await response.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+    }
+
     /// <summary>A valid-looking wrap with random salt, nonce and wrapped key.</summary>
     public static VaultWrapDto RandomWrap(string keyId) => new(keyId,
         new VaultKdfDto("argon2id", 65536, 3, 1, Convert.ToBase64String(RandomNumberGenerator.GetBytes(16))),
@@ -147,6 +242,8 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
+        if (disposing)
+            _vaultKey?.Dispose();
         if (disposing && _ownsDataDir)
         {
             try { Directory.Delete(_dataDir, recursive: true); }

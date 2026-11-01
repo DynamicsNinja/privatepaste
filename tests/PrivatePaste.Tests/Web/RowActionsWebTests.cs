@@ -12,8 +12,7 @@ public class RowActionsWebTests
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
-        (await api.PostAsJsonAsync("/api/clips/text", new TextClipUpload("row-actions-clip", null, false),
-            ProtocolJson.Options)).EnsureSuccessStatusCode();
+        await factory.UploadTextAsync(api, "row-actions-clip");
         var web = await factory.LoginWebAsync();
         var html = await web.GetStringAsync("/");
         var row = Regex.Match(html, "<li class=\"clip[^\"]*\".*?</li>", RegexOptions.Singleline);

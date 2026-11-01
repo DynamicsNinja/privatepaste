@@ -28,13 +28,6 @@ public class PeopleServiceTests
     private static async Task<Guid> OwnerIdAsync(PrivatePasteFactory f) =>
         (await f.Services.GetRequiredService<UserRepository>().GetOwnerAsync())!.Id;
 
-    private static async Task<ClipDto> PostAsync(HttpClient c, string text)
-    {
-        var r = await c.PostAsJsonAsync("/api/clips/text", new TextClipUpload(text, null, false), ProtocolJson.Options);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
-    }
-
     private static async Task<SyncResponse> SyncAsync(HttpClient c, long afterSeq) =>
         (await c.GetFromJsonAsync<SyncResponse>($"/api/sync?afterSeq={afterSeq}", ProtocolJson.Options))!;
 
@@ -160,7 +153,7 @@ public class PeopleServiceTests
         var anaId = await AddAsync(f, "Ana");
         await AddAsync(f, "Bo");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword);
-        var clip = await PostAsync(ana, "from ana");
+        var clip = await f.UploadTextAsync(ana, "from ana");
 
         await People(f).RemoveAsync(anaId);
 
@@ -275,9 +268,9 @@ public class PeopleServiceTests
         var owner = await f.LoginAsync();
         var id = await AddAsync(f, "Ana");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword);
-        var anaClip = await PostAsync(ana, "from ana");
-        var ownerClip = await PostAsync(owner, "from owner");
-        var anaLater = await PostAsync(ana, "from ana, later");
+        var anaClip = await f.UploadTextAsync(ana, "from ana");
+        var ownerClip = await f.UploadTextAsync(owner, "from owner");
+        var anaLater = await f.UploadTextAsync(ana, "from ana, later");
         var before = await SyncAsync(owner, 0);
 
         Assert.True((await People(f).RenameAsync(id, " Anna ")).Ok);
@@ -308,7 +301,7 @@ public class PeopleServiceTests
         var owner = await f.LoginAsync();
         var id = await AddAsync(f, "Ana");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword);
-        await PostAsync(ana, "from ana");
+        await f.UploadTextAsync(ana, "from ana");
         var before = await SyncAsync(owner, 0);
 
         Assert.True((await People(f).RenameAsync(id, "Ana")).Ok);
@@ -321,7 +314,7 @@ public class PeopleServiceTests
     {
         using var f = new PrivatePasteFactory();
         var owner = await f.LoginAsync();
-        var clip = await PostAsync(owner, "from owner");
+        var clip = await f.UploadTextAsync(owner, "from owner");
         Assert.Null(clip.SourceUserName);
         var before = await SyncAsync(owner, 0);
 
@@ -338,7 +331,7 @@ public class PeopleServiceTests
         using var f = new PrivatePasteFactory();
         var owner = await f.LoginAsync();
         await AddAsync(f, "Ana");
-        await PostAsync(owner, "from owner");
+        await f.UploadTextAsync(owner, "from owner");
         var before = await SyncAsync(owner, 0);
 
         await AddAsync(f, "Bo");
@@ -354,8 +347,8 @@ public class PeopleServiceTests
         var anaId = await AddAsync(f, "Ana");
         var boId = await AddAsync(f, "Bo");
         var ana = await f.LoginAsync("Ana-phone", "android", "Ana", AnaPassword);
-        var anaClip = await PostAsync(ana, "from ana");
-        var ownerClip = await PostAsync(owner, "from owner");
+        var anaClip = await f.UploadTextAsync(ana, "from ana");
+        var ownerClip = await f.UploadTextAsync(owner, "from owner");
 
         // Three to two: names still mean something, nothing is re-sent.
         var beforeBo = await SyncAsync(owner, 0);
