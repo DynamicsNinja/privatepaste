@@ -257,6 +257,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                         ?: return false
                     withContext(Dispatchers.IO) { clipboard.writeImage(id, png) }
                 }
+                ClipKind.UNKNOWN -> return false  // a kind from a newer client: nothing this build can copy
             }
             true
         } catch (e: CancellationException) {

@@ -101,6 +101,7 @@ object Notifications {
         val body = when (clip.kind) {
             ClipKind.IMAGE -> if (clip.width != null && clip.height != null) "Image ${clip.width}×${clip.height}" else "Image"
             ClipKind.TEXT, ClipKind.LINK -> preview(clip.text.orEmpty())
+            ClipKind.UNKNOWN -> "New clip"
         }
         val copy = Intent(context, CopyActivity::class.java)
             .putExtra(CopyActivity.EXTRA_CLIP_ID, clip.id)

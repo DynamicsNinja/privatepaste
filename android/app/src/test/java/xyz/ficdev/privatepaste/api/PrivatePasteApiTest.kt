@@ -27,7 +27,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
+import xyz.ficdev.privatepaste.core.model.ClipUploadMeta
+import xyz.ficdev.privatepaste.core.model.ProtocolJson
 import java.time.Duration
 import java.time.Instant
 
@@ -97,23 +100,23 @@ class PrivatePasteApiTest {
         server.enqueue(json("""{"clips":[],"deletedIds":[],"latestSeq":0,"hasMore":false}"""))
         server.enqueue(MockResponse().setBody("png"))
         val a = api()
-        a.logout(); a.clips(null, null); a.sync(0); a.image("x")
+        a.logout(); a.clips(null); a.sync(0); a.image("x")
         repeat(4) { assertEquals("Bearer tok", take().getHeader("Authorization")) }
     }
 
     @Test fun subPathIsKept() = runBlocking<Unit> {
         server.enqueue(json("""{"items":[],"nextCursor":null}"""))
-        api(path = "/sub/").clips(null, null)
+        api(path = "/sub/").clips(null)
         assertEquals("/sub/api/clips?limit=50", take().path)
     }
 
     @Test fun clipsQuery() = runBlocking<Unit> {
         server.enqueue(json("""{"items":[$clipJson],"nextCursor":"n"}"""))
-        val page = api().clips("a b&c", "cur", 10)
+        val page = api().clips("cur", 10)
         assertEquals("n", page.nextCursor)
         assertEquals(ClipKind.TEXT, page.items.single().kind)
         val url = take().requestUrl!!
-        assertEquals("a b&c", url.queryParameter("q"))
+        assertNull(url.queryParameter("q"))
         assertEquals("cur", url.queryParameter("cursor"))
         assertEquals("10", url.queryParameter("limit"))
     }
@@ -136,7 +139,7 @@ class PrivatePasteApiTest {
 
     @Test fun status401IsUnauthorized() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(401))
-        assertThrowsApi<ApiException.Unauthorized> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Unauthorized> { api().clips(null) }
     }
 
     @Test fun status413CarriesDetail() = runBlocking<Unit> {
@@ -157,16 +160,16 @@ class PrivatePasteApiTest {
 
     @Test fun status503And408AreTransient() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(503))
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
         server.enqueue(MockResponse().setResponseCode(408))
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
     }
 
     @Test fun status429() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(429))
         assertThrowsApi<ApiException.RateLimited> { api().login("n", "p", "d") }
         server.enqueue(MockResponse().setResponseCode(429))
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
     }
 
     @Test fun loginWrongPasswordIsUnauthorized() = runBlocking<Unit> {
@@ -176,19 +179,22 @@ class PrivatePasteApiTest {
 
     @Test fun undecodable2xxBodiesAreTransient() = runBlocking<Unit> {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/html").setBody("<html>portal</html>"))
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
         server.enqueue(json("not json"))
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
         server.enqueue(MockResponse().setBody("""{"items":[],"nextCursor":null}""")) // no content type
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
-        val unknownKind = clipJson.replace("\"kind\":\"text\"", "\"kind\":\"video\"")
-        server.enqueue(json("""{"items":[$unknownKind]}"""))
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
+        val noHash = clipJson.replace("\"hash\":\"h\",", "")
+        server.enqueue(json("""{"items":[$noHash]}"""))
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
+        // An unknown kind is lenient: it decodes as UNKNOWN instead of failing the page.
+        server.enqueue(json("""{"items":[${clipJson.replace("\"kind\":\"text\"", "\"kind\":\"video\"")}]}"""))
+        assertEquals(ClipKind.UNKNOWN, api().clips(null).items.single().kind)
     }
 
     @Test fun networkFailureIsTransient() = runBlocking<Unit> {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
-        assertThrowsApi<ApiException.Transient> { api().clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { api().clips(null) }
     }
 
     @Test fun uploadTextBody() = runBlocking<Unit> {
@@ -275,8 +281,8 @@ class PrivatePasteApiTest {
 
     @Test fun pinnedListAsksForPinnedTrue() = runBlocking<Unit> {
         server.enqueue(json("""{"items":[],"nextCursor":null}"""))
-        api().clips(q = "x", cursor = null, limit = 50, pinned = true)
-        assertEquals("/api/clips?q=x&limit=50&pinned=true", take().path)
+        api().clips(cursor = null, limit = 50, pinned = true)
+        assertEquals("/api/clips?limit=50&pinned=true", take().path)
     }
 
     @Test fun deleteOther4xxStillThrows() = runBlocking<Unit> {
@@ -288,9 +294,147 @@ class PrivatePasteApiTest {
         server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(1, 2, 3))))
         assertArrayEquals(byteArrayOf(1, 2, 3), api().image("c1"))
         server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(9))))
-        assertArrayEquals(byteArrayOf(9), api().thumbnail("c1"))
+        assertArrayEquals(byteArrayOf(9), api().thumb("c1"))
+        server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(7, 7))))
+        assertArrayEquals(byteArrayOf(7, 7), api().blob("c1", 0))
         assertEquals("/api/clips/c1/image", take().path)
-        assertEquals("/api/clips/c1/thumbnail", take().path)
+        assertEquals("/api/clips/c1/thumb", take().path)
+        assertEquals("/api/clips/c1/blobs/0", take().path)
+    }
+
+    private val meta = ClipUploadMeta(
+        kind = "image", keyId = "0011223344556677", hash = "a".repeat(64), payload = "UEFZ", sizeBytes = 3,
+        copiedAt = Instant.parse("2026-10-28T10:00:00Z"), backfill = true,
+    )
+
+    @Test fun everyRequestSendsProtocolHeader() = runBlocking<Unit> {
+        server.enqueue(json("""{"deviceId":"d1","token":"t1"}"""))
+        server.enqueue(json("""{"protocol":2,"kinds":["text"],"limits":{"textKb":1,"imageMb":1}}"""))
+        server.enqueue(json("""{"name":"Ana","isOwner":true}"""))
+        server.enqueue(json(clipJson))
+        server.enqueue(MockResponse().setBody("x"))
+        val a = api()
+        a.login("Ana", "pw", "Pixel"); a.serverInfo(); a.me(); a.uploadClip(meta, null, emptyList()); a.blob("c1", 0)
+        repeat(5) { assertEquals("2", take().getHeader("X-PrivatePaste-Protocol")) }
+        // The WebSocket upgrade carries it too.
+        val ws = a.webSocket(object : WebSocketListener() {})
+        assertEquals("2", take().getHeader("X-PrivatePaste-Protocol"))
+        ws.cancel()
+    }
+
+    @Test fun unknownKindParsesAsUnknown() {
+        val clip = ProtocolJson.json.decodeFromString(ClipDto.serializer(), clipJson.replace("\"kind\":\"text\"", "\"kind\":\"rich\""))
+        assertEquals(ClipKind.UNKNOWN, clip.kind)
+    }
+
+    @Test fun uploadClipSendsMetaThumbAndBlobs() = runBlocking<Unit> {
+        server.enqueue(json(clipJson))
+        api().uploadClip(meta, byteArrayOf(1, 2), listOf(byteArrayOf(3), byteArrayOf(4)))
+        val req = take()
+        assertEquals("/api/clips", req.path)
+        assertEquals("POST", req.method)
+        assertTrue(req.getHeader("Content-Type")!!.startsWith("multipart/form-data"))
+        val body = req.body.readUtf8()
+        val metaJson = Regex("name=\"meta\"[^{]*(\\{[^\\r]*\\})").find(body)!!.groupValues[1]
+        val m = Json.parseToJsonElement(metaJson).jsonObject
+        assertEquals("image", m["kind"]!!.jsonPrimitive.content)
+        assertEquals("0011223344556677", m["keyId"]!!.jsonPrimitive.content)
+        assertEquals("UEFZ", m["payload"]!!.jsonPrimitive.content)
+        assertEquals("3", m["sizeBytes"]!!.jsonPrimitive.content)
+        assertEquals("2026-10-28T10:00:00Z", m["copiedAt"]!!.jsonPrimitive.content)
+        assertEquals("true", m["backfill"]!!.jsonPrimitive.content)
+        assertTrue(body.contains("name=\"thumb\""))
+        assertTrue(body.contains("name=\"blob0\""))
+        assertTrue(body.contains("name=\"blob1\""))
+        assertFalse(body.contains("name=\"blob2\""))
+    }
+
+    @Test fun uploadClipWithoutThumbHasNoThumbPart() = runBlocking<Unit> {
+        server.enqueue(json(clipJson))
+        api().uploadClip(meta.copy(kind = "text", copiedAt = null, backfill = false), null, emptyList())
+        val body = take().body.readUtf8()
+        assertFalse(body.contains("name=\"thumb\""))
+        assertFalse(body.contains("name=\"blob0\""))
+        assertFalse(body.contains("copiedAt"))
+    }
+
+    @Test fun `409ResetMapsToKeyResetException`() = runBlocking<Unit> {
+        server.enqueue(problem(409, null, "Encryption was reset"))
+        val e = assertThrowsApi<KeyResetException> { api().uploadClip(meta, null, emptyList()) }
+        assertEquals(409, e.status)
+    }
+
+    @Test fun other409StaysRejected() = runBlocking<Unit> {
+        server.enqueue(problem(409, "Set up encryption first.", "Conflict"))
+        val e = assertThrowsApi<ApiException.Rejected> { api().uploadClip(meta, null, emptyList()) }
+        assertFalse(e is KeyResetException)
+        assertEquals("Set up encryption first.", e.message)
+    }
+
+    @Test fun `426MapsToUpdateRequired`() = runBlocking<Unit> {
+        server.enqueue(problem(426, "Update PrivatePaste to keep syncing."))
+        val e = assertThrowsApi<UpdateRequiredException> { api().sync(0) }
+        assertEquals("Update PrivatePaste to keep syncing.", e.message)
+    }
+
+    @Test fun serverInfo404IsNull() = runBlocking<Unit> {
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertNull(api(token = null).serverInfo())
+        val req = take()
+        assertEquals("/api/server-info", req.path)
+        assertNull(req.getHeader("Authorization"))
+    }
+
+    @Test fun serverInfoParses() = runBlocking<Unit> {
+        server.enqueue(json("""{"protocol":2,"kinds":["text","link","image"],"limits":{"textKb":512,"imageMb":20}}"""))
+        val info = api().serverInfo()!!
+        assertEquals(2, info.protocol)
+        assertEquals(listOf("text", "link", "image"), info.kinds)
+        assertEquals(20, info.limits.imageMb)
+    }
+
+    @Test fun vaultCallsUseTheVaultRoutes() = runBlocking<Unit> {
+        val wire = """{"keyId":"k","kdf":{"alg":"argon2id","memoryKiB":65536,"iterations":3,"parallelism":1,"salt":"c2FsdA=="},"nonce":"bg==","wrappedKey":"d3I="}"""
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(json(wire))
+        server.enqueue(json(wire, 201))
+        server.enqueue(json(wire))
+        val a = api()
+        assertNull(a.vault())
+        val wrap = a.vault()!!
+        assertEquals(65536, wrap.kdf.memoryKiB)
+        a.putVault(wrap)
+        a.resetVault(wrap)
+        assertEquals("GET /api/vault", take().let { "${it.method} ${it.path}" })
+        take()
+        val put = take()
+        assertEquals("PUT /api/vault", "${put.method} ${put.path}")
+        assertEquals("d3I=", Json.parseToJsonElement(put.body.readUtf8()).jsonObject["wrappedKey"]!!.jsonPrimitive.content)
+        val reset = take()
+        assertEquals("POST /api/vault/reset", "${reset.method} ${reset.path}")
+    }
+
+    @Test fun handoverRoundTrip() = runBlocking<Unit> {
+        server.enqueue(json("""{"id":"00000000-0000-4000-8000-000000000001","expiresAt":"2026-10-28T10:10:00+00:00"}"""))
+        server.enqueue(json("""{"blob":"AQID"}"""))
+        server.enqueue(MockResponse().setResponseCode(404))
+        val a = api()
+        val created = a.createHandover(byteArrayOf(1, 2, 3))
+        assertEquals("00000000-0000-4000-8000-000000000001", created.id)
+        assertEquals(Instant.parse("2026-10-28T10:10:00Z"), created.expiresAt)
+        assertArrayEquals(byteArrayOf(1, 2, 3), a.takeHandover(created.id))
+        assertNull(a.takeHandover("gone"))
+        val post = take()
+        assertEquals("POST /api/vault/handovers", "${post.method} ${post.path}")
+        assertEquals("AQID", Json.parseToJsonElement(post.body.readUtf8()).jsonObject["blob"]!!.jsonPrimitive.content)
+        assertEquals("/api/vault/handovers/00000000-0000-4000-8000-000000000001", take().path)
+    }
+
+    @Test fun meParses() = runBlocking<Unit> {
+        server.enqueue(json("""{"name":"Ana","isOwner":true}"""))
+        val me = api().me()
+        assertEquals("Ana", me.name)
+        assertTrue(me.isOwner)
     }
 
     @Test fun webSocketSendsBearer() {
@@ -308,7 +452,7 @@ class PrivatePasteApiTest {
 
     @Test fun cancellingTheCoroutineCancelsTheCall() = runBlocking<Unit> {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
-        val job = launch(Dispatchers.IO) { api().clips(null, null) }
+        val job = launch(Dispatchers.IO) { api().clips(null) }
         take() // the request arrived; the server never answers
         job.cancel()
         withTimeout(5000) { canceled.await() }
@@ -332,7 +476,7 @@ class PrivatePasteApiTest {
     @Test fun callTimeoutFiresAsTransient() = runBlocking<Unit> {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         val a = api().also { it.requestTimeout = Duration.ofMillis(200) }
-        assertThrowsApi<ApiException.Transient> { a.clips(null, null) }
+        assertThrowsApi<ApiException.Transient> { a.clips(null) }
     }
 
     private suspend inline fun <reified T : ApiException> assertThrowsApi(block: () -> Unit): T {

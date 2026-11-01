@@ -1,7 +1,6 @@
 package xyz.ficdev.privatepaste.core.model
 
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -23,11 +22,25 @@ import kotlin.coroutines.cancellation.CancellationException
 
 // Wire models for the server API (README.md "API" section). JSON is camelCase and enums are lowercase.
 
-@Serializable
-enum class ClipKind {
-    @SerialName("text") TEXT,
-    @SerialName("link") LINK,
-    @SerialName("image") IMAGE,
+/** [UNKNOWN] is any kind this build does not know (a newer client's), so one odd clip never fails a whole sync page. */
+@Serializable(with = ClipKindSerializer::class)
+enum class ClipKind(val wire: String) {
+    TEXT("text"),
+    LINK("link"),
+    IMAGE("image"),
+    UNKNOWN("unknown"),
+}
+
+object ClipKindSerializer : KSerializer<ClipKind> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("xyz.ficdev.privatepaste.ClipKind", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): ClipKind {
+        val text = decoder.decodeString()
+        return ClipKind.entries.firstOrNull { it != ClipKind.UNKNOWN && it.wire == text } ?: ClipKind.UNKNOWN
+    }
+
+    override fun serialize(encoder: Encoder, value: ClipKind) = encoder.encodeString(value.wire)
 }
 
 @Serializable
@@ -54,6 +67,14 @@ data class ClipDto(
     @Serializable(InstantSerializer::class) val lastCopiedAt: Instant,
     /** ISO instant the clip was pinned, null (sent explicitly) or missing when it is not. Kept a string: it only orders and flags. */
     val pinnedAt: String? = null,
+    /** An image clip has a sealed thumbnail at `/thumb`. */
+    val hasThumb: Boolean = false,
+    /** Number of sealed blobs at `/blobs/{n}` (one for an image). */
+    val blobCount: Int = 0,
+    /** Sealed payload (base64) of an encrypted clip; null on a clip from before encryption. */
+    val payload: String? = null,
+    /** Id of the vault key that sealed [payload]; null on a clip from before encryption. */
+    val keyId: String? = null,
 )
 
 @Serializable
@@ -64,6 +85,57 @@ data class SyncPage(val clips: List<ClipDto>, val deletedIds: List<String>, val 
 
 @Serializable
 data class LoginResponse(val deviceId: String, val token: String)
+
+/** `GET /api/server-info`: what the server supports, readable before signing in. */
+@Serializable
+data class ServerLimits(val textKb: Int, val imageMb: Int)
+
+@Serializable
+data class ServerInfo(val protocol: Int, val kinds: List<String>, val limits: ServerLimits)
+
+// The passphrase-wrapped vault key as the server stores it (docs/api.md). Base64 here is standard, with padding.
+
+@Serializable
+data class VaultKdf(
+    val alg: String,
+    val memoryKiB: Int,
+    val iterations: Int,
+    val parallelism: Int,
+    val salt: String,
+)
+
+@Serializable
+data class VaultWrap(
+    val keyId: String,
+    val kdf: VaultKdf,
+    val nonce: String,
+    val wrappedKey: String,
+)
+
+@Serializable
+internal data class HandoverRequest(val blob: String)
+
+@Serializable
+data class HandoverBlob(val blob: String)
+
+@Serializable
+data class HandoverCreated(val id: String, @Serializable(InstantSerializer::class) val expiresAt: Instant)
+
+/** `GET /api/me`. */
+@Serializable
+data class Me(val name: String, val isOwner: Boolean)
+
+/** The `meta` part of `POST /api/clips`. [payload] is the sealed payload, base64. */
+@Serializable
+data class ClipUploadMeta(
+    val kind: String,
+    val keyId: String,
+    val hash: String,
+    val payload: String,
+    val sizeBytes: Long,
+    @Serializable(InstantSerializer::class) val copiedAt: Instant? = null,
+    val backfill: Boolean = false,
+)
 
 /** A message received on the `/ws` WebSocket. */
 sealed interface WsEvent {
