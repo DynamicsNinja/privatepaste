@@ -7,7 +7,7 @@ namespace PrivatePaste.Server.Storage;
 public sealed class SettingsRepository(PrivatePasteDb db)
 {
     private const string AutoDeleteDays = "auto_delete_days";
-    private const string HistoryClearedAt = "history_cleared_at";
+    internal const string HistoryClearedAt = "history_cleared_at";
     private const string LegacyWebSessions = "legacy_web_sessions";
 
     private static readonly int[] AllowedAutoDeleteDays = [7, 30, 90];

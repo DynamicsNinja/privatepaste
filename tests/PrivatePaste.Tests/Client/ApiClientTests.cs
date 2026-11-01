@@ -67,7 +67,6 @@ public class ApiClientTests
 
         var page = await api.ListPinnedAsync(null, null);
         Assert.Equal(["beta", "alpha"], page.Items.Select(c => c.Text));
-        Assert.Equal(["alpha"], (await api.ListPinnedAsync("alp", null)).Items.Select(c => c.Text));
         var first = await api.ListPinnedAsync(null, null, limit: 1);
         Assert.Equal(["beta"], first.Items.Select(c => c.Text));
         Assert.Equal(["alpha"], (await api.ListPinnedAsync(null, first.NextCursor, limit: 1)).Items.Select(c => c.Text));
@@ -251,7 +250,7 @@ public class ApiClientTests
     }
 
     [Fact]
-    public async Task Search_with_special_characters_finds_clip()
+    public async Task Query_with_special_characters_is_accepted_and_ignored()
     {
         using var server = new PrivatePasteFactory();
         var api = await LoggedInAsync(server);

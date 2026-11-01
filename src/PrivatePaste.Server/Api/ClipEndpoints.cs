@@ -88,13 +88,13 @@ public static class ClipEndpoints
             }
         });
 
-        group.MapGet("clips", async (ClipRepository repo, string? q, string? cursor, int? limit, bool? pinned) =>
+        group.MapGet("clips", async (ClipRepository repo, string? cursor, int? limit, bool? pinned) => // a q parameter is simply ignored: search is client-side now
         {
             try
             {
                 return Results.Ok(pinned == true
-                    ? await repo.ListPinnedAsync(q, cursor, limit ?? 50)
-                    : await repo.ListAsync(q, cursor, limit ?? 50));
+                    ? await repo.ListPinnedAsync(cursor, limit ?? 50)
+                    : await repo.ListAsync(cursor, limit ?? 50));
             }
             catch (ArgumentException)
             {

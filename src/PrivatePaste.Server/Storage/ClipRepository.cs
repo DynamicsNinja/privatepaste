@@ -8,7 +8,7 @@ namespace PrivatePaste.Server.Storage;
 
 public sealed record NewClip(ClipKind Kind, string? Text, string Hash, int? Width, int? Height, long SizeBytes,
     Guid? SourceDeviceId, string SourceDeviceName, string? SourceDevicePlatform, DateTimeOffset CopiedAt,
-    Guid? SourceUserId = null);
+    Guid? SourceUserId = null, string? Payload = null, string? KeyId = null, bool HasThumb = false, int BlobCount = 0);
 
 public sealed record UpsertResult(ClipDto Clip, bool Created);
 
@@ -18,7 +18,8 @@ public sealed class ClipRepository(PrivatePasteDb db)
         "c.id, c.seq, c.kind, c.text, c.hash, c.width, c.height, c.size_bytes, c.source_device_id, c.source_device_name, c.last_copied_at, " +
         "c.source_device_platform, c.pinned_at, " +
         // Names only mean something once there is more than one person to tell apart.
-        "CASE WHEN (SELECT count(*) FROM users WHERE removed_at IS NULL) > 1 THEN u.name END";
+        "CASE WHEN (SELECT count(*) FROM users WHERE removed_at IS NULL) > 1 THEN u.name END, " +
+        "c.payload, c.key_id, c.has_thumb, c.blob_count";
 
     private const string From = "clips c LEFT JOIN users u ON u.id = c.source_user_id";
 
@@ -48,13 +49,16 @@ public sealed class ClipRepository(PrivatePasteDb db)
                 await ExecAsync(conn, tx, """
                     INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes,
                                       source_device_id, source_device_name, source_device_platform, source_user_id,
-                                      created_at, last_copied_at)
-                    VALUES(@id, @seq, @kind, @text, @hash, @w, @h, @size, @dev, @devName, @devPlatform, @user, @at, @at)
+                                      created_at, last_copied_at, payload, key_id, has_thumb, blob_count)
+                    VALUES(@id, @seq, @kind, @text, @hash, @w, @h, @size, @dev, @devName, @devPlatform, @user, @at, @at,
+                           @payload, @keyId, @thumb, @blobs)
                     """,
                     ("@id", id.ToString()), ("@seq", seq), ("@kind", KindToDb(clip.Kind)), ("@text", clip.Text),
                     ("@hash", clip.Hash), ("@w", clip.Width), ("@h", clip.Height), ("@size", clip.SizeBytes),
                     ("@dev", clip.SourceDeviceId?.ToString()), ("@devName", clip.SourceDeviceName),
-                    ("@devPlatform", clip.SourceDevicePlatform), ("@user", clip.SourceUserId?.ToString()), ("@at", at));
+                    ("@devPlatform", clip.SourceDevicePlatform), ("@user", clip.SourceUserId?.ToString()), ("@at", at),
+                    ("@payload", clip.Payload), ("@keyId", clip.KeyId), ("@thumb", clip.HasThumb ? 1 : 0),
+                    ("@blobs", clip.BlobCount));
                 result = new UpsertResult(await GetCoreAsync(conn, tx, id) ?? throw new InvalidOperationException(), true);
             }
 
@@ -91,14 +95,14 @@ public sealed class ClipRepository(PrivatePasteDb db)
         return await GetCoreAsync(conn, null, id);
     }
 
-    public Task<ClipPage> ListAsync(string? query, string? cursor, int limit) =>
-        ListCoreAsync(query, cursor, limit, pinnedOnly: false);
+    public Task<ClipPage> ListAsync(string? cursor, int limit) =>
+        ListCoreAsync(cursor, limit, pinnedOnly: false);
 
     /// <summary>Pinned clips only, newest pinned first. Cursors and limits behave as in <see cref="ListAsync"/>.</summary>
-    public Task<ClipPage> ListPinnedAsync(string? query, string? cursor, int limit) =>
-        ListCoreAsync(query, cursor, limit, pinnedOnly: true);
+    public Task<ClipPage> ListPinnedAsync(string? cursor, int limit) =>
+        ListCoreAsync(cursor, limit, pinnedOnly: true);
 
-    private async Task<ClipPage> ListCoreAsync(string? query, string? cursor, int limit, bool pinnedOnly)
+    private async Task<ClipPage> ListCoreAsync(string? cursor, int limit, bool pinnedOnly)
     {
         // The two lists differ only in the column they sort and page by.
         var sortColumn = pinnedOnly ? "c.pinned_at" : "c.last_copied_at";
@@ -108,22 +112,6 @@ public sealed class ClipRepository(PrivatePasteDb db)
 
         var sql = new StringBuilder($"SELECT {Columns} FROM {From}");
         var where = new List<string>();
-
-        if (!string.IsNullOrEmpty(query))
-        {
-            if (query.EnumerateRunes().Count() >= 3)
-            {
-                sql.Append(" JOIN clips_fts ON clips_fts.rowid = c.rowid");
-                where.Add("clips_fts MATCH @q");
-                cmd.Parameters.AddWithValue("@q", "\"" + query.Replace("\"", "\"\"") + "\"");
-            }
-            else
-            {
-                where.Add("c.text LIKE '%' || @q || '%' ESCAPE '\\'");
-                cmd.Parameters.AddWithValue("@q",
-                    query.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_"));
-            }
-        }
 
         if (pinnedOnly)
             where.Add("c.pinned_at IS NOT NULL");
@@ -392,6 +380,10 @@ public sealed class ClipRepository(PrivatePasteDb db)
                 SourceDevicePlatform = r.IsDBNull(11) ? null : r.GetString(11),
                 PinnedAt = r.IsDBNull(12) ? null : Parse(r.GetString(12)),
                 SourceUserName = r.IsDBNull(13) ? null : r.GetString(13),
+                Payload = r.IsDBNull(14) ? null : r.GetString(14),
+                KeyId = r.IsDBNull(15) ? null : r.GetString(15),
+                HasThumb = r.GetInt32(16) != 0,
+                BlobCount = r.GetInt32(17),
             });
         }
 

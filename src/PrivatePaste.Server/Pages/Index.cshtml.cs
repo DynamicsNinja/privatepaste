@@ -14,6 +14,7 @@ public class IndexModel(ClipRepository clips, ClipService service, TimeProvider 
     public IReadOnlyList<ClipDto> Items { get; private set; } = [];
     public string? NextCursor { get; private set; }
 
+    // Accepted and ignored: search is client-side now.
     [BindProperty(SupportsGet = true)]
     public string? Q { get; set; }
 
@@ -30,10 +31,9 @@ public class IndexModel(ClipRepository clips, ClipService service, TimeProvider 
     {
         try
         {
-            var query = string.IsNullOrWhiteSpace(Q) ? null : Q.Trim();
             var page = PinnedTab
-                ? await clips.ListPinnedAsync(query, cursor, PageSize)
-                : await clips.ListAsync(query, cursor, PageSize);
+                ? await clips.ListPinnedAsync(cursor, PageSize)
+                : await clips.ListAsync(cursor, PageSize);
             Items = page.Items;
             NextCursor = page.NextCursor;
         }

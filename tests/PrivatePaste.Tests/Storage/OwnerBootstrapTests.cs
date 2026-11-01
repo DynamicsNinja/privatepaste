@@ -240,6 +240,7 @@ public class OwnerBootstrapTests
     public async Task Upgrade_FromOldSchema_AddsColumns_AndGivesRowsToOwner()
     {
         // A database as the previous release created it: no users table, no user columns.
+        // payload etc. are already there so this isn't taken for a pre-E2E database, whose rows the upgrade wipes.
         var dataDir = NewDataDir();
         const string token = "old-device-token";
         try
@@ -258,10 +259,12 @@ public class OwnerBootstrapTests
                     CREATE TABLE clips(id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, kind TEXT NOT NULL, text TEXT,
                       hash TEXT NOT NULL UNIQUE, width INTEGER, height INTEGER, size_bytes INTEGER NOT NULL,
                       source_device_id TEXT, source_device_name TEXT NOT NULL, created_at TEXT NOT NULL,
-                      last_copied_at TEXT NOT NULL, source_device_platform TEXT, pinned_at TEXT, unpinned_at TEXT);
+                      last_copied_at TEXT NOT NULL, source_device_platform TEXT, pinned_at TEXT, unpinned_at TEXT, payload TEXT, key_id TEXT, has_thumb INTEGER NOT NULL DEFAULT 0, blob_count INTEGER NOT NULL DEFAULT 0);
                     INSERT INTO devices VALUES('11111111-1111-1111-1111-111111111111', 'Old PC', 'windows', @hash, '2025-01-01T00:00:00.0000000Z', NULL, NULL);
-                    INSERT INTO clips VALUES('22222222-2222-2222-2222-222222222222', 1, 'text', 'old', 'h1', NULL, NULL, 3, '11111111-1111-1111-1111-111111111111', 'Old PC',
-                      '2025-01-01T00:00:00.0000000Z', '2025-01-01T00:00:00.0000000Z', 'windows', NULL, NULL);
+                    INSERT INTO clips(id, seq, kind, text, hash, size_bytes, source_device_id, source_device_name,
+                                      created_at, last_copied_at, source_device_platform)
+                      VALUES('22222222-2222-2222-2222-222222222222', 1, 'text', 'old', 'h1', 3, '11111111-1111-1111-1111-111111111111', 'Old PC',
+                      '2025-01-01T00:00:00.0000000Z', '2025-01-01T00:00:00.0000000Z', 'windows');
                     """;
                 cmd.Parameters.AddWithValue("@hash",
                     Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token))));

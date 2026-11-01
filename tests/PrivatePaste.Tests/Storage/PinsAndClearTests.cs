@@ -74,7 +74,7 @@ public sealed class PinsAndClearTests : IDisposable
     }
 
     [Fact]
-    public async Task ListPinned_is_newest_pinned_first_and_searchable()
+    public async Task ListPinned_is_newest_pinned_first()
     {
         var a = (await Upsert("alpha clip", T0)).Clip;
         var b = (await Upsert("bravo clip", T0.AddMinutes(1))).Clip;
@@ -84,19 +84,15 @@ public sealed class PinsAndClearTests : IDisposable
         await _repo.SetPinnedAsync(b.Id, true, T0.AddHours(1));
         await _repo.SetPinnedAsync(c.Id, true, T0.AddHours(2));
 
-        var all = await _repo.ListPinnedAsync(null, null, 50);
+        var all = await _repo.ListPinnedAsync(null, 50);
         Assert.Equal([a.Id, c.Id, b.Id], all.Items.Select(i => i.Id));
 
-        var page1 = await _repo.ListPinnedAsync(null, null, 2);
+        var page1 = await _repo.ListPinnedAsync(null, 2);
         Assert.Equal([a.Id, c.Id], page1.Items.Select(i => i.Id));
         Assert.NotNull(page1.NextCursor);
-        var page2 = await _repo.ListPinnedAsync(null, page1.NextCursor, 2);
+        var page2 = await _repo.ListPinnedAsync(page1.NextCursor, 2);
         Assert.Equal([b.Id], page2.Items.Select(i => i.Id));
         Assert.Null(page2.NextCursor);
-
-        var found = await _repo.ListPinnedAsync("bravo", null, 50);
-        Assert.Equal([b.Id], found.Items.Select(i => i.Id));
-        Assert.Empty((await _repo.ListPinnedAsync("delta", null, 50)).Items);
     }
 
     [Fact]
@@ -118,7 +114,7 @@ public sealed class PinsAndClearTests : IDisposable
         Assert.Equal(3, sync.Clips.Count);
         Assert.Equal(pinned.OrderBy(x => x), sync.Clips.Select(c => c.Id).OrderBy(x => x));
         Assert.Equal(997, sync.DeletedIds.Count);
-        Assert.Empty((await _repo.ListAsync("clip 500", null, 50)).Items); // gone from the FTS index too
+        Assert.Null(await _repo.GetAsync(ids[500]));
     }
 
     [Fact]
@@ -155,12 +151,15 @@ public sealed class PinsAndClearTests : IDisposable
                 old.Open();
                 using var cmd = old.CreateCommand();
                 // The clips table as the current schema creates it, minus the pin columns.
+                // payload etc. are already there so this isn't taken for a pre-E2E database, whose rows the upgrade wipes.
                 cmd.CommandText = """
                     CREATE TABLE clips(id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, kind TEXT NOT NULL, text TEXT,
                       hash TEXT NOT NULL UNIQUE, width INTEGER, height INTEGER, size_bytes INTEGER NOT NULL,
                       source_device_id TEXT, source_device_name TEXT NOT NULL, created_at TEXT NOT NULL,
-                      last_copied_at TEXT NOT NULL, source_device_platform TEXT);
-                    INSERT INTO clips VALUES('c1', 1, 'text', 'a', 'h1', NULL, NULL, 1, NULL, 'Web', 'x', 'x', 'web');
+                      last_copied_at TEXT NOT NULL, source_device_platform TEXT, payload TEXT, key_id TEXT, has_thumb INTEGER NOT NULL DEFAULT 0, blob_count INTEGER NOT NULL DEFAULT 0);
+                    INSERT INTO clips(id, seq, kind, text, hash, size_bytes, source_device_name, created_at, last_copied_at,
+                                      source_device_platform)
+                      VALUES('c1', 1, 'text', 'a', 'h1', 1, 'Web', 'x', 'x', 'web');
                     """;
                 cmd.ExecuteNonQuery();
             }

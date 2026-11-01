@@ -34,7 +34,7 @@ public sealed class ClipRepositoryTests : IDisposable
         Assert.Equal(a.Clip.Id, b.Clip.Id);
         Assert.True(b.Clip.Seq > a.Clip.Seq);
         Assert.Equal("Phone", b.Clip.SourceDeviceName);
-        Assert.Single((await _repo.ListAsync(null, null, 50)).Items);
+        Assert.Single((await _repo.ListAsync(null, 50)).Items);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class ClipRepositoryTests : IDisposable
         var a = await Upsert("a", at: T0);
         var b = await Upsert("b", at: T0.AddMinutes(2));
         var c = await Upsert("c", at: T0.AddMinutes(1));
-        var page = await _repo.ListAsync(null, null, 50);
+        var page = await _repo.ListAsync(null, 50);
         Assert.Equal([b.Clip.Id, c.Clip.Id, a.Clip.Id], page.Items.Select(i => i.Id));
     }
 
@@ -96,9 +96,9 @@ public sealed class ClipRepositoryTests : IDisposable
         for (var i = 0; i < 7; i++)
             await Upsert("clip" + i, at: T0.AddMinutes(i % 3)); // ties on time exercise the seq tiebreak
 
-        var p1 = await _repo.ListAsync(null, null, 3);
-        var p2 = await _repo.ListAsync(null, p1.NextCursor, 3);
-        var p3 = await _repo.ListAsync(null, p2.NextCursor, 3);
+        var p1 = await _repo.ListAsync(null, 3);
+        var p2 = await _repo.ListAsync(p1.NextCursor, 3);
+        var p3 = await _repo.ListAsync(p2.NextCursor, 3);
 
         Assert.Equal(3, p1.Items.Count);
         Assert.Equal(3, p2.Items.Count);
@@ -115,8 +115,8 @@ public sealed class ClipRepositoryTests : IDisposable
     {
         for (var i = 0; i < 4; i++)
             await Upsert("c" + i, at: T0.AddMinutes(i));
-        var p1 = await _repo.ListAsync(null, null, 2);
-        var p2 = await _repo.ListAsync(null, p1.NextCursor, 2);
+        var p1 = await _repo.ListAsync(null, 2);
+        var p2 = await _repo.ListAsync(p1.NextCursor, 2);
         Assert.Equal(2, p2.Items.Count);
         Assert.Null(p2.NextCursor);
     }
@@ -126,93 +126,14 @@ public sealed class ClipRepositoryTests : IDisposable
     {
         await Upsert("a");
         await Upsert("b");
-        Assert.Single((await _repo.ListAsync(null, null, 0)).Items);
-        Assert.Single((await _repo.ListAsync(null, null, -5)).Items);
+        Assert.Single((await _repo.ListAsync(null, 0)).Items);
+        Assert.Single((await _repo.ListAsync(null, -5)).Items);
     }
 
     [Fact]
     public async Task Invalid_cursor_is_rejected()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => _repo.ListAsync(null, "!!notacursor!!", 10));
-    }
-
-    [Fact]
-    public async Task Search_trigram_substring()
-    {
-        var hit = await Upsert("docker compose up -d");
-        await Upsert("something else entirely");
-        var page = await _repo.ListAsync("compose", null, 50);
-        Assert.Equal(hit.Clip.Id, Assert.Single(page.Items).Id);
-    }
-
-    [Fact]
-    public async Task Search_non_ascii()
-    {
-        var a = await Upsert("kupiti šećer i mlijeko");
-        var b = await Upsert("deploy 🚀 done");
-        await Upsert("unrelated");
-        Assert.Equal(a.Clip.Id, Assert.Single((await _repo.ListAsync("šećer", null, 50)).Items).Id);
-        Assert.Equal(b.Clip.Id, Assert.Single((await _repo.ListAsync("🚀", null, 50)).Items).Id);
-    }
-
-    [Fact]
-    public async Task Search_short_query_uses_like()
-    {
-        var hit = await Upsert("xaby");
-        await Upsert("nothing");
-        var pct = await Upsert("100% sure");
-        Assert.Equal(hit.Clip.Id, Assert.Single((await _repo.ListAsync("ab", null, 50)).Items).Id);
-        Assert.Equal(pct.Clip.Id, Assert.Single((await _repo.ListAsync("%", null, 50)).Items).Id);
-    }
-
-    [Fact]
-    public async Task Search_short_query_underscore_is_literal()
-    {
-        var hit = await Upsert("snake_case");
-        await Upsert("snakeXcase");
-        Assert.Equal(hit.Clip.Id, Assert.Single((await _repo.ListAsync("_", null, 50)).Items).Id);
-    }
-
-    [Theory]
-    [InlineData("\"unclosed")]
-    [InlineData("a OR b")]
-    [InlineData("-x*")]
-    [InlineData("(foo")]
-    public async Task Search_with_fts_syntax_is_literal(string q)
-    {
-        var hit = await Upsert("prefix " + q + " suffix");
-        await Upsert("a b x foo unclosed");
-        var page = await _repo.ListAsync(q, null, 50);
-        Assert.Equal(hit.Clip.Id, Assert.Single(page.Items).Id);
-    }
-
-    [Fact]
-    public async Task Search_case_insensitive_ascii()
-    {
-        var hit = await Upsert("docker");
-        Assert.Equal(hit.Clip.Id, Assert.Single((await _repo.ListAsync("Docker", null, 50)).Items).Id);
-        Assert.Equal(hit.Clip.Id, Assert.Single((await _repo.ListAsync("DO", null, 50)).Items).Id);
-    }
-
-    [Fact]
-    public async Task Image_clips_never_match_search()
-    {
-        await Upsert("img-bytes", kind: ClipKind.Image, hash: "imghash");
-        Assert.Empty((await _repo.ListAsync("img", null, 50)).Items);
-        Assert.Empty((await _repo.ListAsync("im", null, 50)).Items);
-        Assert.Single((await _repo.ListAsync(null, null, 50)).Items);
-    }
-
-    [Fact]
-    public async Task Search_pages_with_cursor()
-    {
-        for (var i = 0; i < 5; i++)
-            await Upsert("needle " + i, at: T0.AddMinutes(i));
-        var p1 = await _repo.ListAsync("needle", null, 3);
-        var p2 = await _repo.ListAsync("needle", p1.NextCursor, 3);
-        Assert.Equal(3, p1.Items.Count);
-        Assert.Equal(2, p2.Items.Count);
-        Assert.Null(p2.NextCursor);
+        await Assert.ThrowsAsync<ArgumentException>(() => _repo.ListAsync("!!notacursor!!", 10));
     }
 
     [Fact]
@@ -231,7 +152,7 @@ public sealed class ClipRepositoryTests : IDisposable
         Assert.Equal([a.Clip.Id], sync.DeletedIds);
         Assert.Empty(sync.Clips);
         Assert.Equal(seq, sync.LatestSeq);
-        Assert.DoesNotContain(a.Clip.Id, (await _repo.ListAsync("a", null, 50)).Items.Select(i => i.Id));
+        Assert.DoesNotContain(a.Clip.Id, (await _repo.ListAsync(null, 50)).Items.Select(i => i.Id));
     }
 
     [Fact]

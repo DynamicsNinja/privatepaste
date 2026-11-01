@@ -124,7 +124,7 @@ public class WebUiTests
     }
 
     [Fact]
-    public async Task Index_search_filters()
+    public async Task Index_ignores_the_search_query()
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
@@ -132,7 +132,7 @@ public class WebUiTests
         await UploadTextAsync(api, "grocery list");
         var body = await (await (await WebLoginAsync(factory)).GetAsync("/?q=compose")).Content.ReadAsStringAsync();
         Assert.Contains("docker compose up", body);
-        Assert.DoesNotContain("grocery list", body);
+        Assert.Contains("grocery list", body);
     }
 
     [Fact]
