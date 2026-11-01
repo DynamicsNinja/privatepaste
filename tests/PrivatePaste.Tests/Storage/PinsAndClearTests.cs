@@ -74,7 +74,7 @@ public sealed class PinsAndClearTests : IDisposable
     }
 
     [Fact]
-    public async Task ListPinned_is_newest_pinned_first_and_searchable()
+    public async Task ListPinned_is_newest_pinned_first()
     {
         var a = (await Upsert("alpha clip", T0)).Clip;
         var b = (await Upsert("bravo clip", T0.AddMinutes(1))).Clip;

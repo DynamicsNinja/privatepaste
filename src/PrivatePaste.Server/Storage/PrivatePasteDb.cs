@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using PrivatePaste.Server.Config;
 
 namespace PrivatePaste.Server.Storage;
@@ -7,13 +8,19 @@ namespace PrivatePaste.Server.Storage;
 public sealed class DatabaseKeyMismatchException(string message, Exception? inner = null)
     : Exception(message, inner);
 
-public sealed class PrivatePasteDb(ServerOptions options)
+public sealed class PrivatePasteDb(ServerOptions options, ILogger<PrivatePasteDb>? logger = null)
 {
     static PrivatePasteDb() => SQLitePCL.Batteries_V2.Init();
+
+    // Set by MigrateToE2e in its transaction and removed once the pre-E2E blob files are gone.
+    private const string BlobWipePending = "e2e_blob_wipe_pending";
 
     private const int SqliteNotADb = 26; // what a wrong key looks like: the file doesn't decrypt to a database
 
     public string DbPath { get; } = Path.Combine(options.DataDir, "privatepaste.db");
+
+    /// <summary>How blob files are removed; the tests swap it to fail on any platform.</summary>
+    public Action<string> DeleteBlobFile { get; init; } = File.Delete;
 
     public string BlobDir { get; } = Path.Combine(options.DataDir, "blobs");
 
@@ -72,6 +79,7 @@ public sealed class PrivatePasteDb(ServerOptions options)
 
         Migrate(conn);
         MigrateToE2e(conn);
+        WipePendingBlobs(conn);
     }
 
     /// <summary>
@@ -129,38 +137,70 @@ public sealed class PrivatePasteDb(ServerOptions options)
     /// without a key, so it is wiped: clips, tombstones, the search index and the blob files, plus the clear marker
     /// that only meant something for that history. Users, devices and other settings stay, and so does the seq
     /// counter, so a client that remembers an older seq never sees one reused. Runs only while <c>clips</c> has no
-    /// <c>payload</c> column, which the same transaction adds, so it happens once.
+    /// <c>payload</c> column, which the same transaction adds, so it happens once. The blob files are deleted by
+    /// <see cref="WipePendingBlobs"/>, driven by a marker this transaction sets, so a crash can't strand them.
     /// </summary>
-    private void MigrateToE2e(SqliteConnection conn)
+    private static void MigrateToE2e(SqliteConnection conn)
     {
         if (HasColumn(conn, "clips", "payload"))
             return;
 
-        using (var tx = conn.BeginTransaction())
+        using var tx = conn.BeginTransaction();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        // The search index goes first, so deleting the rows doesn't touch it (a damaged index can't block startup).
+        cmd.CommandText = $"""
+            DROP TRIGGER IF EXISTS clips_ai;
+            DROP TRIGGER IF EXISTS clips_ad;
+            DROP TRIGGER IF EXISTS clips_au;
+            DROP TABLE IF EXISTS clips_fts;
+            DELETE FROM clips;
+            DELETE FROM tombstones;
+            ALTER TABLE clips ADD COLUMN payload TEXT;
+            ALTER TABLE clips ADD COLUMN key_id TEXT;
+            ALTER TABLE clips ADD COLUMN has_thumb INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE clips ADD COLUMN blob_count INTEGER NOT NULL DEFAULT 0;
+            DELETE FROM settings WHERE name = '{SettingsRepository.HistoryClearedAt}';
+            INSERT OR REPLACE INTO settings(name, value) VALUES('{BlobWipePending}', '1');
+            """;
+        cmd.ExecuteNonQuery();
+        tx.Commit();
+    }
+
+    /// <summary>
+    /// Deletes the blob files while the marker from <see cref="MigrateToE2e"/> is set, on every start, and clears the
+    /// marker only when every file is gone. A file that can't be deleted (locked on Windows) is logged by name and
+    /// retried at the next start; it never stops the server from starting.
+    /// </summary>
+    private void WipePendingBlobs(SqliteConnection conn)
+    {
+        using var check = conn.CreateCommand();
+        check.CommandText = "SELECT count(*) FROM settings WHERE name = @name";
+        check.Parameters.AddWithValue("@name", BlobWipePending);
+        if ((long)check.ExecuteScalar()! == 0)
+            return;
+
+        var failed = 0;
+        foreach (var file in Directory.GetFiles(BlobDir, "*", SearchOption.AllDirectories))
         {
-            using var cmd = conn.CreateCommand();
-            cmd.Transaction = tx;
-            cmd.CommandText = """
-                DELETE FROM clips;
-                DELETE FROM tombstones;
-                DROP TRIGGER IF EXISTS clips_ai;
-                DROP TRIGGER IF EXISTS clips_ad;
-                DROP TRIGGER IF EXISTS clips_au;
-                DROP TABLE IF EXISTS clips_fts;
-                ALTER TABLE clips ADD COLUMN payload TEXT;
-                ALTER TABLE clips ADD COLUMN key_id TEXT;
-                ALTER TABLE clips ADD COLUMN has_thumb INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE clips ADD COLUMN blob_count INTEGER NOT NULL DEFAULT 0;
-                DELETE FROM settings WHERE name = 'history_cleared_at';
-                """;
-            cmd.ExecuteNonQuery();
-            tx.Commit();
+            try
+            {
+                DeleteBlobFile(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failed++;
+                logger?.LogWarning(ex, "Could not delete pre-encryption blob {File}; will retry at the next start",
+                    Path.GetFileName(file));
+            }
         }
 
-        // After the commit: a crash before it leaves the old rows and files together; a crash after it leaves
-        // orphan files, which are unreachable and harmless.
-        foreach (var file in Directory.EnumerateFiles(BlobDir, "*", SearchOption.AllDirectories))
-            File.Delete(file);
+        if (failed > 0)
+            return;
+        using var clear = conn.CreateCommand();
+        clear.CommandText = "DELETE FROM settings WHERE name = @name";
+        clear.Parameters.AddWithValue("@name", BlobWipePending);
+        clear.ExecuteNonQuery();
     }
 
     // For a nullable TEXT column with no backfill; table and column are constants, never input.

@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
         Assert.Equal(0, Count(conn, "SELECT count(*) FROM sqlite_master WHERE name LIKE 'clips_fts%'"));
         Assert.Equal(0, Count(conn, "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('clips_ai', 'clips_ad', 'clips_au')"));
         Assert.Empty(Directory.GetFiles(BlobDir));
+        Assert.Equal(0, Count(conn, "SELECT count(*) FROM settings WHERE name = 'e2e_blob_wipe_pending'"));
 
         Assert.Equal(1, Count(conn, "SELECT count(*) FROM users"));
         Assert.Equal(1, Count(conn, "SELECT count(*) FROM devices"));
@@ -181,6 +182,101 @@ CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
         Assert.Equal(1, Count(after, "SELECT count(*) FROM clips"));
         Assert.Equal(1, Count(after, "SELECT count(*) FROM settings WHERE name = 'history_cleared_at'"));
         Assert.Single(Directory.GetFiles(BlobDir));
+    }
+
+    [Fact]
+    public void FirstReleaseDatabase_GoesThroughTheWholeMigrationChain()
+    {
+        Directory.CreateDirectory(BlobDir);
+        using (var conn = OpenRaw())
+        {
+            // The first release: no platform, pin or user columns, no users table, with the search index.
+            Exec(conn, """
+                CREATE TABLE devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL,
+                  token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT, revoked_at TEXT);
+                CREATE TABLE clips(id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, kind TEXT NOT NULL, text TEXT,
+                  hash TEXT NOT NULL UNIQUE, width INTEGER, height INTEGER, size_bytes INTEGER NOT NULL,
+                  source_device_id TEXT, source_device_name TEXT NOT NULL, created_at TEXT NOT NULL,
+                  last_copied_at TEXT NOT NULL);
+                CREATE VIRTUAL TABLE clips_fts USING fts5(text, content='clips', content_rowid='rowid', tokenize='trigram');
+                CREATE TRIGGER clips_ai AFTER INSERT ON clips BEGIN
+                  INSERT INTO clips_fts(rowid, text) VALUES (new.rowid, new.text);
+                END;
+                CREATE TRIGGER clips_ad AFTER DELETE ON clips BEGIN
+                  INSERT INTO clips_fts(clips_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+                END;
+                CREATE TRIGGER clips_au AFTER UPDATE OF text ON clips BEGIN
+                  INSERT INTO clips_fts(clips_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+                  INSERT INTO clips_fts(rowid, text) VALUES (new.rowid, new.text);
+                END;
+                CREATE TABLE tombstones(clip_id TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+                CREATE TABLE counters(name TEXT PRIMARY KEY, value INTEGER NOT NULL);
+                INSERT INTO devices VALUES('d1', 'PC', 'windows', 't1', '2026-01-01T00:00:00Z', NULL, NULL);
+                INSERT INTO clips VALUES('c1', 1, 'text', 'first release text', 'h1', NULL, NULL, 18, 'd1', 'PC', 'x', 'x');
+                INSERT INTO tombstones VALUES('gone', 2);
+                INSERT INTO counters VALUES('seq', 2);
+                """);
+        }
+
+        File.WriteAllBytes(Path.Combine(BlobDir, "c1.enc"), [1]);
+        SqliteConnection.ClearAllPools();
+
+        NewDb().Initialize();
+
+        using var after = OpenRaw();
+        Assert.Equal(0, Count(after, "SELECT count(*) FROM clips"));
+        Assert.Equal(0, Count(after, "SELECT count(*) FROM tombstones"));
+        Assert.Equal(0, Count(after, "SELECT count(*) FROM sqlite_master WHERE name LIKE 'clips_fts%'"));
+        Assert.Equal(1, Count(after, "SELECT count(*) FROM devices"));
+        Assert.Equal(2, Count(after, "SELECT value FROM counters WHERE name = 'seq'"));
+        Assert.Equal(4, Count(after, "SELECT count(*) FROM pragma_table_info('clips') WHERE name IN ('payload', 'pinned_at', 'source_user_id', 'source_device_platform')"));
+        Assert.Empty(Directory.GetFiles(BlobDir));
+        Assert.Equal(0, Count(after, "SELECT count(*) FROM settings WHERE name = 'e2e_blob_wipe_pending'"));
+    }
+
+    [Fact]
+    public void PendingBlobWipe_RunsOnEveryStartAndClearsItsMarker()
+    {
+        NewDb().Initialize();
+        using (var conn = OpenRaw())
+            Exec(conn, "INSERT INTO settings VALUES('e2e_blob_wipe_pending', '1')");
+        SqliteConnection.ClearAllPools();
+        File.WriteAllBytes(Path.Combine(BlobDir, "left-behind.enc"), [1]);
+
+        NewDb().Initialize();
+
+        Assert.Empty(Directory.GetFiles(BlobDir));
+        using var after = OpenRaw();
+        Assert.Equal(0, Count(after, "SELECT count(*) FROM settings WHERE name = 'e2e_blob_wipe_pending'"));
+    }
+
+    [Fact]
+    public void PendingBlobWipe_KeepsItsMarkerWhenADeleteFailsAndRetriesNextStart()
+    {
+        NewDb().Initialize();
+        using (var conn = OpenRaw())
+            Exec(conn, "INSERT INTO settings VALUES('e2e_blob_wipe_pending', '1')");
+        SqliteConnection.ClearAllPools();
+        var stuck = Path.Combine(BlobDir, "stuck.enc");
+        File.WriteAllBytes(stuck, [1]);
+        File.WriteAllBytes(Path.Combine(BlobDir, "free.enc"), [2]);
+
+        var failing = new PrivatePasteDb(new ServerOptions(Key, "pw", _dir, 1024, 1024))
+        {
+            DeleteBlobFile = f => { if (Path.GetFileName(f) == "stuck.enc") throw new IOException("locked"); File.Delete(f); },
+        };
+        failing.Initialize(); // does not throw: a stuck file never blocks startup
+
+        Assert.Equal(["stuck.enc"], Directory.GetFiles(BlobDir).Select(Path.GetFileName));
+        using (var mid = OpenRaw())
+            Assert.Equal(1, Count(mid, "SELECT count(*) FROM settings WHERE name = 'e2e_blob_wipe_pending'"));
+        SqliteConnection.ClearAllPools();
+
+        NewDb().Initialize();
+
+        Assert.Empty(Directory.GetFiles(BlobDir));
+        using var after = OpenRaw();
+        Assert.Equal(0, Count(after, "SELECT count(*) FROM settings WHERE name = 'e2e_blob_wipe_pending'"));
     }
 
     [Fact]
