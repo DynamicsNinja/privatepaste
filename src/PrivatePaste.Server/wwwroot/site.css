@@ -187,6 +187,7 @@ button.pin-toggle .pin-icon { width: 18px; height: 18px; vertical-align: baselin
 button.pin-toggle[aria-pressed="true"] { color: var(--accent); }
 button.pin-toggle:hover, button.pin-toggle:focus-visible { color: var(--accent); background: var(--accent-soft); }
 button.pin-toggle[aria-pressed="true"] .pin-icon { fill: currentColor; }
+button.pin-toggle.failed, button.pin-toggle.failed:hover { color: var(--danger); background: var(--danger-soft); }
 
 /* Unlock and first setup: one centered column, like Sign in. */
 .vault-panel { max-width: 24rem; margin: 8vh auto 0; }

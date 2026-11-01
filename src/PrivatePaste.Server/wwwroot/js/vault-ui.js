@@ -8,6 +8,7 @@ const WRONG_PASSPHRASE = "That passphrase doesn't unlock this server's history."
 const UNSUPPORTED = "This server's encryption settings aren't supported. Update PrivatePaste.";
 const RESET = 'Encryption was reset. Enter the new passphrase.';
 const MISMATCH = "The passphrases don't match.";
+const SET_UP_ELSEWHERE = 'Encryption was already set up on another device. Enter its passphrase.';
 const FAILED = 'Something went wrong. Try again.';
 
 const $ = id => document.getElementById(id);
@@ -65,9 +66,16 @@ export async function startVault(e2e, api, { onUnlocked, onLocked }) {
     onUnlocked(vault);
   }
 
+  // Every outcome but unlocked() leaves the tab without a usable key, so the key and Lock go.
+  function locked() {
+    forgetKey();
+    $('lock').hidden = true;
+  }
+
   async function resolve(notice) {
     const wrap = await fetchWrap();
     if (!wrap) {
+      locked();
       show(isOwner ? $('setup') : $('no-vault'));
       if (isOwner) $('setup-passphrase').focus();
       return;
@@ -77,10 +85,10 @@ export async function startVault(e2e, api, { onUnlocked, onLocked }) {
       let vault = null;
       try { vault = await e2e.importVaultKey(raw); } catch { /* not a key: unlock again */ } finally { raw.fill(0); }
       if (vault?.keyId === wrap.keyId) return unlocked(vault);
-      forgetKey();
       // The server's vault has another key now: the owner reset encryption since this tab unlocked.
       if (vault) notice = RESET;
     }
+    locked();
     setError($('unlock-error'), notice);
     show($('unlock'));
     $('unlock-passphrase').focus();
@@ -144,7 +152,7 @@ export async function startVault(e2e, api, { onUnlocked, onLocked }) {
       first.value = repeat.value = '';
       // Set up from another device in the meantime: unlock with that passphrase instead.
       if (response.status === 409) {
-        await resolve();
+        await resolve(SET_UP_ELSEWHERE);
         return;
       }
       if (!response.ok) throw new Error(`Setup failed (${response.status})`);
@@ -168,6 +176,7 @@ export async function startVault(e2e, api, { onUnlocked, onLocked }) {
   });
 
   const me = await api('/api/me');
-  isOwner = me.ok && (await me.json()).isOwner === true;
+  if (!me.ok) throw new Error(`Who-am-I failed (${me.status})`);
+  isOwner = (await me.json()).isOwner === true;
   await resolve();
 }

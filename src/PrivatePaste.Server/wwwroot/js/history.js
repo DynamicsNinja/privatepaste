@@ -17,7 +17,7 @@ const EMPTY_PINNED = 'No pinned clips. Pin a clip to keep it through Clear histo
 const NO_MATCH = 'No clips match that search.';
 const UNKNOWN_KIND = 'Update PrivatePaste to see this clip';
 const UNREADABLE = "This clip can't be decrypted.";
-const LOAD_FAILED = 'Could not load your history.';
+const LOAD_FAILED = "Couldn't load your history.";
 
 const $ = id => document.getElementById(id);
 const pinnedTab = shell.dataset.tab === 'pinned';
@@ -31,6 +31,7 @@ const searchInput = $('search-input');
 
 let vault = null;
 let entries = []; // { clip, content, row, thumbUrl }, in list order
+const loadedIds = new Set();
 let cursor = null;
 let exhausted = false;
 // Bumped on Lock, so a page or thumbnail still in flight is dropped instead of drawn into the locked page.
@@ -123,7 +124,8 @@ function body(entry) {
       if (!clip.hasThumb) return element('p', 'text muted', label);
       const img = element('img', 'thumb');
       img.alt = label;
-      loadThumb(entry, img);
+      thumbOf.set(img, entry);
+      thumbObserver.observe(img);
       return img;
     }
     case 'link': {
@@ -143,6 +145,17 @@ function body(entry) {
       return element('p', 'text muted', UNREADABLE);
   }
 }
+
+// Thumbnails are fetched and decrypted only once their row comes near the screen (hidden rows never do), so paging
+// through the history for a search doesn't download every thumbnail.
+const thumbOf = new WeakMap();
+const thumbObserver = new IntersectionObserver(seen => {
+  for (const { isIntersecting, target } of seen) {
+    if (!isIntersecting) continue;
+    thumbObserver.unobserve(target);
+    loadThumb(thumbOf.get(target), target);
+  }
+}, { rootMargin: '400px 0px' });
 
 async function loadThumb(entry, img) {
   const at = generation;
@@ -221,7 +234,8 @@ async function loadPage() {
   exhausted = !cursor;
   page.items.forEach((clip, i) => {
     // A clip copied again while paging moves up and can come back on a later page.
-    if (entries.some(e => e.clip.id === clip.id)) return;
+    if (loadedIds.has(clip.id)) return;
+    loadedIds.add(clip.id);
     const entry = { clip, content: contents[i] };
     entry.row = buildRow(entry);
     entries.push(entry);
@@ -264,6 +278,9 @@ export function clipRemoved(id) {
   const index = entries.findIndex(e => e.clip.id === id);
   if (index < 0) return;
   const [entry] = entries.splice(index, 1);
+  loadedIds.delete(id);
+  const img = entry.row.querySelector('img.thumb');
+  if (img) thumbObserver.unobserve(img);
   entry.row.remove();
   if (entry.thumbUrl) URL.revokeObjectURL(entry.thumbUrl);
   refresh();
@@ -271,6 +288,8 @@ export function clipRemoved(id) {
 
 function clear() {
   generation++;
+  thumbObserver.disconnect();
+  loadedIds.clear();
   for (const entry of entries) if (entry.thumbUrl) URL.revokeObjectURL(entry.thumbUrl);
   entries = [];
   list.replaceChildren();

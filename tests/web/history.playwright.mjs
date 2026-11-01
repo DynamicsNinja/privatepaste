@@ -37,6 +37,8 @@ await context.addInitScript(() => {
   document.addEventListener('securitypolicyviolation', e => window.__reportCsp(`${e.violatedDirective} ${e.blockedURI}`));
 });
 const page = await context.newPage();
+const thumbRequests = [];
+page.on('request', r => { if (/\/thumb$/.test(new URL(r.url()).pathname)) thumbRequests.push(r.url()); });
 page.on('console', m => { if (/Content.Security.Policy/i.test(m.text())) cspViolations.push(m.text()); });
 page.on('pageerror', e => pageErrors.push(e.message));
 
@@ -153,7 +155,10 @@ try {
 
   step('upload clips through the API');
   // Oldest first: one match only an older page holds, a page of filler, then the clips to look at.
-  const [needleId] = await upload([{ kind: 'text', text: 'needle in an older page' }]);
+  const [oldImageId, needleId] = await upload([
+    { kind: 'image', width: 64, height: 48 },
+    { kind: 'text', text: 'needle in an older page' },
+  ]);
   await upload(Array.from({ length: 50 }, (_, i) => ({ kind: 'text', text: `filler clip ${i}` })));
   const [jsLinkId, imageId, linkId, xssId] = await upload([
     { kind: 'link', text: 'javascript:window.__y=1' },
@@ -226,6 +231,15 @@ try {
   const types = await page.evaluate(async () => (await navigator.clipboard.read()).flatMap(item => item.types));
   assert.ok(types.includes('image/png'), `clipboard holds ${types}`);
 
+  step('a failed Pin shows on the button');
+  await page.route('**/pin', route => route.fulfill({ status: 500, json: {} }));
+  await row(linkId).locator('button.pin-toggle').click();
+  await row(linkId).locator('button.pin-toggle.failed').waitFor();
+  assert.equal(await row(linkId).locator('.pin-toggle .sr-only').innerText(), 'Pin failed');
+  await page.unrouteAll();
+  await row(linkId).locator('button.pin-toggle:not(.failed):not([disabled])').waitFor();
+  assert.equal(await row(linkId).locator('.pin-toggle .sr-only').innerText(), 'Pin');
+
   step('Pin shows the marker; the Pinned tab lists it; Unpin there drops it');
   await row(linkId).locator('button.pin-toggle').click();
   await row(linkId).locator('button.pin-toggle[aria-pressed="true"]').waitFor();
@@ -261,8 +275,14 @@ try {
   assert.equal(await page.locator('.clip:visible').count(), 1);
   assert.equal(await visible('#search-older'), false);
   assert.equal(await row(needleId).evaluate(el => el.classList.contains('newest')), false);
+  // The older image's row was loaded but never shown, so its thumbnail wasn't fetched.
+  assert.ok(!thumbRequests.some(u => u.includes(oldImageId)), 'a hidden row fetched its thumbnail');
   await page.fill('#search-input', '');
   assert.ok(await page.locator('.clip:visible').count() > 50);
+  assert.ok(!thumbRequests.some(u => u.includes(oldImageId)), 'an off-screen row fetched its thumbnail');
+  await row(oldImageId).scrollIntoViewIfNeeded();
+  await until(id => document.querySelector(`.clip[data-id="${id}"] img.thumb`)?.naturalWidth > 0, oldImageId);
+  await page.evaluate(() => window.scrollTo(0, 0));
 
   step('a clip of a kind this page does not know');
   await page.route('**/api/clips?*', async route => {
@@ -285,6 +305,7 @@ try {
   await page.waitForSelector('#unlock:not([hidden])');
   assert.equal(await text('#unlock-error'), 'Encryption was reset. Enter the new passphrase.');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('pp.vault')), null);
+  assert.equal(await visible('#lock'), false);
 
   step('a wrap with settings outside the bounds is refused as unsupported');
   await page.route('**/api/vault', async route => {
@@ -298,14 +319,41 @@ try {
   assert.equal(await text('#unlock-error'), "This server's encryption settings aren't supported. Update PrivatePaste.");
   await page.unroute('**/api/vault');
 
-  step('a person who is not the owner is told to ask the owner');
+  step('a person who is not the owner is told to ask the owner, and a key without a vault is forgotten');
   await page.route('**/api/me', route => route.fulfill({ json: { name: 'ana', isOwner: false } }));
   await page.route('**/api/vault', route => route.fulfill({ status: 404, json: {} }));
+  await page.evaluate(() => sessionStorage.setItem('pp.vault', btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))));
   await page.reload();
   await page.waitForSelector('#no-vault:not([hidden])');
   assert.equal(await text('#no-vault'), 'Ask the owner to set up encryption.');
   assert.equal(await page.locator('#setup').isHidden(), true);
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('pp.vault')), null);
+  assert.equal(await visible('#lock'), false);
   await page.unrouteAll();
+
+  step('a failed who-am-I is a load error, not the non-owner panel');
+  await page.route('**/api/me', route => route.fulfill({ status: 500, json: {} }));
+  await page.reload();
+  await page.waitForSelector('#history-error:not([hidden])');
+  assert.equal(await text('#history-error'), "Couldn't load your history.");
+  assert.equal(await page.locator('#no-vault').isHidden(), true);
+  assert.equal(await page.locator('#setup').isHidden(), true);
+  await page.unrouteAll();
+
+  step('setup answered 409 (set up on another device meanwhile) asks for that passphrase');
+  // The page sees no vault, so it offers setup; by the time it submits, the server has one (the real one).
+  await page.route('**/api/vault', route => (route.request().method() === 'GET'
+    ? route.fulfill({ status: 404, json: {} })
+    : route.continue()));
+  await page.reload();
+  await page.waitForSelector('#setup:not([hidden])');
+  await page.unrouteAll();
+  await page.fill('#setup-passphrase', 'another long passphrase here');
+  await page.fill('#setup-repeat', 'another long passphrase here');
+  await page.click('#setup-form button');
+  await page.waitForSelector('#unlock:not([hidden])', { timeout: 30000 });
+  assert.equal(await text('#unlock-error'), 'Encryption was already set up on another device. Enter its passphrase.');
+  assert.equal(await visible('#lock'), false);
 
   step('nothing broke the Content-Security-Policy');
   await page.reload();

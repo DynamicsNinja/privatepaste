@@ -76,9 +76,24 @@ document.addEventListener("click", (event) => {
             if (!response.ok) throw new Error(`Pin failed (${response.status})`);
             return Promise.all([historyModule(), response.json()]);
         })
-        .then(([history, clip]) => history.clipChanged(clip))
-        .catch((error) => console.error(error))
-        .finally(() => { button.disabled = false; });
+        .then(([history, clip]) => {
+            history.clipChanged(clip);
+            button.disabled = false;
+        })
+        .catch((error) => {
+            // Shown like a failed Copy: the button turns red for a moment and says so to screen readers and on hover.
+            console.error(error);
+            const name = button.querySelector(".sr-only");
+            const label = name.textContent;
+            name.textContent = button.title = `${label} failed`;
+            button.classList.add("failed");
+            setTimeout(() => {
+                name.textContent = label;
+                button.removeAttribute("title");
+                button.classList.remove("failed");
+                button.disabled = false;
+            }, 1500);
+        });
 });
 
 // Delete: a clip already gone (404) leaves the list too.
