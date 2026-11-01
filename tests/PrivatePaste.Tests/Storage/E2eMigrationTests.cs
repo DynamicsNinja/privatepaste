@@ -114,6 +114,35 @@ CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
         SqliteConnection.ClearAllPools();
     }
 
+    // secure_delete zeroes freed pages whatever the native build's default is. The file is encrypted at rest, so this
+    // looks at an unencrypted one (no key): the deleted clip's text, its search index included, must be gone from it.
+    [Fact]
+    public void OldDatabase_WipeLeavesNoDeletedTextInTheFile()
+    {
+        var needle = "plain secret needle 7f3c"u8.ToArray();
+        var path = Path.Combine(_dir, "privatepaste.db");
+        Directory.CreateDirectory(BlobDir);
+        using (var conn = new SqliteConnection($"Data Source={path}"))
+        {
+            conn.Open();
+            Exec(conn, "PRAGMA secure_delete=OFF;");
+            Exec(conn, OldSchema);
+            Exec(conn, """
+                INSERT INTO clips(id, seq, kind, text, hash, size_bytes, source_device_name, created_at, last_copied_at)
+                  VALUES('c1', 5, 'text', 'plain secret needle 7f3c', 'h1', 24, 'PC', '2026-01-01T00:00:00Z',
+                         '2026-01-01T00:00:00Z');
+                """);
+        }
+        SqliteConnection.ClearAllPools();
+        Assert.True(File.ReadAllBytes(path).AsSpan().IndexOf(needle) >= 0);
+
+        new PrivatePasteDb(new ServerOptions("", "pw", _dir, 1024, 1024)).Initialize();
+        SqliteConnection.ClearAllPools();
+
+        foreach (var file in Directory.GetFiles(_dir, "privatepaste.db*"))
+            Assert.True(File.ReadAllBytes(file).AsSpan().IndexOf(needle) < 0, $"{Path.GetFileName(file)} holds the deleted text");
+    }
+
     [Fact]
     public void OldDatabase_IsWipedOnUpgrade()
     {

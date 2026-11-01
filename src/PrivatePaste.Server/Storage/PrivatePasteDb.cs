@@ -145,6 +145,14 @@ public sealed class PrivatePasteDb(ServerOptions options, ILogger<PrivatePasteDb
         if (HasColumn(conn, "clips", "payload"))
             return;
 
+        // Freed pages are zeroed, so the readable history doesn't linger in the file (or a later backup of it),
+        // whatever the native build's default is. A per-connection setting, so running it again is harmless.
+        using (var secure = conn.CreateCommand())
+        {
+            secure.CommandText = "PRAGMA secure_delete=ON;";
+            secure.ExecuteNonQuery();
+        }
+
         using var tx = conn.BeginTransaction();
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
