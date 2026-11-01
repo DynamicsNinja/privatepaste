@@ -16,7 +16,13 @@ To update, pack the new version in a scratch directory, copy only these two file
 `../js/common-passphrases.txt` is the list `passphraseProblem()` rejects against, and the same file is shipped
 on every platform (each project's test compares its SHA-256 with this one).
 
-- Source: the top 10,000 of SecLists `Passwords/Common-Credentials/Pwdb_top-10000.txt`
-  (https://github.com/danielmiessler/SecLists), MIT licence, Copyright (c) 2018 Daniel Miessler.
-- Processed: lowercased, deduplicated, `#` header lines added.
-- SHA-256: `abb2d64604a78db21d04fb0376bbeb1c2bd62b1e0a45ab9fa18f11d3a1f69fb3`
+- Source: entries of 12 or more characters (the passphrase minimum; shorter ones are rejected by length anyway) from
+  SecLists `Passwords/Common-Credentials` (https://github.com/danielmiessler/SecLists), MIT licence,
+  Copyright (c) 2018 Daniel Miessler: `100k-most-used-passwords-NCSC.txt`, then
+  `xato-net-10-million-passwords-1000000.txt` in rank order until the size cap (about 285 KB, 19,992 entries).
+  `Pwdb_top-1000000.txt` was also tried and contributed nothing within the cap. SecLists has no phrase-style
+  list with a clear licence, so none was added.
+- Processed: NFC, lowercased, deduplicated, length >= 12 UTF-16 units, `#` header lines added.
+- SHA-256: `8ce67ae3206188e600ba31179311f8a937d359cdcc963dae997d42e2ca9cb75f`
+- The code requests it as `common-passphrases.txt?v=8ce67ae3` (first 8 hex of the SHA-256); update `LIST_VERSION`
+  in `js/e2e.js` with the file, likewise `HASHWASM_VERSION` for the vendored script.

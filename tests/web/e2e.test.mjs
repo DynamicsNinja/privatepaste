@@ -135,6 +135,15 @@ test('argon2 vectors reproduce (when present)', async () => {
   }
 });
 
+// The passphrase task fills vectors.passphraseWrap with { passphrase, wrap: <VaultWrap DTO>, vk: hex }.
+test('passphraseWrap vector unwraps to the vault key (when present)', async () => {
+  const cases = vectors.passphraseWrap ?? [];
+  for (const v of Array.isArray(cases) ? cases : [cases]) {
+    assert.equal(toHex((await e2e.unwrapWithPassphrase(v.wrap, v.passphrase)).raw), v.vk);
+    assert.equal(toHex((await e2e.unwrapWithPassphrase(v.wrap, v.passphrase.normalize('NFD'))).raw), v.vk);
+  }
+});
+
 test('passphrase wrap round-trips, rejects a wrong passphrase, and treats NFD and NFC alike', async () => {
   const nfc = 'café au lait, süss';
   const nfd = nfc.normalize('NFD');
@@ -151,6 +160,9 @@ test('passphrase wrap round-trips, rejects a wrong passphrase, and treats NFD an
   await assert.rejects(() => e2e.unwrapWithPassphrase(wrap, 'not the passphrase'), e2e.WrongPassphraseError);
   await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, keyId: '0000000000000000' }, nfc), e2e.WrongPassphraseError);
   await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, kdf: { ...wrap.kdf, memoryKiB: 1 << 30 } }, nfc), /Unsupported/);
+  const b64 = n => Buffer.alloc(n, 1).toString('base64');
+  await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, nonce: b64(11) }, nfc), /Unsupported/);
+  await assert.rejects(() => e2e.unwrapWithPassphrase({ ...wrap, kdf: { ...wrap.kdf, salt: b64(15) } }, nfc), /Unsupported/);
 });
 
 test('passphraseProblem enforces length and the common list', async () => {
@@ -160,11 +172,17 @@ test('passphraseProblem enforces length and the common list', async () => {
   assert.equal(await e2e.passphraseProblem('purple walrus eats pancakes'), null);
 });
 
-test('the common-passphrase list has its header and no uppercase or duplicate lines', () => {
+test('the common-passphrase list only holds entries the length rule would not already reject', () => {
   const lines = readFileSync(new URL('../../src/PrivatePaste.Server/wwwroot/js/common-passphrases.txt', import.meta.url), 'utf8').split('\n');
   assert.ok(lines[0].startsWith('#') && lines[1].startsWith('#'));
   const body = lines.slice(2).filter(Boolean);
   assert.ok(body.length > 5000);
   assert.equal(new Set(body).size, body.length);
-  assert.ok(body.every(l => l === l.toLowerCase()));
+  assert.ok(body.every(l => l === l.toLowerCase() && l.length >= 12));
+});
+
+test('the list version in e2e.js is the start of the list SHA-256', () => {
+  const dir = '../../src/PrivatePaste.Server/wwwroot/js/';
+  const digest = sha256(readFileSync(new URL(dir + 'common-passphrases.txt', import.meta.url)));
+  assert.match(readFileSync(new URL(dir + 'e2e.js', import.meta.url), 'utf8'), new RegExp(`LIST_VERSION = '${digest.slice(0, 8)}'`));
 });

@@ -18,6 +18,10 @@ const BLOB_AAD_LABEL = enc.encode('privatepaste v1 blob');
 const HANDOVER_AAD = enc.encode('privatepaste v1 handover');
 const QR_PREFIX = 'privatepaste:handover?';
 
+// Cache-busting versions for the two code-built URLs (Cloudflare caches static files); see wwwroot/lib/README.md.
+const HASHWASM_VERSION = '4.12.0';
+const LIST_VERSION = '8ce67ae3';
+
 const ARGON2 = { memoryKiB: 65536, iterations: 3, parallelism: 1, hashLength: 32, saltSize: 16 };
 // Bounds for a wrap read from the server, so a hostile record can't make the browser hang or run out of memory.
 const ARGON2_MAX = { memoryKiB: 262144, iterations: 10, parallelism: 8 };
@@ -86,12 +90,17 @@ export async function importVaultKey(bytes) {
   if (bytes.length !== VK_SIZE) throw new RangeError(`The vault key is ${VK_SIZE} bytes.`);
   const raw = Uint8Array.from(bytes);
   const sub = await _deriveSubkeys(raw);
-  return {
-    keyId: sub.keyId,
-    encKey: await subtle.importKey('raw', sub.encKey, 'AES-GCM', false, ['encrypt', 'decrypt']),
-    hashKey: await subtle.importKey('raw', sub.hashKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']),
-    raw,
-  };
+  try {
+    return {
+      keyId: sub.keyId,
+      encKey: await subtle.importKey('raw', sub.encKey, 'AES-GCM', false, ['encrypt', 'decrypt']),
+      hashKey: await subtle.importKey('raw', sub.hashKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']),
+      raw,
+    };
+  } finally {
+    sub.encKey.fill(0);
+    sub.hashKey.fill(0);
+  }
 }
 
 // ---- small items: 0x01 || nonce(12) || ciphertext || tag(16) ----
@@ -194,15 +203,16 @@ let hashwasmPromise;
 function loadHashwasm() {
   hashwasmPromise ??= (async () => {
     if (globalThis.hashwasm?.argon2id) return globalThis.hashwasm;
-    const url = new URL('../lib/hash-wasm/argon2.umd.min.js', import.meta.url).href;
+    const url = new URL('../lib/hash-wasm/argon2.umd.min.js', import.meta.url);
+    url.search = `v=${HASHWASM_VERSION}`;
     if (typeof document === 'undefined') {
       // Node (the tests): the UMD file loads as CommonJS.
-      const mod = await import(url);
+      const mod = await import(url.href);
       return mod.default?.argon2id ? mod.default : mod;
     }
     await new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = url;
+      script.src = url.href;
       script.onload = resolve;
       script.onerror = () => reject(new Error('Could not load the passphrase library.'));
       document.head.append(script);
@@ -229,8 +239,14 @@ async function argon2Raw(passphrase, salt, kdf) {
 // The raw 32-byte passphrase key, exposed only so the tests can compare it with the shared vectors.
 export const _argon2Key = (passphrase, salt) => argon2Raw(passphrase, salt, ARGON2);
 
-const passphraseKey = async (passphrase, salt, kdf) =>
-  subtle.importKey('raw', await argon2Raw(passphrase, salt, kdf), 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function passphraseKey(passphrase, salt, kdf) {
+  const raw = await argon2Raw(passphrase, salt, kdf);
+  try {
+    return await subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  } finally {
+    raw.fill(0);
+  }
+}
 
 const vaultAad = keyId => enc.encode('privatepaste v1 vault ' + keyId);
 
@@ -259,16 +275,26 @@ export async function unwrapWithPassphrase(wrapDto, passphrase) {
     || !Number.isInteger(kdf.parallelism) || kdf.parallelism < 1 || kdf.parallelism > ARGON2_MAX.parallelism
     || typeof wrapDto.keyId !== 'string')
     throw new Error('Unsupported passphrase wrap.');
-  const key = await passphraseKey(passphrase, fromBase64(kdf.salt), kdf);
+  // Lengths .NET AesGcm demands, so the browser rejects what .NET rejects.
+  let salt, nonce, wrapped;
+  try {
+    salt = fromBase64(kdf.salt);
+    nonce = fromBase64(wrapDto.nonce);
+    wrapped = fromBase64(wrapDto.wrappedKey);
+  } catch {
+    throw new Error('Unsupported passphrase wrap.');
+  }
+  if (salt.length !== ARGON2.saltSize || nonce.length !== NONCE_SIZE) throw new Error('Unsupported passphrase wrap.');
+  const key = await passphraseKey(passphrase, salt, kdf);
   let vk;
   try {
     vk = new Uint8Array(await subtle.decrypt(
-      { name: 'AES-GCM', iv: fromBase64(wrapDto.nonce), additionalData: vaultAad(wrapDto.keyId), tagLength: 128 },
-      key, fromBase64(wrapDto.wrappedKey)));
+      { name: 'AES-GCM', iv: nonce, additionalData: vaultAad(wrapDto.keyId), tagLength: 128 }, key, wrapped));
   } catch {
     throw new WrongPassphraseError();
   }
-  const vault = await importVaultKey(vk);
+  let vault;
+  try { vault = await importVaultKey(vk); } finally { vk.fill(0); }
   if (vault.keyId !== wrapDto.keyId) throw new Error('The wrap holds a different vault key.');
   return vault;
 }
@@ -293,7 +319,8 @@ export async function openHandover(otk, blob, keyId) {
   const key = await subtle.importKey('raw', otk, 'AES-GCM', false, ['decrypt']);
   const vk = await openWith(key, HANDOVER_AAD, bytesOf(blob, 'The handover'));
   if (vk.length !== VK_SIZE) throw new Error('The handover holds no vault key.');
-  const vault = await importVaultKey(vk);
+  let vault;
+  try { vault = await importVaultKey(vk); } finally { vk.fill(0); }
   if (vault.keyId !== keyId) throw new Error('The handover holds a different vault key.');
   return vault;
 }
@@ -332,6 +359,7 @@ let commonPromise;
 function loadCommon() {
   commonPromise ??= (async () => {
     const url = new URL('./common-passphrases.txt', import.meta.url);
+    url.search = `v=${LIST_VERSION}`;
     let text;
     if (typeof document === 'undefined' && url.protocol === 'file:') {
       text = await (await import('node:fs/promises')).readFile(url, 'utf8');
