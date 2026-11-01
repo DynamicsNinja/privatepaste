@@ -56,7 +56,11 @@ public class DesktopHostTests : IAsyncLifetime
                 Interlocked.Increment(ref _connects);
                 Assert.Equal("ws", uri.Scheme);
                 var client = _server.Server.CreateWebSocketClient();
-                client.ConfigureRequest = r => r.Headers.Authorization = "Bearer " + token;
+                client.ConfigureRequest = r =>
+                {
+                    r.Headers.Authorization = "Bearer " + token;
+                    r.Headers[ProtocolHeaders.Name] = ProtocolHeaders.Version;
+                };
                 return client.ConnectAsync(new UriBuilder(uri) { Scheme = "http" }.Uri, ct);
             },
         };

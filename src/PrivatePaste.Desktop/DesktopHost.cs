@@ -691,6 +691,7 @@ public sealed class HostTransport
     {
         var socket = new ClientWebSocket();
         socket.Options.SetRequestHeader("Authorization", "Bearer " + token);
+        socket.Options.SetRequestHeader(ProtocolHeaders.Name, ProtocolHeaders.Version);
         try
         {
             await socket.ConnectAsync(uri, ct);

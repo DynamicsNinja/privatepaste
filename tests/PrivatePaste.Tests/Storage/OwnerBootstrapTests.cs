@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PrivatePaste.Protocol;
 using PrivatePaste.Server.Auth;
 using PrivatePaste.Server.Config;
 using PrivatePaste.Server.Storage;
@@ -72,6 +73,7 @@ public class OwnerBootstrapTests
             using var factory = new PrivatePasteFactory(dataDir: dataDir);
             var client = factory.CreateClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/clips")).StatusCode);
 
             var owner = (await factory.Services.GetRequiredService<UserRepository>().GetOwnerAsync())!;
@@ -174,6 +176,7 @@ public class OwnerBootstrapTests
 
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/clips")).StatusCode);
     }
 
@@ -269,6 +272,7 @@ public class OwnerBootstrapTests
             using var factory = new PrivatePasteFactory(dataDir: dataDir);
             var client = factory.CreateClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/clips")).StatusCode);
 
             var owner = (await factory.Services.GetRequiredService<UserRepository>().GetOwnerAsync())!;

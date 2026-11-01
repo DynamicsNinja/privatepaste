@@ -25,7 +25,11 @@ public class WebSocketTests
     {
         var ws = factory.Server.CreateWebSocketClient();
         if (token is not null)
-            ws.ConfigureRequest = r => r.Headers.Authorization = "Bearer " + token;
+            ws.ConfigureRequest = r =>
+            {
+                r.Headers.Authorization = "Bearer " + token;
+                r.Headers[ProtocolHeaders.Name] = ProtocolHeaders.Version;
+            };
         using var cts = new CancellationTokenSource(ReceiveTimeout);
         var socket = await ws.ConnectAsync(new Uri(factory.Server.BaseAddress, "/ws"), cts.Token);
         if (sync)

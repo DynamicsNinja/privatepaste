@@ -121,6 +121,7 @@ public class AuthApiTests
 
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.Token);
+        client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/clips")).StatusCode);
     }
 
@@ -156,6 +157,7 @@ public class AuthApiTests
         using var factory = new PrivatePasteFactory();
         var client = factory.CreateClient(new() { AllowAutoRedirect = false });
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "garbage");
+        client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/clips")).StatusCode);
     }
 
