@@ -2,10 +2,15 @@
 // Run by build.ps1 (see README.md next to this file); expects the desktop and Android shots already in out/.
 //
 //   node capture.mjs --url http://localhost:5311 --password dev   (the owner signs in as "owner")
+//   node capture.mjs ... --web-only                               (stops after out/web-*.png; docs/images is untouched)
+//
+// The server is end-to-end encrypted: this sets up its vault with DEMO_PASSPHRASE, seals every demo clip with the web
+// UI's own crypto module (wwwroot/js/e2e.js), and unlocks the web page with the passphrase before the shots.
 import { chromium } from 'playwright';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import * as e2e from '../../src/PrivatePaste.Server/wwwroot/js/e2e.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, 'out');
@@ -16,6 +21,11 @@ const arg = (name, fallback) => {
 };
 const url = arg('url', 'http://localhost:5311').replace(/\/$/, '');
 const password = arg('password', 'dev');
+const webOnly = process.argv.includes('--web-only');
+// Only ever used on the throwaway server: at least 12 characters and not in the common-passphrase list.
+const DEMO_PASSPHRASE = 'readme demo vault passphrase';
+// Every API call sends the protocol header; without it the clip and vault endpoints answer 426.
+const PROTOCOL = { 'x-privatepaste-protocol': '2' };
 const demo = JSON.parse(readFileSync(join(here, 'demo.json'), 'utf8')).clips;
 // The first person in demo.json is the owner, who is renamed from "owner"; every other one is added with a password.
 const people = [...new Set(demo.map((c) => c.user))];
@@ -27,11 +37,34 @@ const browser = await chromium.launch({ channel: 'msedge' }).catch(() => chromiu
 const page = async (options) => (await browser.newContext(options)).newPage();
 const fileUrl = (name, query = '') => pathToFileURL(join(here, name)).href + query;
 
-// 1. The image clip's picture.
+// 1. The image clip's picture, plus what a client derives from it before uploading: the content hash of its RGBA
+//    pixels and a PNG thumbnail that fits 256x256. The browser decodes the PNG, as the web UI would.
+const photo = {};
 {
   const p = await page({ viewport: { width: 1600, height: 900 } });
   await p.goto(fileUrl('photo.html'));
-  await p.screenshot({ path: join(out, 'photo.png') });
+  photo.png = await p.screenshot({ path: join(out, 'photo.png') });
+  Object.assign(photo, await p.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const { width, height } = bitmap;
+    const full = new OffscreenCanvas(width, height).getContext('2d');
+    full.drawImage(bitmap, 0, 0);
+    const rgba = full.getImageData(0, 0, width, height).data;
+    const prefix = new TextEncoder().encode(`i:${width}x${height}:`);
+    const hashed = new Uint8Array(prefix.length + rgba.length);
+    hashed.set(prefix);
+    hashed.set(rgba, prefix.length);
+    const contentHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', hashed)),
+      (b) => b.toString(16).padStart(2, '0')).join('');
+    const scale = Math.min(1, 256 / width, 256 / height);
+    const thumbCanvas = new OffscreenCanvas(Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale)));
+    thumbCanvas.getContext('2d').drawImage(bitmap, 0, 0, thumbCanvas.width, thumbCanvas.height);
+    const thumb = new Uint8Array(await (await thumbCanvas.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    let thumbBase64 = '';
+    for (let i = 0; i < thumb.length; i += 0x8000) thumbBase64 += String.fromCharCode(...thumb.subarray(i, i + 0x8000));
+    return { width, height, contentHash, thumbBase64: btoa(thumbBase64) };
+  }, photo.png.toString('base64')));
   await p.context().close();
 }
 
@@ -56,55 +89,94 @@ if (people.some(Boolean)) {
   }
 }
 
-// 3. Seed the demo history, oldest first, as backfilled clips so each keeps its age. One sign-in per device
-//    (the server allows 5 sign-ins a minute per IP, and the web sign-in above took one: keep to 4 devices).
+// 3. One sign-in per device (the server allows 5 sign-ins a minute per IP, and the web sign-in above took one: keep to
+//    4 devices).
 const tokens = {};
 for (const device of [...new Set(demo.map((c) => `${c.device}\n${c.platform}\n${c.user}`))]) {
   const [deviceName, platform, username] = device.split('\n');
   const res = await fetch(`${url}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...PROTOCOL, 'content-type': 'application/json' },
     body: JSON.stringify({ username, password: passwords[username], deviceName, platform }),
   });
   if (!res.ok) throw new Error(`sign-in as ${username} on ${deviceName}: HTTP ${res.status}`);
   tokens[device] = (await res.json()).token;
 }
+const authFor = (clip) => ({ ...PROTOCOL, authorization: `Bearer ${tokens[`${clip.device}\n${clip.platform}\n${clip.user}`]}` });
+
+// 4. The vault, set up by one of the owner's devices, as an owner's app would on a fresh server.
+const vault = await e2e.importVaultKey(crypto.getRandomValues(new Uint8Array(32)));
+{
+  const ownerClip = demo.find((c) => c.user === people[0]);
+  const res = await fetch(`${url}/api/vault`, {
+    method: 'PUT',
+    headers: { ...authFor(ownerClip), 'content-type': 'application/json' },
+    body: JSON.stringify(await e2e.wrapWithPassphrase(vault, DEMO_PASSPHRASE)),
+  });
+  if (!res.ok) throw new Error(`setting up the vault: HTTP ${res.status} (the server must be fresh)`);
+}
+
+// 5. The demo history, oldest first, as backfilled clips so each keeps its age, sealed like the apps seal them.
 for (const clip of [...demo].reverse()) {
-  const auth = { authorization: `Bearer ${tokens[`${clip.device}\n${clip.platform}\n${clip.user}`]}` };
   const copiedAt = new Date(Date.now() - clip.minutesAgo * 60_000).toISOString();
-  let res;
+  const form = new FormData();
+  let meta;
   if (clip.kind === 'image') {
-    const form = new FormData();
-    form.append('file', new Blob([readFileSync(join(out, 'photo.png'))], { type: 'image/png' }), 'photo.png');
-    form.append('copiedAt', copiedAt);
-    form.append('backfill', 'true');
-    res = await fetch(`${url}/api/clips/image`, { method: 'POST', headers: auth, body: form });
+    meta = {
+      kind: 'image',
+      hash: await e2e.keyedHash(vault, photo.contentHash),
+      payload: await e2e.sealPayload(vault, { width: photo.width, height: photo.height }),
+      sizeBytes: photo.png.length,
+    };
+    form.append('thumb', new Blob([await e2e.sealSmall(vault, 'thumb', Uint8Array.from(Buffer.from(photo.thumbBase64, 'base64')))]));
+    form.append('blob0', new Blob([await e2e.encryptBlob(vault, new Uint8Array(photo.png))]));
   } else {
-    res = await fetch(`${url}/api/clips/text`, {
-      method: 'POST',
-      headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ text: clip.text, copiedAt, backfill: true }),
-    });
+    meta = {
+      kind: clip.kind,
+      hash: await e2e.keyedHash(vault, await e2e.contentHashText(clip.text)),
+      payload: await e2e.sealPayload(vault, { text: clip.text }),
+      sizeBytes: Buffer.byteLength(clip.text, 'utf8'),
+    };
   }
-  if (!res.ok) throw new Error(`upload "${clip.text ?? clip.kind}": HTTP ${res.status}`);
+  form.append('meta', JSON.stringify({ ...meta, keyId: vault.keyId, copiedAt, backfill: true }));
+  const res = await fetch(`${url}/api/clips`, { method: 'POST', headers: authFor(clip), body: form });
+  if (!res.ok) throw new Error(`upload "${clip.text ?? clip.kind}": HTTP ${res.status} ${await res.text()}`);
   if (clip.pinned) {
-    const pin = await fetch(`${url}/api/clips/${(await res.json()).id}/pin`, { method: 'POST', headers: auth });
+    const pin = await fetch(`${url}/api/clips/${(await res.json()).id}/pin`, { method: 'POST', headers: authFor(clip) });
     if (!pin.ok) throw new Error(`pin "${clip.text ?? clip.kind}": HTTP ${pin.status}`);
   }
 }
 
-// 4. The web history, dark and light, at 2x.
+// 6. The web history, dark and light, at 2x. Unlocked once: the key stays in the tab's sessionStorage across reloads.
+//    Waits for every row, the Lock button in the top bar and the decrypted thumbnails before each shot.
 {
+  const ready = async () => {
+    await web.locator('#clips > li.clip').nth(demo.length - 1).waitFor();
+    await web.locator('#lock').waitFor({ state: 'visible' });
+    await web.waitForFunction(() => [...document.querySelectorAll('#clips img.thumb')]
+      .every((img) => img.complete && img.naturalWidth > 0));
+    await web.waitForLoadState('networkidle');
+  };
+  await web.goto(`${url}/`);
+  await web.locator('#unlock-passphrase').fill(DEMO_PASSPHRASE);
+  await web.locator('#unlock-passphrase').press('Enter');
+  await ready();
   for (const scheme of ['dark', 'light']) {
     await web.emulateMedia({ colorScheme: scheme });
     await web.goto(`${url}/`);
-    await web.waitForLoadState('networkidle');
+    await ready();
     await web.screenshot({ path: join(out, `web-${scheme}.png`) });
   }
   await web.context().close();
 }
 
-// 5. The hero, from the web, desktop popup and Android shots, with transparent rounded corners.
+if (webOnly) {
+  await browser.close();
+  console.log(`Wrote out/web-dark.png and web-light.png (in ${out})`);
+  process.exit(0);
+}
+
+// 7. The hero, from the web, desktop popup and Android shots, with transparent rounded corners.
 for (const name of ['readme-popup-dark.png', 'readme-popup-light.png', 'readme-history-dark.png', 'readme-history-light.png']) {
   if (!existsSync(join(out, name))) throw new Error(`missing out/${name}: run the desktop and Android steps first`);
 }

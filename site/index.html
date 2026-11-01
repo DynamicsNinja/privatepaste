@@ -158,8 +158,8 @@
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6zM9 12l2 2 4-4"/></svg></span>
-                <h3>Encrypted at rest</h3>
-                <p>The database and stored images are encrypted with a key that only you hold.</p>
+                <h3>End-to-end encrypted</h3>
+                <p>Clips are encrypted on your devices and unlocked with your passphrase. Even someone who steals the server can't read them.</p>
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7M18 14a7 7 0 0 1 4 7"/></svg></span>
@@ -180,9 +180,9 @@
         <div class="how">
             <ol class="flow">
                 <li><b>You copy something</b> on any signed-in device: text, a link or an image.</li>
-                <li><b>The app sends it to your server</b> over HTTPS. The server keeps it in an encrypted database.</li>
+                <li><b>The app sends it to your server</b> over HTTPS, encrypted on the device first. The server keeps only ciphertext it can't read.</li>
                 <li><b>Your other devices get it at once</b> over a live connection and put it on their clipboard. A device that was offline catches up when it reconnects.</li>
-                <li><b>Everything stays searchable</b> in the history on every device and in the web app, until you delete it or clear it.</li>
+                <li><b>Everything stays searchable</b> in the history on every device and in the web app, which decrypt and search it themselves, until you delete it or clear it.</li>
             </ol>
             <div class="diagram">
                 <svg viewBox="0 0 420 260" role="img" aria-label="A laptop, a phone and a browser, each sending clips to your server and getting clips from it, over HTTPS with live updates">
@@ -209,8 +209,11 @@
         <h2>Security</h2>
         <p class="lead">What protects your clips, and what doesn't.</p>
         <ul class="facts">
-            <li><b>Encrypted at rest.</b> The database (SQLite3 Multiple Ciphers) and the stored image files are encrypted with <code>PP_DB_KEY</code>, a key only you hold.</li>
-            <li class="caution"><b>Not end-to-end encrypted.</b> The server can read your clips, so run it on a machine you trust.</li>
+            <li><b>End-to-end encrypted.</b> Your devices encrypt every clip before uploading it, with a key unlocked by your passphrase. The server never sees the passphrase or the key, so a stolen server, disk or backup reveals no clip, even with its configuration.</li>
+            <li><b>What the server sees.</b> Who copied a clip, from which device, when, its kind, its exact size and whether it is pinned. Never its content or thumbnail.</li>
+            <li><b>Encrypted at rest too.</b> The database (SQLite3 Multiple Ciphers) and stored files are also encrypted with <code>PP_DB_KEY</code>, which hides that metadata from someone who takes the disk without the server's configuration.</li>
+            <li class="caution"><b>The web app trusts your server.</b> It decrypts in the browser with code your server sends, so someone who steals the server and keeps it running could serve altered code. The apps don't have this risk.</li>
+            <li class="caution"><b>Keep your passphrase.</b> Without it the history can't be recovered. Reset encryption starts over with a new passphrase and an empty history.</li>
             <li><b>HTTPS only.</b> The apps accept only HTTPS servers. Plain HTTP works only for localhost.</li>
             <li><b>Hashed passwords.</b> Passwords are hashed with Argon2id, and sign-in is rate-limited per IP.</li>
             <li><b>A token per device.</b> Every device has its own token. Sign out a lost one on the People page and it is out at once.</li>
@@ -268,7 +271,7 @@ PP_PASSWORD=</pre></div>
                 </li>
                 <li>
                     <h3>Deploy and sign in</h3>
-                    <p>Click <b>Deploy</b>. Open your domain and sign in with the name <code>owner</code> and your <code>PP_PASSWORD</code>.</p>
+                    <p>Click <b>Deploy</b>. Open your domain and sign in with the name <code>owner</code> and your <code>PP_PASSWORD</code>, then choose the passphrase that encrypts your clips.</p>
                 </li>
             </ol>
         </div>
@@ -340,7 +343,7 @@ grep PP_PASSWORD .env</pre></div>
                 <li>
                     <h3>Start it and sign in</h3>
                     <div class="code"><div class="code-head"><span>Shell</span></div><pre data-copy>docker compose up -d</pre></div>
-                    <p class="after">Open your domain with <code>https://</code> and sign in with the name <code>owner</code> and the password from <code>.env</code>.</p>
+                    <p class="after">Open your domain with <code>https://</code> and sign in with the name <code>owner</code> and the password from <code>.env</code>, then choose the passphrase that encrypts your clips.</p>
                 </li>
             </ol>
 
@@ -360,12 +363,13 @@ networks:
         </div>
 
         <p class="note">To upgrade, back up <code>/data</code>, change the image tag to the new version and redeploy. See <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/self-hosting.md#backups">Backups</a> in the self-hosting guide.</p>
+        <p class="warn"><b>Upgrading from a version without end-to-end encryption deletes the whole history</b>, pinned clips included, so back up <code>/data</code> first. Update the apps too: older ones show "Update PrivatePaste to keep syncing." Then set up encryption from an owner device or the web app. <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/self-hosting.md#upgrading-to-end-to-end-encryption">Details</a>.</p>
         <p class="warn"><b>Keep <code>PP_DB_KEY</code> safe</b>, apart from your backups. Without it the data can't be recovered. More settings, backups and proxy notes are in the <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/self-hosting.md">self-hosting guide</a>.</p>
     </section>
 
     <section class="wrap" id="apps">
         <h2>Then connect your devices</h2>
-        <p class="lead">Install an app and sign in with your server's address, the name <code>owner</code> and your password. Add the other people on the web app's <b>People</b> page.</p>
+        <p class="lead">Install an app and sign in with your server's address, the name <code>owner</code> and your password, then unlock it with your passphrase (or, on Android, scan a code from <b>Add a device</b>). Add the other people on the web app's <b>People</b> page.</p>
         <ul class="apps">
             <li>
                 <div class="pills">
@@ -413,7 +417,11 @@ networks:
         <div class="faq">
             <details>
                 <summary>Is it end-to-end encrypted?</summary>
-                <p>No. Your server stores clips encrypted at rest with <code>PP_DB_KEY</code>, but it can read them while it runs. Run it on a machine you trust.</p>
+                <p>Yes. Clips are encrypted on your devices with a key unlocked by your passphrase, and the server stores only ciphertext. It still sees who copied what kind of clip, when, from which device, and how big it is. In the web app the decryption code comes from your server, so a stolen server that is kept running could alter it; the apps don't have that risk.</p>
+            </details>
+            <details>
+                <summary>What if I forget the passphrase?</summary>
+                <p>Then nobody can read the history, not even the server's owner. The owner can reset encryption in the web app's Settings, which deletes the whole history, pinned clips included, and starts over with a new passphrase.</p>
             </details>
             <details>
                 <summary>Is there an iPhone app?</summary>
@@ -433,7 +441,7 @@ networks:
             </details>
             <details>
                 <summary>What if I lose <code>PP_DB_KEY</code>?</summary>
-                <p>Then the data can't be recovered: everything is encrypted with it. Keep it somewhere safe, for example in a password manager, apart from your backups.</p>
+                <p>Then the server's data can't be recovered: everything on it is encrypted with it, including the clips your passphrase protects. Keep it somewhere safe, for example in a password manager, apart from your backups.</p>
             </details>
         </div>
     </section>

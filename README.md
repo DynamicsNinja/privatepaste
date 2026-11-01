@@ -34,13 +34,13 @@
 ## Why PrivatePaste
 
 - **Copy here, paste there.** Text, links and images you copy show up on the clipboard of your other devices a moment later.
-- **A history you can search.** Every clip is kept until you delete it (or clear the history), with the device it came from, so the thing you copied last Tuesday is still one search away.
+- **A history you can search.** Every clip is kept until you delete it (or clear the history), with the device it came from, so the thing you copied last Tuesday is still one search away. Search runs on your devices, which hold the key.
 - **Private copies stay private.** On the desktop apps, a copy that a password manager marks as private never leaves your computer: it isn't uploaded, cached or shown anywhere. The desktop app can also ignore copies from apps you name. Android only sends what you send or share yourself. [Details](docs/desktop.md#private-copies)
 - **Pinned clips.** Pin the clips you reuse. They get their own tab on every device and survive clearing and auto-delete.
 - **Clear it when you want.** Clear the history from the web UI, or let the server delete clips older than 7, 30 or 90 days. Pinned clips stay. Off by default: otherwise clips are kept until you delete them.
 - **Multiple people, one shared history.** Add the people you share a server with (a household, a small team). Each signs in with their own name and password, everyone sees the same history, and each clip shows who copied it. The owner can sign someone out or remove them without changing a password for everyone. [Details](docs/self-hosting.md#people)
 - **Only on your server.** One small container. No cloud relay, no push service, no analytics, no third-party requests.
-- **Encrypted at rest.** The database (SQLite3 Multiple Ciphers) and the stored images are encrypted with a key that only you hold.
+- **End-to-end encrypted.** Clips are encrypted on your devices with a key that only they hold, unlocked with a passphrase. The server stores ciphertext: someone who steals it, its backups and its configuration still can't read your clips. [Details](#security)
 - **Native on every device.** A tray app with a history popup (Ctrl+Shift+V) on Windows, macOS and Linux, an Android app with a Quick Settings tile and a Share target, and a web UI for everything else.
 - **Knows where a clip came from.** Each clip carries its device's name and platform icon (and, once a second person is added, a chip with the name of who copied it), and the desktop app can show a small notification when a clip from another device lands.
 
@@ -86,7 +86,12 @@ All settings, backups and proxy notes are in [Self-hosting](docs/self-hosting.md
 
 ### Connect your devices
 
-Install an app, then enter your server URL, your name and password, and a name for the device. On a new server the name is `owner` and the password is `PP_PASSWORD`. That's it: from then on the device stays signed in and in sync. Add the other people on the **People** page of the web UI, where you can also see and sign out devices.
+Install an app, then enter your server URL, your name and password, and a name for the device. On a new server the name is `owner` and the password is `PP_PASSWORD`.
+
+The first time the owner signs in (in an app or the web UI), PrivatePaste asks you to **set up encryption**: choose a passphrase of at least 12 characters (a short sentence works well). It is separate from your password and the server never sees it. Every other device then unlocks once, by entering the passphrase or, on Android, by scanning a code from **Settings > Add a device** on a device that is already unlocked. From then on the device stays signed in, unlocked and in sync. Add the other people on the **People** page of the web UI, where you can also see and sign out devices; they unlock with the same passphrase.
+
+> [!WARNING]
+> **Upgrading from a version without end-to-end encryption deletes the whole history, pinned clips included.** The server can't encrypt clips it used to read, so it starts empty. Back up `/data` first. Apps from before this version stop syncing and show "Update PrivatePaste to keep syncing." until you update them; new apps tell you when the server needs updating. After the upgrade, set up encryption from an owner device or the web UI. [Details](docs/self-hosting.md#upgrading-to-end-to-end-encryption)
 
 > [!NOTE]
 > **Upgrading a server that several people already share?** First, right after upgrading, change the owner's password (**Settings > Change password**, or set a new `PP_PASSWORD` and restart): anyone who knew the old shared password may be signed in on the web as `owner`, and this ends those sessions. Every existing device becomes the owner's and keeps working. Sign the devices that belong to someone else out on the **People** page; each person then signs in again with their own account. Apps from before this version can't sign in until they are updated. Back up `/data` before upgrading. [Details](docs/self-hosting.md#upgrading-to-multiple-people)
@@ -100,26 +105,30 @@ flowchart LR
     B["Web UI"] <-->|HTTPS| S
 ```
 
-Each device signs in with a person's name and password once and gets its own device token. A copy is uploaded to the server, stored, and pushed over a WebSocket to your other devices, which put it on their clipboard. A device that was offline catches up when it reconnects, and only the newest clip lands on its clipboard, so nothing old overwrites what you have now. The same content copied twice is bumped to the top instead of stored again.
+Each device signs in with a person's name and password once and gets its own device token, then unlocks the shared vault key with the passphrase. A copy is encrypted on the device, uploaded to the server, stored, and pushed over a WebSocket to your other devices, which decrypt it and put it on their clipboard. A device that was offline catches up when it reconnects, and only the newest clip lands on its clipboard, so nothing old overwrites what you have now. The same content copied twice is bumped to the top instead of stored again.
 
 ## Security
 
-- The database and image files are encrypted at rest with `PP_DB_KEY`.
+- **Clips are end-to-end encrypted.** Your devices encrypt every clip (AES-256-GCM) before uploading it, with a vault key that the server never sees unwrapped. The server keeps that key only wrapped with your passphrase (Argon2id), which is separate from your password and never sent to it. Someone who steals the server, its disk or its backups, including its configuration and `PP_DB_KEY`, can't read your clips.
+- **What the server can see:** who copied a clip, from which device and platform, and when; its kind (text, link or image); its exact size; and whether it is pinned. It never sees the content of a clip, file names or thumbnails.
+- **`PP_DB_KEY` still matters.** The database and stored files are also encrypted at rest with it, which hides that metadata from someone who takes the disk without the server's configuration.
+- **The web UI is the exception to keep in mind.** It decrypts in your browser with code the server sends. Someone who steals the server and keeps it running could serve altered page code to a browser that unlocks afterwards. The apps don't have this risk; if it worries you, use the apps.
+- **Don't lose the passphrase.** Nobody can recover the history without it, not even the owner of the server. The only way back is **Reset encryption** in the web UI's Settings, which deletes the whole history, pinned clips included, and starts over with a new passphrase.
+- People who share your server share the vault key, by design.
 - Passwords are hashed with Argon2id. Sign-in is rate-limited per client IP.
 - Every device has its own token. Sign out a lost device from the People page and it is out at once. Removing a person or resetting their password signs out all their devices and web sessions. Changing your own password signs you out of your other browsers and keeps your devices signed in.
-- Only the owner can add or remove people, clear the history or change auto-delete.
+- Only the owner can add or remove people, clear the history, change auto-delete, set up encryption, change the passphrase or reset encryption.
 - Only HTTPS servers are accepted by the apps (plain HTTP only for localhost).
 - On the desktop apps, copies that password managers mark as private, and copies from apps on the blocklist, are never uploaded. This depends on the app marking its copies; see [Private copies](docs/desktop.md#private-copies) for what is covered. Android sends only what you send or share yourself.
-- The server can read your clips: this is encryption at rest, not end-to-end encryption. Run it on a machine you trust.
 
 ## Documentation
 
 | Guide | What's in it |
 |---|---|
-| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, upgrading, backups, clearing history and auto-delete, proxies, local development |
-| [Desktop app](docs/desktop.md) | Install, upgrade, hotkey, pause, pinned clips, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
-| [Android app](docs/android.md) | Install, pinned clips, background delivery, battery settings by phone maker, building and releasing |
-| [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules and the content hash, for writing your own client |
+| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, end-to-end encryption and its reset, upgrading, backups, clearing history and auto-delete, proxies, local development |
+| [Desktop app](docs/desktop.md) | Install, upgrade, unlocking, adding a device, hotkey, pause, pinned clips, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
+| [Android app](docs/android.md) | Install, unlocking by passphrase or code, adding a device, pinned clips, background delivery, battery settings by phone maker, building and releasing |
+| [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules, end-to-end encryption formats and test vectors, and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 
 ## Code signing
