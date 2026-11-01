@@ -245,15 +245,13 @@ public class ClipApiTests
     }
 
     [Fact]
-    public async Task Search_query_param_works()
+    public async Task Search_query_param_is_ignored()
     {
         using var f = new PrivatePasteFactory();
         var c = await f.LoginAsync();
         await PostText(c, "docker compose up");
         await PostText(c, "something else");
-        var page = await List(c, "?q=compose");
-        Assert.Single(page.Items);
-        Assert.Equal("docker compose up", page.Items[0].Text);
+        Assert.Equal(2, (await List(c, "?q=compose")).Items.Count);
     }
 
     [Fact]

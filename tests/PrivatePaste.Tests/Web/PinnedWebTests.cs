@@ -56,7 +56,7 @@ public class PinnedWebTests
     }
 
     [Fact]
-    public async Task Pinned_tab_search_applies_to_pinned_clips()
+    public async Task Pinned_tab_ignores_the_search_query()
     {
         using var factory = new PrivatePasteFactory();
         var api = await factory.LoginAsync();
@@ -66,7 +66,7 @@ public class PinnedWebTests
 
         var html = await web.GetStringAsync("/?tab=pinned&q=alpha");
         Assert.Contains("alpha one", html);
-        Assert.DoesNotContain("beta two", html);
+        Assert.Contains("beta two", html);
     }
 
     [Fact]

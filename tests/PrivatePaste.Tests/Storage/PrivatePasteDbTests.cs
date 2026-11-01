@@ -30,19 +30,6 @@ public sealed class PrivatePasteDbTests : IDisposable
     }
 
     [Fact]
-    public void Fts5_trigram_available()
-    {
-        var db = NewDb(KeyA);
-        db.Initialize();
-        using var conn = db.Open();
-        InsertClip(conn, "a piece of text");
-
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT count(*) FROM clips_fts WHERE clips_fts MATCH '\"ece\"'";
-        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
-    }
-
-    [Fact]
     public void File_contains_no_plaintext()
     {
         var db = NewDb(KeyA);
@@ -76,6 +63,7 @@ public sealed class PrivatePasteDbTests : IDisposable
     public void Initialize_adds_and_backfills_the_platform_column_on_an_existing_database()
     {
         // The clips/devices tables as the first release created them, before source_device_platform existed.
+        // payload etc. are already there so this isn't taken for a pre-E2E database, whose rows the upgrade wipes.
         Directory.CreateDirectory(_dir);
         using (var old = new SqliteConnection(new SqliteConnectionStringBuilder
                { DataSource = DbPath, Password = KeyA, Mode = SqliteOpenMode.ReadWriteCreate }.ToString()))
@@ -88,15 +76,15 @@ public sealed class PrivatePasteDbTests : IDisposable
                 CREATE TABLE clips(id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, kind TEXT NOT NULL, text TEXT,
                   hash TEXT NOT NULL UNIQUE, width INTEGER, height INTEGER, size_bytes INTEGER NOT NULL,
                   source_device_id TEXT, source_device_name TEXT NOT NULL, created_at TEXT NOT NULL,
-                  last_copied_at TEXT NOT NULL);
+                  last_copied_at TEXT NOT NULL, payload TEXT, key_id TEXT, has_thumb INTEGER NOT NULL DEFAULT 0, blob_count INTEGER NOT NULL DEFAULT 0);
                 INSERT INTO devices VALUES('d-win', 'PC', 'windows', 't1', '2026-01-01T00:00:00Z', NULL, NULL);
                 INSERT INTO devices VALUES('d-and', 'Phone', 'Android', 't2', '2026-01-01T00:00:00Z', NULL,
                   '2026-01-02T00:00:00Z');
-                INSERT INTO clips VALUES('c1', 1, 'text', 'a', 'h1', NULL, NULL, 1, 'd-win', 'PC', 'x', 'x');
-                INSERT INTO clips VALUES('c2', 2, 'text', 'b', 'h2', NULL, NULL, 1, 'd-and', 'Phone', 'x', 'x');
-                INSERT INTO clips VALUES('c3', 3, 'text', 'c', 'h3', NULL, NULL, 1, NULL, 'Web', 'x', 'x');
-                INSERT INTO clips VALUES('c4', 4, 'text', 'd', 'h4', NULL, NULL, 1, 'd-gone', 'Old', 'x', 'x');
-                INSERT INTO clips VALUES('c5', 5, 'text', 'e', 'h5', NULL, NULL, 1, NULL, 'Other', 'x', 'x');
+                INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes, source_device_id, source_device_name, created_at, last_copied_at) VALUES('c1', 1, 'text', 'a', 'h1', NULL, NULL, 1, 'd-win', 'PC', 'x', 'x');
+                INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes, source_device_id, source_device_name, created_at, last_copied_at) VALUES('c2', 2, 'text', 'b', 'h2', NULL, NULL, 1, 'd-and', 'Phone', 'x', 'x');
+                INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes, source_device_id, source_device_name, created_at, last_copied_at) VALUES('c3', 3, 'text', 'c', 'h3', NULL, NULL, 1, NULL, 'Web', 'x', 'x');
+                INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes, source_device_id, source_device_name, created_at, last_copied_at) VALUES('c4', 4, 'text', 'd', 'h4', NULL, NULL, 1, 'd-gone', 'Old', 'x', 'x');
+                INSERT INTO clips(id, seq, kind, text, hash, width, height, size_bytes, source_device_id, source_device_name, created_at, last_copied_at) VALUES('c5', 5, 'text', 'e', 'h5', NULL, NULL, 1, NULL, 'Other', 'x', 'x');
                 """;
             cmd.ExecuteNonQuery();
         }

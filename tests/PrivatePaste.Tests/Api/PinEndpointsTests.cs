@@ -124,7 +124,8 @@ public class PinEndpointsTests
         Assert.Equal(2, pinned.Items.Count);
         Assert.DoesNotContain(pinned.Items, i => i.Id == b.Id);
 
+        // A q parameter is ignored: search is client-side now.
         var searched = (await c.GetFromJsonAsync<ClipPage>("/api/clips?pinned=true&q=alp", ProtocolJson.Options))!;
-        Assert.Equal(a.Id, Assert.Single(searched.Items).Id);
+        Assert.Equal(2, searched.Items.Count);
     }
 }

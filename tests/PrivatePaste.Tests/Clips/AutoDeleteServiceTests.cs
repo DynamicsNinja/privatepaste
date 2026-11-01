@@ -26,7 +26,7 @@ public class AutoDeleteServiceTests
         }
 
         public async Task<HashSet<string?>> TextsAsync() =>
-            (await Repo.ListAsync(null, null, 100)).Items.Select(c => c.Text).ToHashSet();
+            (await Repo.ListAsync(null, 100)).Items.Select(c => c.Text).ToHashSet();
     }
 
     private static Rig NewRig(PrivatePasteFactory f)
