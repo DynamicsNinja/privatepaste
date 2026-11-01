@@ -209,7 +209,7 @@
         <h2>Security</h2>
         <p class="lead">What protects your clips, and what doesn't.</p>
         <ul class="facts">
-            <li><b>End-to-end encrypted.</b> Your devices encrypt every clip before uploading it, with a key unlocked by your passphrase. The server never sees the passphrase or the key, so a stolen server, disk or backup reveals no clip, even with its configuration.</li>
+            <li><b>End-to-end encrypted.</b> Your devices encrypt every clip before uploading it, with a key unlocked by your passphrase. The server never sees the passphrase or the key, so a stolen server, disk or backup made since end-to-end encryption reveals no clip, even with its configuration. Backups from before the upgrade still hold the old history.</li>
             <li><b>What the server sees.</b> Who copied a clip, from which device, when, its kind, its exact size and whether it is pinned. Never its content or thumbnail.</li>
             <li><b>Encrypted at rest too.</b> The database (SQLite3 Multiple Ciphers) and stored files are also encrypted with <code>PP_DB_KEY</code>, which hides that metadata from someone who takes the disk without the server's configuration.</li>
             <li class="caution"><b>The web app trusts your server.</b> It decrypts in the browser with code your server sends, so someone who steals the server and keeps it running could serve altered code. The apps don't have this risk.</li>

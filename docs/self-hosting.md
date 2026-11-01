@@ -27,7 +27,7 @@ Use the output for `PP_DB_KEY` (and a strong, separate value for `PP_PASSWORD`).
 
 ## End-to-end encryption
 
-Clips are encrypted on the devices before they reach the server, with a vault key that is shared by everyone on the server and unlocked with a passphrase. The server stores the vault key only wrapped with that passphrase (Argon2id), so neither the server nor someone who steals it, its backups and its configuration can read a clip. Details of the formats are in the [API reference](api.md#end-to-end-encryption).
+Clips are encrypted on the devices before they reach the server, with a vault key that is shared by everyone on the server and unlocked with a passphrase. The server stores the vault key only wrapped with that passphrase (Argon2id), so neither the server nor someone who steals it, its configuration and backups made since end-to-end encryption can read a clip (older backups: see [Upgrading to end-to-end encryption](#upgrading-to-end-to-end-encryption)). Details of the formats are in the [API reference](api.md#end-to-end-encryption).
 
 - **Setting it up**: on a new or upgraded server, the owner's first app or web session that opens the history asks to **Set up encryption**. Choose a passphrase twice: at least 12 characters, not a common one ("Use at least 12 characters. A short sentence works well."). It is separate from the login password. Other people's devices show "Ask the owner to set up encryption." until then, and don't sync.
 - **Unlocking a device**: each device asks for the passphrase once after signing in. Android can instead scan a code from **Add a device** (in the Settings of the desktop app, the Android app or the web UI, on a device that is already unlocked); the code works once, for 10 minutes. The web UI keeps the key only for the browser tab and has a **Lock** button next to Sign out.
@@ -71,6 +71,8 @@ Anyone changes their own password under **Settings > Change password** (it signs
 
 **Upgrading a server from a version without end-to-end encryption deletes the whole history, pinned clips included.** The server can't encrypt clips it used to store readable, so its first start drops every clip, thumbnail and image and starts empty. **Back up `/data` first** (see [Backups](#backups)) if you want to keep a copy. People, devices, passwords and settings stay.
 
+That backup, and any backup or snapshot from before the upgrade, still holds the old history, readable by anyone who has it and `PP_DB_KEY`. Keep those backups as carefully as before, or delete them once you no longer need them. Only backups made after the upgrade have end-to-end encrypted clips.
+
 - Update the server and the apps together. Apps from before this version stop syncing: the server answers them with "Update PrivatePaste to keep syncing." until they are updated. New apps on a server that isn't updated yet show "Update your PrivatePaste server to keep syncing."
 - After the upgrade, set up encryption from an owner device or the web UI (see [End-to-end encryption](#end-to-end-encryption)). Devices stay signed in; each one asks for the passphrase once.
 - When an updated app first meets the upgraded server, it deletes its local history cache, thumbnails and unsent clips, so no readable copy from before is left on the device either.
@@ -89,7 +91,7 @@ Anyone changes their own password under **Settings > Change password** (it signs
 
 1. Get a consistent copy of `/data` (the `privatepaste-data` volume): either stop the container first (`docker compose stop`, copy, `docker compose start`), or take a snapshot of the volume. Copying the files of a running server can catch the database mid-write.
 2. Store `PP_DB_KEY` separately and safely (for example in a password manager), not next to the backup. The backup is encrypted with it: **without `PP_DB_KEY` a backup is useless**, and anyone who has both the backup and the key can read the metadata (people, devices, times, sizes).
-3. The clips in a backup are also end-to-end encrypted: after a restore, devices unlock them with the passphrase that was in use when the backup was taken.
+3. The clips in a backup made after the upgrade to end-to-end encryption are also end-to-end encrypted: after a restore, devices unlock them with the passphrase that was in use when the backup was taken. Backups from before that upgrade still contain the old history, readable with `PP_DB_KEY`: keep them as carefully as before, or delete them once you no longer need them.
 
 ## Clearing history and auto-delete
 
