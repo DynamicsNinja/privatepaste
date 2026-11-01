@@ -53,14 +53,22 @@ private fun hkdf(ikm: ByteArray, info: String): ByteArray {
 
 private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
 
+/** The [VaultKey] was closed (signed out, or replaced after a reset) while something still wanted to use it. */
+class VaultKeyClosedException : IllegalStateException("The vault key was closed.")
+
 /**
  * The per-server vault key (VK) and the subkeys derived from it. The server never sees any of these. [close] wipes the
- * key material; any use afterwards throws [IllegalStateException].
+ * key material; any use afterwards throws [VaultKeyClosedException].
+ *
+ * Users never touch the live arrays: [useEncKey], [useHashKey] and [export] hand out a copy taken under the same lock
+ * [close] takes, so a close that races a seal or an open either happens before the copy (the use throws) or after it
+ * (the use finishes with the real key). No crypto ever runs on wiped bytes.
  */
 class VaultKey private constructor(private val vk: ByteArray) : AutoCloseable {
     private val enc: ByteArray = hkdf(vk, "privatepaste v1 enc")
     private val hash: ByteArray = hkdf(vk, "privatepaste v1 hash")
-    private var closed = false
+    private val lock = Any()
+    @Volatile private var closed = false
 
     /** Identifies the key without revealing it, so devices can tell whether they hold the server's current vault. */
     val keyId: String = hkdf(vk, "privatepaste v1 key id").let { full ->
@@ -71,22 +79,38 @@ class VaultKey private constructor(private val vk: ByteArray) : AutoCloseable {
         }
     }
 
-    internal val encKey: ByteArray get() = live(enc)
-    internal val hashKey: ByteArray get() = live(hash)
+    /** Runs [block] with a copy of the encryption subkey, wiped afterwards. */
+    internal fun <T> useEncKey(block: (ByteArray) -> T): T = use(copyOf(enc), block)
+
+    /** Runs [block] with a copy of the hash subkey, wiped afterwards. */
+    internal fun <T> useHashKey(block: (ByteArray) -> T): T = use(copyOf(hash), block)
 
     /** A copy of the raw key; the caller owns it and should zero it when done. */
-    fun export(): ByteArray = live(vk).clone()
+    fun export(): ByteArray = copyOf(vk)
 
     override fun close() {
-        closed = true
-        vk.fill(0)
-        enc.fill(0)
-        hash.fill(0)
+        synchronized(lock) {
+            closed = true
+            vk.fill(0)
+            enc.fill(0)
+            hash.fill(0)
+        }
     }
 
-    private fun live(bytes: ByteArray): ByteArray {
-        check(!closed) { "The vault key was closed." }
-        return bytes
+    /** True when every byte of key material is zero (test hook for [close]). */
+    internal fun isWiped(): Boolean = synchronized(lock) { (vk + enc + hash).all { it == 0.toByte() } }
+
+    private fun copyOf(bytes: ByteArray): ByteArray = synchronized(lock) {
+        if (closed) throw VaultKeyClosedException()
+        bytes.clone()
+    }
+
+    private fun <T> use(copy: ByteArray, block: (ByteArray) -> T): T {
+        try {
+            return block(copy)
+        } finally {
+            copy.fill(0)
+        }
     }
 
     companion object {
@@ -107,14 +131,14 @@ object SealedBox {
     private const val OVERHEAD = 1 + GCM_NONCE_BYTES + GCM_TAG_BYTES
 
     fun seal(key: VaultKey, purpose: String, bytes: ByteArray): ByteArray =
-        seal(key.encKey, aad(purpose), bytes, randomBytes(GCM_NONCE_BYTES))
+        key.useEncKey { seal(it, aad(purpose), bytes, randomBytes(GCM_NONCE_BYTES)) }
 
     /** @throws GeneralSecurityException if the input is malformed, tampered with, or sealed under another key or purpose. */
-    fun open(key: VaultKey, purpose: String, sealed: ByteArray): ByteArray = open(key.encKey, aad(purpose), sealed)
+    fun open(key: VaultKey, purpose: String, sealed: ByteArray): ByteArray = key.useEncKey { open(it, aad(purpose), sealed) }
 
     // Only the test vectors need a fixed nonce, hence the internal overloads.
     internal fun seal(key: VaultKey, purpose: String, bytes: ByteArray, nonce: ByteArray): ByteArray =
-        seal(key.encKey, aad(purpose), bytes, nonce)
+        key.useEncKey { seal(it, aad(purpose), bytes, nonce) }
 
     internal fun seal(aesKey: ByteArray, aad: ByteArray, plaintext: ByteArray, nonce: ByteArray): ByteArray {
         require(nonce.size == GCM_NONCE_BYTES) { "The nonce is $GCM_NONCE_BYTES bytes." }
@@ -149,7 +173,10 @@ object BlobCipher {
 
     fun encrypt(key: VaultKey, input: InputStream, output: OutputStream) = encrypt(key, input, output, randomBytes(PREFIX_SIZE))
 
-    internal fun encrypt(key: VaultKey, input: InputStream, output: OutputStream, noncePrefix: ByteArray) {
+    internal fun encrypt(key: VaultKey, input: InputStream, output: OutputStream, noncePrefix: ByteArray) =
+        key.useEncKey { encKey -> encrypt(encKey, input, output, noncePrefix) }
+
+    private fun encrypt(encKey: ByteArray, input: InputStream, output: OutputStream, noncePrefix: ByteArray) {
         require(noncePrefix.size == PREFIX_SIZE) { "The nonce prefix is $PREFIX_SIZE bytes." }
         output.write(byteArrayOf(VERSION) + noncePrefix)
         // Reading one chunk ahead tells us whether the current one is final before it is sealed.
@@ -161,7 +188,7 @@ object BlobCipher {
             while (true) {
                 val nextLength = if (currentLength < CHUNK_SIZE) 0 else input.readChunk(next)
                 val isFinal = nextLength == 0
-                val cipher = gcm(Cipher.ENCRYPT_MODE, key.encKey, nonce(noncePrefix, index), aad(index, isFinal))
+                val cipher = gcm(Cipher.ENCRYPT_MODE, encKey, nonce(noncePrefix, index), aad(index, isFinal))
                 output.write(cipher.doFinal(current, 0, currentLength))
                 if (isFinal) return
                 current = next.also { next = current }
@@ -179,7 +206,10 @@ object BlobCipher {
      * chunks were written, so the caller must discard [output] on failure.
      * @throws GeneralSecurityException if the blob is malformed, tampered with, truncated, reordered or has trailing data.
      */
-    fun decrypt(key: VaultKey, input: InputStream, output: OutputStream) {
+    fun decrypt(key: VaultKey, input: InputStream, output: OutputStream) =
+        key.useEncKey { encKey -> decrypt(encKey, input, output) }
+
+    private fun decrypt(encKey: ByteArray, input: InputStream, output: OutputStream) {
         val header = ByteArray(HEADER_SIZE)
         if (input.readChunk(header) < HEADER_SIZE || header[0] != VERSION) throw GeneralSecurityException("Not an encrypted blob.")
         val prefix = header.copyOfRange(1, HEADER_SIZE)
@@ -193,7 +223,7 @@ object BlobCipher {
             // A short read means end of stream, so that chunk is the last; a full one is last only if nothing follows.
             val nextLength = if (currentLength < chunkSize) 0 else input.readChunk(next)
             val isFinal = nextLength == 0
-            val plain = gcm(Cipher.DECRYPT_MODE, key.encKey, nonce(prefix, index), aad(index, isFinal)).doFinal(current, 0, currentLength)
+            val plain = gcm(Cipher.DECRYPT_MODE, encKey, nonce(prefix, index), aad(index, isFinal)).doFinal(current, 0, currentLength)
             try {
                 output.write(plain)
             } finally {
@@ -226,7 +256,7 @@ object BlobCipher {
 /** The hash the server sees for dedup: a plain content hash would let anyone confirm a guessed clip, so it is keyed. */
 object KeyedHash {
     /** Lowercase hex of HMAC-SHA256(hashKey, UTF8(contentHash)). */
-    fun forHash(key: VaultKey, contentHash: String): String = hex(hmacSha256(key.hashKey, utf8(contentHash)))
+    fun forHash(key: VaultKey, contentHash: String): String = key.useHashKey { hex(hmacSha256(it, utf8(contentHash))) }
 }
 
 class HandoverQr(val id: UUID, val otk: ByteArray, val keyId: String)

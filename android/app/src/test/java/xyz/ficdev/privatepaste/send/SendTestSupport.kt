@@ -67,12 +67,15 @@ class SenderFixture(val dir: File) {
     @Volatile var codec: ClipCodec? = ClipCodec(vaultKey)
     @Volatile var limits = ServerLimits(textKb = 1024, imageMb = 20)
     val keyResets = AtomicInteger()
+
+    /** The key ids the sender reported as reset, in order. */
+    val resetKeyIds: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
     val sender = sender()
     val imageDir = File(dir, "queue-images")
 
     fun sender(isEnding: () -> Boolean = { false }) = ClipSender(
         api, { codec }, { limits }, queue, cache, capture, { notices += it }, Clock.fixed(now, ZoneOffset.UTC),
-        onKeyReset = { keyResets.incrementAndGet() }, isEnding = isEnding,
+        onKeyReset = { resetKeyIds += it; keyResets.incrementAndGet() }, isEnding = isEnding,
     )
 
     /** A clip as the server returns it: [text] sealed in its payload under [vaultKey]. */

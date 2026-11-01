@@ -102,7 +102,12 @@ class ClipCodecTest {
     @Test
     fun unknownKindForeignKeyAndBadPayloadDecodeAsUnknown() {
         val meta = codec.encodeText("secret", null, false).meta
-        assertEquals(ClipKind.UNKNOWN, codec.decode(wire(meta, ClipKind.UNKNOWN)).kind)
+        // An unknown kind keeps none of the server's own fields, so search can't match them.
+        val newerKind = codec.decode(wire(meta, ClipKind.UNKNOWN).copy(text = "server text", width = 3, height = 4))
+        assertEquals(ClipKind.UNKNOWN, newerKind.kind)
+        assertNull(newerKind.text)
+        assertNull(newerKind.width)
+        assertNull(newerKind.height)
 
         val foreign = ClipCodec(VaultKey.create()).decode(wire(meta))
         assertEquals(ClipKind.UNKNOWN, foreign.kind)
@@ -220,5 +225,14 @@ class ClipCodecTest {
         val meta = codec.encodeText("hello", null, false).meta
         assertEquals(KeyedHash.forHash(key, ContentHash.text("hello")), meta.hash)
         assertEquals(meta.hash, codec.keyedHash(ContentHash.text("hello")))
+    }
+
+    @Test
+    fun aClosedKeyIsNotABadClip() {
+        val meta = codec.encodeText("fine", null, false).meta
+        key.close()
+        // Not UNKNOWN: the clip is fine, the key is gone. The caller must not cache anything for it.
+        assertThrows(VaultKeyClosedException::class.java) { codec.decode(wire(meta)) }
+        assertThrows(VaultKeyClosedException::class.java) { codec.encodeText("x", null, false) }
     }
 }

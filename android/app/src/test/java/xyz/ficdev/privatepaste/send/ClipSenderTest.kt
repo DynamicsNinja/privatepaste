@@ -190,7 +190,7 @@ class ClipSenderTest {
 
         assertTrue(f.queue.isEmpty)
         assertEquals("no upload under the old key after the first 409", 1, f.server.requestCount)
-        assertEquals(1, f.keyResets.get())
+        assertEquals(listOf(f.vaultKey.keyId), f.resetKeyIds)
         assertTrue("no per-clip notification", f.notices.isEmpty())
 
         f.sender.flushQueue()   // nothing left to retry
@@ -474,6 +474,26 @@ class ClipSenderTest {
         assertEquals(SendResult.SignedOut, result)
         assertTrue("never reaches the next session's queue", f.queue.isEmpty)
         assertNull(f.capture.lastLocalCaptureAt)
+    }
+
+    @Test
+    fun aKeyClosedMidSendNeverSealsAndQueuesTheClip() = runBlocking {
+        val closed = xyz.ficdev.privatepaste.core.crypto.VaultKey.create().also { it.close() }
+        f.codec = ClipCodec(closed)
+        f.respondWith { f.echo(it) }
+
+        assertEquals(SendResult.Queued, f.sender.sendText("typed during a reset"))
+        assertEquals(SendResult.Queued, f.sender.sendImageBytes(SenderFixture.png(), "image/png"))
+        assertEquals("nothing goes out under a wiped key", 0, f.server.requestCount)
+        assertEquals(2, f.queue.size)
+
+        f.sender.flushQueue()   // still the closed key: the items wait, no attempt counted
+        assertEquals(0, f.server.requestCount)
+        assertEquals(0, f.queue.peek()!!.attempts)
+
+        // Once signing out, the same race drops the clip instead.
+        assertEquals(SendResult.SignedOut, f.sender { true }.sendText("typed during sign-out"))
+        assertEquals(2, f.queue.size)
     }
 }
 

@@ -14,6 +14,7 @@ import xyz.ficdev.privatepaste.api.UpdateRequiredException
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.crypto.ClipTooLargeException
 import xyz.ficdev.privatepaste.core.crypto.UnreadableImageException
+import xyz.ficdev.privatepaste.core.crypto.VaultKeyClosedException
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ServerLimits
@@ -87,8 +88,9 @@ internal fun ImageRead.toFailure(): SendResult? = when (this) {
  * Every clip is sealed with [codec] at upload time; the queue keeps plaintext (encrypted at rest on this phone), so a
  * clip queued while locked or offline goes out under whatever key is current when it is sent. Without a codec a send
  * is queued and a flush waits. [limits] gives the server's limits (images are checked against `imageMb`).
- * [onKeyReset] is called when the server says the vault key was reset (409): queued clips are dropped then, since
- * they were meant for the history that the reset wiped. [notifier] gets messages about queued clips only (live results
+ * [onKeyReset] gets the id of the key the server refused as reset (409): queued clips are dropped then, since they
+ * were meant for the history that the reset wiped. A key closed mid-send (sign-out, or a reset handled meanwhile)
+ * never seals anything: the clip is queued instead, or dropped once the session is ending. [notifier] gets messages about queued clips only (live results
  * are returned to the caller to show).
  */
 class ClipSender(
@@ -100,7 +102,7 @@ class ClipSender(
     private val capture: LocalCaptureClock,
     private val notifier: (String) -> Unit,
     private val clock: Clock,
-    private val onKeyReset: () -> Unit = {},
+    private val onKeyReset: (keyId: String) -> Unit = {},
     private val isEnding: () -> Boolean = { false },
 ) {
     private val flushLock = Mutex()
@@ -116,7 +118,11 @@ class ClipSender(
         val copiedAt = clock.instant()
         val enqueue = { queue.enqueueText(text, copiedAt) }
         val c = codec() ?: return@withContext queueOnly(copiedAt, enqueue)
-        val encoded = c.encodeText(text, copiedAt = null, backfill = false)
+        val encoded = try {
+            c.encodeText(text, copiedAt = null, backfill = false)
+        } catch (e: VaultKeyClosedException) {
+            return@withContext queueOnly(copiedAt, enqueue)
+        }
         // Synced clips carry the keyed hash, so that is what is compared.
         if (encoded.meta.hash == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
         live(c, copiedAt, enqueue) { api.uploadClip(encoded.meta, encoded.thumb, encoded.blobs) }
@@ -159,6 +165,8 @@ class ClipSender(
             return SendResult.TooLarge(e.message ?: IMAGE_TOO_LARGE)
         } catch (e: UnreadableImageException) {
             return SendResult.Rejected(UNREADABLE_IMAGE)
+        } catch (e: VaultKeyClosedException) {
+            return withContext(Dispatchers.IO) { queueOnly(copiedAt, enqueue) }
         }
         return withContext(Dispatchers.IO) {
             if (encoded.meta.hash == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
@@ -175,17 +183,21 @@ class ClipSender(
             val uploaded = upload()
             synchronized(commitLock) {
                 if (isEnding()) return SendResult.SignedOut
-                // Opened only now: once the session is ending, its vault key may already be closed.
-                val clip = c.decode(uploaded)
-                cache.upsert(clip, fromSync = false)
-                cache.save()
-                capture.record(clip.lastCopiedAt)
+                // Opened only now: once the session is ending, its vault key may already be closed. Closed by a reset
+                // meanwhile, the clip still went out; it just isn't added to the history, which the reset wipes.
+                try {
+                    cache.upsert(c.decode(uploaded), fromSync = false)
+                    cache.save()
+                } catch (e: VaultKeyClosedException) {
+                    Log.w(TAG, "The vault key was closed before the sent clip could be cached")
+                }
+                capture.record(uploaded.lastCopiedAt)
             }
             SendResult.Sent
         } catch (e: ApiException.Unauthorized) {
             SendResult.SignedOut
         } catch (e: KeyResetException) {
-            onKeyReset()
+            onKeyReset(c.keyId)
             SendResult.Rejected(e.message ?: KEY_RESET)
         } catch (e: ApiException.Rejected) {
             SendResult.Rejected(e.message ?: "The server refused the clip")
@@ -232,7 +244,9 @@ class ClipSender(
                             queue.removeHead()
                             continue
                         }
-                        c.encodeImage(bytes, item.copiedAt, backfill = true, limits = limits())
+                        val serverLimits = limits()
+                        // Decoding, rotating and re-encoding the image is CPU work.
+                        withContext(Dispatchers.Default) { c.encodeImage(bytes, item.copiedAt, backfill = true, limits = serverLimits) }
                     }
                     else -> c.encodeText(item.text.orEmpty(), item.copiedAt, backfill = true)
                 }
@@ -243,10 +257,12 @@ class ClipSender(
                 throw e
             } catch (e: UpdateRequiredException) {
                 throw e
+            } catch (e: VaultKeyClosedException) {
+                return   // signed out or reset meanwhile: nothing is sealed under a closed key, the item stays
             } catch (e: KeyResetException) {
                 // Everything queued was meant for the history the reset wiped: none of it is retried.
                 queue.clear()
-                onKeyReset()
+                onKeyReset(c.keyId)
                 return
             } catch (e: ClipTooLargeException) {
                 notifier(e.message ?: IMAGE_TOO_LARGE)
@@ -275,8 +291,12 @@ class ClipSender(
                 continue
             }
             queue.removeHead() // uploaded: never send it twice
-            cache.upsert(c.decode(clip), fromSync = false)
-            cache.save()
+            try {
+                cache.upsert(c.decode(clip), fromSync = false)
+                cache.save()
+            } catch (e: VaultKeyClosedException) {
+                return
+            }
         }
     }
 

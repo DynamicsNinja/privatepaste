@@ -185,15 +185,21 @@ class SessionManager(
         useVaultKey(key)
     }
 
-    /** Saves [key] and makes it the current one (this manager owns it from now on); the one it replaces is closed. */
-    suspend fun useVaultKey(key: VaultKey) = mutex.withLock {
+    /**
+     * Saves [key] and makes it the current one; the one it replaces is closed. This manager owns [key] from the call
+     * on: when it can't be kept (a failed save, or cancelled while waiting for the lock) it is closed.
+     */
+    suspend fun useVaultKey(key: VaultKey) {
+        var kept = false
         try {
-            withContext(io + NonCancellable) { vaultKeys?.save(key) }
-        } catch (e: IOException) {
-            key.close()
-            throw e
+            mutex.withLock {
+                withContext(io + NonCancellable) { vaultKeys?.save(key) }
+                replaceVaultKey(key)
+                kept = true
+            }
+        } finally {
+            if (!kept) key.close()
         }
-        replaceVaultKey(key)
     }
 
     /**

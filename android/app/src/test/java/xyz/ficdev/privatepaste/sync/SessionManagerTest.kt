@@ -30,6 +30,8 @@ import xyz.ficdev.privatepaste.storage.ThumbnailStore
 import xyz.ficdev.privatepaste.storage.VaultKeyStore
 import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
 import xyz.ficdev.privatepaste.core.crypto.VaultKey
+import xyz.ficdev.privatepaste.core.crypto.VaultKeyClosedException
+import kotlinx.coroutines.launch
 import xyz.ficdev.privatepaste.core.crypto.WrongPassphraseException
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
@@ -285,5 +287,28 @@ class SessionManagerTest {
         m.unlockVault(wrap, "correct horse battery")
         assertEquals(key.keyId, m.vaultKey.value!!.keyId)
         assertEquals(key.keyId, vault.load()!!.keyId)
+    }
+
+    @Test
+    fun aKeyThatCannotBeKeptIsClosed(): Unit = runBlocking {
+        val m = manager()
+        server.enqueue(json("""{"deviceId":"dev-1","token":"tok-1"}"""))
+        assertEquals(SignInResult.Ok, m.signIn(url, "Ana", "dev", "Pixel 9"))
+        // A slow logout holds the manager's lock while the key waits for it.
+        server.enqueue(MockResponse().setResponseCode(204).setHeadersDelay(2, java.util.concurrent.TimeUnit.SECONDS))
+        val signOut = launch(kotlinx.coroutines.Dispatchers.Default) { m.signOut() }
+        server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)   // the login
+        server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)   // the logout, now in flight
+
+        val key = VaultKey.create()
+        val waiting = launch(kotlinx.coroutines.Dispatchers.Default) { m.useVaultKey(key) }
+        kotlinx.coroutines.delay(200)
+        waiting.cancel()
+        waiting.join()
+        signOut.join()
+
+        assertThrows("the abandoned key is wiped", VaultKeyClosedException::class.java) { key.export() }
+        assertNull(m.vaultKey.value)
+        assertNull(vault.load())
     }
 }

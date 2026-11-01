@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -46,8 +47,8 @@ class VaultCryptoTest {
         val key = testKey()
         val vk = section("vaultKey")
         assertEquals(vk.str("keyId"), key.keyId)
-        assertEquals(vk.str("encKey"), key.encKey.hex())
-        assertEquals(vk.str("hashKey"), key.hashKey.hex())
+        assertEquals(vk.str("encKey"), key.useEncKey { it.hex() })
+        assertEquals(vk.str("hashKey"), key.useHashKey { it.hex() })
 
         val payload = section("payload")
         val sealed = SealedBox.seal(key, payload.str("purpose"), payload.str("json").toByteArray(), payload.bytes("nonce"))
@@ -316,11 +317,55 @@ class VaultCryptoTest {
     @Test
     fun closedKeyIsWipedAndUnusable() {
         val key = VaultKey.create()
-        val snapshot = key.encKey
+        val copy = key.useEncKey { it.clone() }
         key.close()
-        assertArrayEquals(ByteArray(32), snapshot)
-        assertThrows(IllegalStateException::class.java) { key.export() }
-        assertThrows(IllegalStateException::class.java) { SealedBox.seal(key, "payload", ByteArray(1)) }
-        assertThrows(IllegalStateException::class.java) { KeyedHash.forHash(key, "x") }
+        assertTrue(key.isWiped())
+        assertFalse("a copy taken before the close is not wiped", copy.all { it == 0.toByte() })
+        assertThrows(VaultKeyClosedException::class.java) { key.export() }
+        assertThrows(VaultKeyClosedException::class.java) { SealedBox.seal(key, "payload", ByteArray(1)) }
+        assertThrows(VaultKeyClosedException::class.java) { SealedBox.open(key, "payload", ByteArray(40)) }
+        assertThrows(VaultKeyClosedException::class.java) { KeyedHash.forHash(key, "x") }
+        assertThrows(VaultKeyClosedException::class.java) {
+            BlobCipher.encrypt(key, ByteArrayInputStream(ByteArray(1)), ByteArrayOutputStream())
+        }
+    }
+
+    /** A close racing seals and opens never lets crypto run on the wiped (all-zero) key. */
+    @Test
+    fun closeRacingSealsNeverUsesZeroedBytes() {
+        val zeroKey = VaultKey.fromBytes(ByteArray(32))   // what a wiped vk would derive to
+        repeat(200) { round ->
+            val key = VaultKey.create()
+            val real = VaultKey.fromBytes(key.export())
+            val sealed = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+            val opened = java.util.concurrent.atomic.AtomicInteger()
+            val good = SealedBox.seal(real, "payload", "x".toByteArray())
+            val start = java.util.concurrent.CountDownLatch(1)
+            val workers = List(4) {
+                Thread {
+                    start.await()
+                    repeat(50) {
+                        try {
+                            sealed += SealedBox.seal(key, "payload", "secret $round".toByteArray())
+                            SealedBox.open(key, "payload", good)   // never fails as tampered: it opens, or the key is closed
+                            opened.incrementAndGet()
+                        } catch (_: VaultKeyClosedException) {
+                        }
+                    }
+                }.apply { start() }
+            }
+            start.countDown()
+            key.close()
+            workers.forEach { it.join() }
+            for (box in sealed) {
+                // Everything sealed opens under the real key, never under the wiped one.
+                assertArrayEquals("secret $round".toByteArray(), SealedBox.open(real, "payload", box))
+                assertThrows(GeneralSecurityException::class.java) { SealedBox.open(zeroKey, "payload", box) }
+                // A wiped encKey (zeros, not derived from zeros) can't open it either.
+                assertThrows(GeneralSecurityException::class.java) {
+                    SealedBox.open(ByteArray(32), "privatepaste v1 payload".toByteArray(), box)
+                }
+            }
+        }
     }
 }

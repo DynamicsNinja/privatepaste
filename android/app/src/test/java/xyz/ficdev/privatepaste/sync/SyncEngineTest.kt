@@ -1016,8 +1016,8 @@ class SyncEngineTest {
     @Test
     fun keyResetStopsAndEmits() = runTest {
         val engine = engine()
-        var resets = 0
-        backgroundScope.launch { engine.keyReset.collect { resets++ } }
+        val resets = mutableListOf<String>()
+        backgroundScope.launch { engine.keyReset.collect { resets += it } }
         engine.start()
         runCurrent()
         assertEquals(SyncState.CONNECTED, engine.state.value)
@@ -1025,7 +1025,7 @@ class SyncEngineTest {
         links.last.push(WsEvent.VaultReset)
         runCurrent()
 
-        assertEquals(1, resets)
+        assertEquals("the reset names the key it hit", listOf(vaultKey.keyId), resets)
         assertTrue(links.last.closed)
         assertEquals(SyncState.OFFLINE, engine.state.value)
         advanceTimeBy(10 * 60_000)
@@ -1102,6 +1102,27 @@ class SyncEngineTest {
         runCurrent()
         advanceTimeBy(10 * 60_000)
         assertEquals(0, links.connects)
+        assertEquals(SyncState.OFFLINE, engine.state.value)
+    }
+
+    @Test
+    fun aKeyClosedWhileOpeningCachesNothing() = runTest {
+        cache.markApplied(base, "previous")
+        val closing = VaultKey.fromBytes(vaultKey.export())
+        codec = ClipCodec(closing)
+        api.syncGate = CompletableDeferred()
+        api.pages += page(clip("a", 1), clip("b", 2), latest = 2)
+        val engine = engine()
+        engine.start()
+        runCurrent()
+
+        closing.close()             // sign-out or a reset lands while the page is in flight
+        api.syncGate!!.complete(Unit)
+        runCurrent()
+
+        assertTrue("not even as unknown", cache.items.value.isEmpty())
+        assertTrue(applied.isEmpty())
+        assertEquals(0L, cache.highestSeq)
         assertEquals(SyncState.OFFLINE, engine.state.value)
     }
 }

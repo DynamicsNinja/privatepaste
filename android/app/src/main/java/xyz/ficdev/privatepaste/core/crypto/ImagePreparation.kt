@@ -47,6 +47,11 @@ object ImagePreparation {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }) ?: throw UnreadableImageException()
             upright = orient(decoded, orientation(bytes))
+            // Two full-size bitmaps at once is the peak: free the unrotated one as soon as the copy exists.
+            if (upright !== decoded) {
+                decoded.recycle()
+                decoded = null
+            }
             val png = upright.toPng()
             if (png.size > maxBytes) throw ClipTooLargeException(tooLargeMessage(maxBytes / MIB))
             thumb = thumbnailOf(upright)

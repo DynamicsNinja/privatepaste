@@ -150,9 +150,11 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             return withContext(Dispatchers.Default) { codec.decodeBlob(sealed) }
         }
 
-        /** The server says the vault key was reset. Records which key, so a later key is never thrown away. */
-        private fun keyWasReset() {
-            val keyId = sessions.vaultKey.value?.keyId
+        /**
+         * The server refused the key [keyId] as reset (the engine or the sender says which key it used), so a key set
+         * up after that is never thrown away.
+         */
+        private fun keyWasReset(keyId: String) {
             appScope.launch { onKeyReset(this@SessionGraph, keyId) }   // not in [scope]: the handling stops the engine
         }
 
@@ -206,7 +208,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                 engine.revoked.first()
                 appScope.launch { onRevoked(this@SessionGraph) }   // not in [scope]: the teardown cancels it
             }
-            scope.launch { engine.keyReset.collect { keyWasReset() } }
+            scope.launch { engine.keyReset.collect { keyWasReset(it) } }
             // Task 18 shows this; until then the engine just stays stopped.
             scope.launch { engine.updateRequired.collect { Log.i(TAG, "The server needs a newer app") } }
         }
@@ -273,7 +275,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
      * it). The session stays; syncing resumes once the phone has the new key. [keyId] is the key that was reset: a
      * signal that arrives after another key was set up is ignored.
      */
-    private suspend fun onKeyReset(g: SessionGraph, keyId: String?) = withContext(NonCancellable) {
+    private suspend fun onKeyReset(g: SessionGraph, keyId: String) = withContext(NonCancellable) {
         lifecycle.withLock {
             if (_current.value !== g || g.ending) return@withLock
             if (sessions.vaultKey.value?.keyId != keyId) return@withLock

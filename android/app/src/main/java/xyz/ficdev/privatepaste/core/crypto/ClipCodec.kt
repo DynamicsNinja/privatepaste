@@ -65,10 +65,12 @@ class ClipCodec(private val key: VaultKey) {
      * Fills in `text`, `width` and `height` from the sealed payload. Never throws for a bad clip: an unknown kind, a
      * clip sealed under another key, or a payload that doesn't open or parse comes back as [ClipKind.UNKNOWN], which
      * is shown but never copied.
+     * @throws VaultKeyClosedException when the key was closed meanwhile: that says nothing about the clip.
      */
     fun decode(wire: ClipDto): ClipDto {
-        if (wire.kind == ClipKind.UNKNOWN) return wire
+        // Never the server's own text, width or height: only what opens under this key is shown or searched.
         val unknown = wire.copy(kind = ClipKind.UNKNOWN, text = null, width = null, height = null)
+        if (wire.kind == ClipKind.UNKNOWN) return unknown
         val sealed = wire.payload
         if (wire.keyId != key.keyId || sealed == null) return unknown
         val payload = try {

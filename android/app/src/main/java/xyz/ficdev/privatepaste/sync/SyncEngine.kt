@@ -32,6 +32,7 @@ import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.KeyResetException
 import xyz.ficdev.privatepaste.api.UpdateRequiredException
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
+import xyz.ficdev.privatepaste.core.crypto.VaultKeyClosedException
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.WsEvent
@@ -96,10 +97,15 @@ class SyncEngine(
         emit(Unit)
     }
 
-    private val keyResets = Channel<Unit>(Channel.CONFLATED)
+    private val keyResets = Channel<String>(Channel.CONFLATED)
 
-    /** The vault key no longer matches the server's (reset by the owner); the run has ended. For a single collector. */
-    val keyReset: Flow<Unit> = keyResets.receiveAsFlow()
+    /**
+     * The id of a vault key the server no longer uses (reset by the owner); the run has ended. For a single collector.
+     */
+    val keyReset: Flow<String> = keyResets.receiveAsFlow()
+
+    /** The key id of the connection that ended as a key reset. */
+    @Volatile private var resetKeyId: String? = null
 
     private val updates = Channel<Unit>(Channel.CONFLATED)
 
@@ -251,10 +257,15 @@ class SyncEngine(
                     saveIfDirty()     // before the host hears of it and clears the cache
                     signOut()
                 }
-                Outcome.KEY_RESET, Outcome.UPDATE_REQUIRED -> {
+                Outcome.KEY_RESET -> {
                     saveIfDirty()     // likewise
                     _state.value = SyncState.OFFLINE
-                    (if (end == Outcome.KEY_RESET) keyResets else updates).trySend(Unit)
+                    resetKeyId?.let { keyResets.trySend(it) }
+                }
+                Outcome.UPDATE_REQUIRED -> {
+                    saveIfDirty()
+                    _state.value = SyncState.OFFLINE
+                    updates.trySend(Unit)
                 }
                 else -> _state.value = SyncState.OFFLINE
             }
@@ -346,11 +357,16 @@ class SyncEngine(
         } catch (e: RevokedException) {
             return Outcome.REVOKED
         } catch (e: KeyResetSignal) {
+            resetKeyId = codec.keyId
             return Outcome.KEY_RESET
         } catch (e: KeyResetException) {
+            resetKeyId = codec.keyId
             return Outcome.KEY_RESET
         } catch (e: UpdateRequiredException) {
             return Outcome.UPDATE_REQUIRED
+        } catch (e: VaultKeyClosedException) {
+            // Signed out or reset meanwhile. The clip being opened is not cached (not even as unknown): stop here.
+            return Outcome.LOCKED
         } catch (e: Exception) {
             report("Connection to the server lost", e)
             return Outcome.FAILED
@@ -560,16 +576,20 @@ class SyncEngine(
 
     private fun markDirty() = synchronized(saveLock) { dirty = true }
 
-    private fun saveIfDue() = synchronized(saveLock) {
-        if (!dirty) return
-        val now = clock.instant()
-        val last = lastSaveAt
-        if (last != null && elapsedMs(last, now) < SAVE_INTERVAL_MS) return
-        saveLocked(now)
+    private fun saveIfDue() {
+        synchronized(saveLock) {
+            if (!dirty) return
+            val now = clock.instant()
+            val last = lastSaveAt
+            if (last != null && elapsedMs(last, now) < SAVE_INTERVAL_MS) return
+            saveLocked(now)
+        }
     }
 
-    private fun saveIfDirty() = synchronized(saveLock) {
-        if (dirty) saveLocked(clock.instant())
+    private fun saveIfDirty() {
+        synchronized(saveLock) {
+            if (dirty) saveLocked(clock.instant())
+        }
     }
 
     // Caller holds saveLock. HistoryCache.save logs its own write failures.
