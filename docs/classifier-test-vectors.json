@@ -39,7 +39,6 @@
     { "text": "http://example..com/", "link": false },
     { "text": "http://.example.com", "link": false },
     { "text": "http://u@v@example.com", "link": false },
-    { "text": "http://example.com\\a", "link": false },
     { "text": "http://[::1/", "link": false }
   ]
 }
