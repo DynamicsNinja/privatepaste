@@ -87,7 +87,8 @@ internal fun ImageRead.toFailure(): SendResult? = when (this) {
  *
  * Every clip is sealed with [codec] at upload time; the queue keeps plaintext (encrypted at rest on this phone), so a
  * clip queued while locked or offline goes out under whatever key is current when it is sent. Without a codec a send
- * is queued and a flush waits. [limits] gives the server's limits (images are checked against `imageMb`).
+ * is queued and a flush waits. [limits] gives the server's limits (text is checked against `textKb`, images against
+ * `imageMb`).
  * [onKeyReset] gets the id of the key the server refused as reset (409): queued clips are dropped then, since they
  * were meant for the history that the reset wiped. A key closed mid-send (sign-out, or a reset handled meanwhile)
  * never seals anything: the clip is queued instead, or dropped once the session is ending. [notifier] gets messages about queued clips only (live results
@@ -114,7 +115,13 @@ class ClipSender(
     val commitLock = Any()
 
     suspend fun sendText(text: String): SendResult = withContext(Dispatchers.IO) {
-        if (text.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES) return@withContext SendResult.TooLarge(TEXT_TOO_LARGE)
+        // Offline, the server's limit is unknown: 1 MB (the default) is checked now, and the server has the last word.
+        val textKb = try {
+            limits().textKb
+        } catch (e: ApiException) {
+            DEFAULT_TEXT_KB
+        }
+        if (text.toByteArray(Charsets.UTF_8).size > textKb * 1024L) return@withContext SendResult.TooLarge(textTooLarge(textKb))
         val copiedAt = clock.instant()
         val enqueue = { queue.enqueueText(text, copiedAt) }
         val c = codec() ?: return@withContext queueOnly(copiedAt, enqueue)
@@ -302,16 +309,19 @@ class ClipSender(
 
     internal companion object {
         const val TAG = "ClipSender"
-        const val MAX_TEXT_BYTES = 1024 * 1024
+        const val DEFAULT_TEXT_KB = 1024
         const val MAX_IMAGE_BYTES = 20 * 1024 * 1024
         const val ROTATE_AFTER_ATTEMPTS = 5
         const val DROP_AFTER_ATTEMPTS = 10
         const val GONE = 410
-        const val TEXT_TOO_LARGE = "Clip too large to sync (text over 1 MB)."
         const val IMAGE_TOO_LARGE = "Clip too large to sync (image over 20 MB)."
         const val GAVE_UP = "Couldn't sync a clip after several tries."
         const val UNREADABLE_IMAGE = "Couldn't read the image"
         const val KEY_RESET = "Encryption was reset."
+
+        /** Same text as the desktop's: "Clip too large to sync (text over 1 MB)." */
+        fun textTooLarge(textKb: Int): String =
+            "Clip too large to sync (text over ${if (textKb % 1024 == 0) "${textKb / 1024} MB" else "$textKb KB"})."
 
         /** Same text as `R.string.sign_in_first`, for the send results (no Context here). */
         const val SIGN_IN_FIRST = "Sign in to PrivatePaste first"

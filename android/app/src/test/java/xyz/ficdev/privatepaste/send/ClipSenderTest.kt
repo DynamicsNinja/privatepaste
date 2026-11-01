@@ -270,6 +270,27 @@ class ClipSenderTest {
     }
 
     @Test
+    fun textIsCheckedAgainstTheServersLimit() = runBlocking {
+        f.limits = f.limits.copy(textKb = 4)
+        f.respondWith { f.echo(it) }
+
+        assertEquals(SendResult.TooLarge("Clip too large to sync (text over 4 KB)."), f.sender.sendText("a".repeat(4097)))
+        assertEquals(0, f.server.requestCount)
+        assertEquals(SendResult.Sent, f.sender.sendText("a".repeat(4096)))
+        assertEquals(1, f.server.requestCount)
+    }
+
+    @Test
+    fun withTheLimitsUnknownTextIsCheckedAgainstOneMegabyte() = runBlocking {
+        f.limitsError = ApiException.Transient("offline")
+        f.respondWith { f.problem(503, "down") }
+
+        assertEquals(SendResult.TooLarge("Clip too large to sync (text over 1 MB)."), f.sender.sendText("a".repeat(1024 * 1024 + 1)))
+        assertEquals(0, f.server.requestCount)
+        assertEquals(SendResult.Queued, f.sender.sendText("a".repeat(1024 * 1024)))
+    }
+
+    @Test
     fun queuedImageFlushesAsBackfillSealed() = runBlocking {
         val png = SenderFixture.png(30, 12)
         val t = Instant.parse("2026-10-28T09:00:00Z")
