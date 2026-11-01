@@ -206,7 +206,7 @@ public class DesktopRenderTests
         cache.Upsert(Clip(3, PrivatePaste.Protocol.ClipKind.Text, "Copied from the browser", 600, "Web", "web"));
         cache.Upsert(Clip(2, PrivatePaste.Protocol.ClipKind.Text, "Meeting notes", 3000, "Old laptop", null));
         cache.Upsert(Clip(1, PrivatePaste.Protocol.ClipKind.Text, "Fridge shopping list", 4000, "Fridge", "tizen"));
-        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+        var vm = new PopupViewModel(cache, null,
             _ => Task.CompletedTask, TimeProvider.System);
         vm.MoveSelection(1);
         var window = new PopupWindow { DataContext = vm };
@@ -248,7 +248,7 @@ public class DesktopRenderTests
         cache.Upsert(Clip(3, "ssh deploy@paste.example.com", 90, "ThinkPad", "linux"));
         cache.Upsert(Clip(2, "Wi-Fi password for the guest network", 600, "Phone", "android", pinnedMinutes: 500));
         cache.Upsert(Clip(1, "IBAN DE89 3704 0044 0532 0130 00", 3000, "Web", "web", pinnedMinutes: 2000));
-        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+        var vm = new PopupViewModel(cache, null,
             _ => Task.CompletedTask, TimeProvider.System);
         if (pinnedTab) vm.SwitchTab();
         vm.MoveSelection(1);
@@ -280,13 +280,139 @@ public class DesktopRenderTests
         cache.Upsert(Clip(3, "https://paste.example.com/some/long/path?with=query", 4, "Pixel 9", "android", "Marko"));
         cache.Upsert(Clip(2, "Meeting room code 4471", 35, "MacBook", "macos", "Ana"));
         cache.Upsert(Clip(1, "A clip from before there were people", 190, "ThinkPad", "linux", null));
-        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+        var vm = new PopupViewModel(cache, null,
             _ => Task.CompletedTask, TimeProvider.System);
         Render(new PopupWindow { DataContext = vm }, theme, "popup-people", w =>
         {
             var chips = w.GetVisualDescendants().OfType<Border>().Where(b => b.Name == "PersonChip" && b.IsEffectivelyVisible).ToList();
             Assert.Equal(["Ana", "Marko", "Ana"], chips.Select(c => ((TextBlock)c.Child!).Text));
             Assert.All(chips, c => Assert.False(c.Focusable));
+        });
+    }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("dark", UnlockMode.Unlock)]
+    [InlineData("light", UnlockMode.Unlock)]
+    [InlineData("dark", UnlockMode.Setup)]
+    [InlineData("light", UnlockMode.Setup)]
+    public Task Unlock_window_renders(string theme, UnlockMode mode) => Session.Value.Dispatch(() =>
+    {
+        var vm = new UnlockViewModel(_ => Task.FromResult<string?>(null), (_, _) => Task.FromResult<string?>(null), mode,
+            mode == UnlockMode.Unlock ? VaultCopy.WasReset : null)
+        {
+            Passphrase = "my cat eats lemons daily",
+            Repeat = mode == UnlockMode.Setup ? "my cat eats lemons" : "",
+            Error = mode == UnlockMode.Unlock ? VaultCopy.WrongPassphrase : VaultCopy.Mismatch,
+        };
+        Render(new UnlockWindow { DataContext = vm }, theme, mode == UnlockMode.Unlock ? "unlock" : "setup", w =>
+        {
+            var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            Assert.Contains(mode == UnlockMode.Unlock ? "Unlock your history" : "Set up encryption", texts);
+            Assert.Equal(mode == UnlockMode.Setup, texts.Contains("Use at least 12 characters. A short sentence works well."));
+            Assert.Equal(mode == UnlockMode.Setup, Find<TextBox>(w, "RepeatBox").IsEffectivelyVisible);
+            Assert.Equal(mode == UnlockMode.Unlock, texts.Contains("Encryption was reset. Enter the new passphrase."));
+            Assert.Equal(mode == UnlockMode.Unlock ? "Unlock" : "Set up", Find<Button>(w, "SubmitButton").Content);
+            Assert.Equal('•', Find<TextBox>(w, "PassphraseBox").PasswordChar);
+            Assert.True(Find<TextBox>(w, "PassphraseBox").Focusable);   // an ordinary window: typing needs the focus
+        });
+    }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("dark", false)]
+    [InlineData("light", false)]
+    [InlineData("dark", true)]
+    [InlineData("light", true)]
+    public Task Add_device_window_renders(string theme, bool expired) => Session.Value.Dispatch(() =>
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var vm = new AddDeviceViewModel(_ => Task.FromResult((
+            new PrivatePaste.Protocol.HandoverCreated(Guid.NewGuid(), time.GetUtcNow().AddMinutes(10)),
+            "privatepaste:handover?id=0b7e6c1a-3f0e-4a8e-9b1e-1a2b3c4d5e6f&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&kid=0123456789abcdef")),
+            time);
+        vm.ShowNewCodeCommand.Execute(null);   // completes at once
+        time.Advance(TimeSpan.FromSeconds(expired ? 601 : 13));
+        vm.Tick();
+        Render(new AddDeviceWindow { DataContext = vm }, theme, expired ? "add-device-expired" : "add-device", w =>
+        {
+            Assert.Equal(!expired, Find<Border>(w, "QrCard").IsEffectivelyVisible);
+            Assert.Equal(expired, Find<StackPanel>(w, "ProblemPanel").IsEffectivelyVisible);
+            if (expired) Assert.Equal("That code has expired. Show a new one.", Find<TextBlock>(w, "ProblemText").Text);
+            else
+            {
+                Assert.Equal("9:47 left", Find<TextBlock>(w, "TimeLeftText").Text);
+                Assert.NotNull(Find<Image>(w, "QrImage").Source);
+            }
+        });
+    }, CancellationToken.None);
+
+    [Fact]
+    public void Qr_png_has_one_pixel_per_module()
+    {
+        var png = AddDeviceWindow.QrPng("privatepaste:handover?id=x&k=y&kid=z");
+        using var bitmap = SkiaSharp.SKBitmap.Decode(png);
+        Assert.Equal(bitmap.Width, bitmap.Height);
+        Assert.True(bitmap.Width is >= 21 and < 80, $"{bitmap.Width} modules");
+    }
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Settings_window_renders_encryption(string theme) => Session.Value.Dispatch(() =>
+    {
+        var vm = new SettingsViewModel("http://localhost:5299", "PC-work", "Ctrl+Shift+V", true, "Start with Windows",
+            _ => { }, _ => { }, () => Task.CompletedTask, isOwner: true,
+            changePassphrase: (_, _, _) => Task.FromResult<string?>(null), addDevice: () => { });
+        vm.StartChangePassphraseCommand.Execute(null);
+        vm.PassphraseError = "The current passphrase is wrong.";
+        Render(new SettingsWindow { DataContext = vm }, theme, "settings-encryption", w =>
+        {
+            Assert.True(Find<Border>(w, "EncryptionPanel").IsEffectivelyVisible);
+            Assert.True(Find<Button>(w, "AddDeviceButton").IsEffectivelyVisible);
+            Assert.True(Find<StackPanel>(w, "ChangePassphrasePanel").IsEffectivelyVisible);
+        });
+    }, CancellationToken.None);
+
+    private static async IAsyncEnumerable<PrivatePaste.Protocol.ClipDto> NoOlderClips(string query,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        await Task.CompletedTask;
+        yield break;
+    }
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Popup_window_renders_unknown_rows_search_older_and_banner(string theme) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 2, PrivatePaste.Protocol.ClipKind.Unknown, null, "h2", null, null,
+            100, null, "Pixel 9", now.AddMinutes(-3)) { SourceDevicePlatform = "android" });
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 1, PrivatePaste.Protocol.ClipKind.Text, "Meeting notes", "h1", null,
+            null, 100, null, "PC-work", now.AddMinutes(-9)) { SourceDevicePlatform = "windows" });
+        var vm = new PopupViewModel(cache, NoOlderClips, _ => Task.CompletedTask, TimeProvider.System)
+        {
+            Banner = VaultCopy.UpdateRequired,
+        };
+        Render(new PopupWindow { DataContext = vm }, theme, "popup-unknown", w =>
+        {
+            Assert.True(Find<Border>(w, "BannerPanel").IsEffectivelyVisible);
+            Assert.Equal("Update PrivatePaste to keep syncing.", Find<TextBlock>(w, "BannerText").Text);
+            var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            Assert.Contains("Update PrivatePaste to see this clip", texts);
+            Assert.All(w.GetVisualDescendants().OfType<Button>(), b => Assert.False(b.Focusable));
+        });
+
+        var searching = new PopupViewModel(cache, NoOlderClips, _ => Task.CompletedTask, TimeProvider.System) { Query = "invoice" };
+        Render(new PopupWindow { DataContext = searching }, theme, "popup-search-older", w =>
+        {
+            Assert.True(Assert.Single(searching.Items).IsSearchOlder);
+            var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            Assert.Contains("Search older clips", texts);
+            Assert.False(Find<Border>(w, "BannerPanel").IsEffectivelyVisible);
+            // The search row has no device line and no pin button.
+            Assert.DoesNotContain(w.GetVisualDescendants().OfType<Button>(), b => b.Classes.Contains("pin") && b.IsEffectivelyVisible);
         });
     }, CancellationToken.None);
 
@@ -321,7 +447,7 @@ public class DesktopRenderTests
                     ? now.AddMinutes(-c.GetProperty("minutesAgo").GetInt32() + 1) : null,
             });
         }
-        var vm = new PopupViewModel(cache, (_, _) => Task.FromResult<IReadOnlyList<PrivatePaste.Protocol.ClipDto>>([]),
+        var vm = new PopupViewModel(cache, null,
             _ => Task.CompletedTask, TimeProvider.System);
         vm.MoveSelection(1);
         Render(new PopupWindow { DataContext = vm }, theme, "readme-popup", scale: 2);

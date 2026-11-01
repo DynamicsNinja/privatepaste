@@ -85,8 +85,9 @@ public class PassphraseWrapTests : IDisposable
             good with { KeyId = "ABCDEF0123456789" },
             good with { KeyId = "0123" },
         ];
+        // Told apart from a wrong passphrase: the right passphrase can't open these either.
         foreach (var wrap in bad)
-            Assert.Throws<WrongPassphraseException>(() => PassphraseWrap.Unwrap(wrap, "my cat eats lemons daily"));
+            Assert.Throws<UnsupportedWrapException>(() => PassphraseWrap.Unwrap(wrap, "my cat eats lemons daily"));
     }
 
     [Fact]

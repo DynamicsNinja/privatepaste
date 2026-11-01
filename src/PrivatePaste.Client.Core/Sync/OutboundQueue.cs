@@ -81,12 +81,14 @@ public sealed class OutboundQueue(string path, byte[] key)
         }
     }
 
-    /// <summary>Drops every queued clip (persisted).</summary>
+    /// <summary>
+    /// Drops every queued clip and writes the empty queue, also when nothing is held in memory: that overwrites a file this
+    /// instance couldn't read (locked, another key), so its copies never come back.
+    /// </summary>
     public void Clear()
     {
         lock (_gate)
         {
-            if (_items.Count == 0) return;
             _items.Clear();
             Save();
         }

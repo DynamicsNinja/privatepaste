@@ -34,9 +34,18 @@ public partial class SettingsWindow : Window
                 {
                     if (e.PropertyName == nameof(SettingsViewModel.IsTypingApp) && vm.IsTypingApp)
                         Avalonia.Threading.Dispatcher.UIThread.Post(() => TypedAppBox.Focus());
+                    else if (e.PropertyName == nameof(SettingsViewModel.IsChangingPassphrase) && vm.IsChangingPassphrase)
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() => CurrentPassphraseBox.Focus());
                 };
         };
         HotkeyBox.LostFocus += (_, _) => (DataContext as SettingsViewModel)?.ApplyHotkeyCommand.Execute(null);
+        // Enter in the last passphrase box changes it, like the Change button.
+        RepeatPassphraseBox.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter || DataContext is not SettingsViewModel vm) return;
+            e.Handled = true;
+            vm.ChangePassphraseCommand.Execute(null);
+        };
     }
 
     /// <summary>The "Add" menu: apps that copied recently and are not blocked yet, then "Type a name…".</summary>

@@ -25,6 +25,7 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.14" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
     <PackageReference Include="SharpHook" Version="8.0.1" />
   </ItemGroup>
 

@@ -21,7 +21,10 @@ namespace PrivatePaste.Client.Core.Sync;
 /// A 409 "Encryption was reset" (<see cref="KeyResetException"/>): the queue is cleared (it was meant for the history the
 /// reset wiped), <see cref="KeyReset"/> is raised once, and nothing is sent under that key again.
 /// No codec (locked), a refused key, a key disposed mid-encode or a 426: nothing is sent; a live copy is queued and a flush
-/// stops without counting an attempt.
+/// stops without counting an attempt (a 426 in a flush is rethrown after that, so the sync engine stops).
+/// The server's limits are asked once per session: not while locked, and after a failed ask not again for
+/// <see cref="LimitsRetryDelay"/> on the copy path. While they are unknown, text or an image over the default limit is queued (the
+/// server's own limit may be higher) instead of being refused for good.
 /// <see cref="UnauthorizedApiException"/> is NOT swallowed, queued or dropped: it propagates to the caller (sync engine/host),
 /// which signs out. A queued item stays queued; a live copy that hit it is not retained.
 /// A copy marked private, or from an app <c>isBlockedApp</c> names, is ignored (see <see cref="OnClipboardChangedAsync"/>).
@@ -43,6 +46,8 @@ public sealed class ClipboardCoordinator(
     public const int RotateAfterAttempts = 5;
     /// <summary>A queued clip that failed this many times is dropped.</summary>
     public const int DropAfterAttempts = 10;
+    /// <summary>After a failed ask for the server's limits, copies don't ask again for this long (offline, every copy would).</summary>
+    public static readonly TimeSpan LimitsRetryDelay = TimeSpan.FromSeconds(30);
 
     /// <summary>After the app writes the clipboard, the first change seen within this span is its own write (OS may transform it).</summary>
     private static readonly TimeSpan OwnWriteWindow = TimeSpan.FromSeconds(1);
@@ -55,6 +60,7 @@ public sealed class ClipboardCoordinator(
     private readonly List<string> _recentApps = [];
     private readonly Func<string, bool> _isBlockedApp = isBlockedApp ?? (_ => false);
     private volatile ServerLimitsDto? _limits;
+    private long _limitsRetryAtTicks;   // UTC ticks; 0 = ask at once
     /// <summary>The key id the server refused as reset: nothing is sent under it again.</summary>
     private volatile string? _refusedKeyId;
 
@@ -111,12 +117,26 @@ public sealed class ClipboardCoordinator(
 
             // Cheap checks first: whitespace, then size, so oversized items never get decoded or hashed.
             if (content is ClipboardContent.Text { Value: var v } && string.IsNullOrWhiteSpace(v)) return;
-            var limits = await LimitsAsync(ct).ConfigureAwait(false);
-            if (Oversize(content, limits) is { } over)
+            var known = await LimitsAsync(force: false, ct).ConfigureAwait(false);
+            var limits = known ?? DefaultLimits;
+            var over = Oversize(content, limits);
+            if (over is not null && known is null && IsOnlyOverServerLimit(content))
             {
-                if (over.Fingerprint == _lastLocalHash) return;   // same oversized content again: already notified
-                _lastLocalHash = over.Fingerprint;
-                notifier.Notify(over.Message);
+                // The server's limit isn't known (offline or locked) and may well be higher: keep it for the flush, which
+                // checks against the real limit.
+                if (over.Value.Fingerprint == _lastLocalHash) return;
+                var queuedAt = time.GetUtcNow();
+                queue.Enqueue(content, queuedAt);
+                RecordLocalCapture(queuedAt);
+                _lastLocalHash = over.Value.Fingerprint;
+                return;
+            }
+            if (over is { } tooLarge)
+            {
+                var (fingerprint, message) = tooLarge;
+                if (fingerprint == _lastLocalHash) return;   // same oversized content again: already notified
+                _lastLocalHash = fingerprint;
+                notifier.Notify(message);
                 return;
             }
 
@@ -233,7 +253,8 @@ public sealed class ClipboardCoordinator(
                 ClipDto stored;
                 try
                 {
-                    var limits = await LimitsAsync(ct).ConfigureAwait(false);
+                    // Unknown limits mean the server can't be reached: the item waits, without counting an attempt.
+                    if (await LimitsAsync(force: true, ct).ConfigureAwait(false) is not { } limits) return;
                     var upload = await c.EncodeAsync(item.Content, item.CopiedAt, backfill: true, limits, ct).ConfigureAwait(false);
                     stored = await api.UploadClipAsync(upload, ct).ConfigureAwait(false);
                 }
@@ -243,9 +264,14 @@ public sealed class ClipboardCoordinator(
                     return;
                 }
                 // Nothing was sent: the item stays, without counting an attempt.
-                catch (Exception e) when (e is VaultKeyClosedException or UpdateRequiredException)
+                catch (VaultKeyClosedException)
                 {
                     return;
+                }
+                // The same, but the engine has to know: this app is too old to sync at all.
+                catch (UpdateRequiredException)
+                {
+                    throw;
                 }
                 catch (ClipTooLargeException e)
                 {
@@ -354,6 +380,10 @@ public sealed class ClipboardCoordinator(
         finally { _gate.Release(); }
     }
 
+    /// <summary>Over a limit only the server sets (size), not the fixed 50-megapixel one every client applies.</summary>
+    private static bool IsOnlyOverServerLimit(ClipboardContent content) =>
+        content is ClipboardContent.Text || content is ClipboardContent.Image i && !ImagePreparation.IsOverPixelLimit(i.Png);
+
     private bool IsPrivateOrBlocked(ClipboardContent content) =>
         content.IsPrivate || (content.SourceApp is { Length: > 0 } app && _isBlockedApp(app));
 
@@ -433,12 +463,15 @@ public sealed class ClipboardCoordinator(
     }
 
     /// <summary>
-    /// The server's limits, fetched once per session (one coordinator). Offline, or on any failure, the defaults stand in
-    /// for this call only: the upload itself then fails and queues, and the flush asks again.
+    /// The server's limits, fetched once per session (one coordinator); null while unknown. Not asked while there is no
+    /// usable key (nothing is sent then anyway). After a failure, only a <paramref name="force"/>d ask (a flush, which the
+    /// engine paces itself) tries again before <see cref="LimitsRetryDelay"/> has passed.
     /// </summary>
-    private async Task<ServerLimitsDto> LimitsAsync(CancellationToken ct)
+    private async Task<ServerLimitsDto?> LimitsAsync(bool force, CancellationToken ct)
     {
         if (_limits is { } known) return known;
+        if (UsableCodec() is null) return null;
+        if (!force && time.GetUtcNow().UtcTicks < Interlocked.Read(ref _limitsRetryAtTicks)) return null;
         try
         {
             var limits = (await api.GetServerInfoAsync(ct).ConfigureAwait(false))?.Limits ?? DefaultLimits;
@@ -446,7 +479,11 @@ public sealed class ClipboardCoordinator(
             return limits;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception) { return DefaultLimits; }
+        catch (Exception)
+        {
+            Interlocked.Exchange(ref _limitsRetryAtTicks, (time.GetUtcNow() + LimitsRetryDelay).UtcTicks);
+            return null;
+        }
     }
 
     /// <summary>The current codec, unless there is none (locked) or the server refused its key as reset.</summary>

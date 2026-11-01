@@ -18,6 +18,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action<bool> _setNotifyOnClipArrival;
     private readonly Func<IReadOnlyList<string>> _recentSourceApps;
     private readonly Action<IReadOnlyList<string>> _setBlockedApps;
+    private readonly Func<string, string, string, Task<string?>>? _changePassphrase;
+    private readonly Action? _addDevice;
     private string _appliedHotkey;
 
     public SettingsViewModel(
@@ -25,8 +27,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         Action<HotkeyGesture> applyHotkey, Action<bool> setAutostart, Func<Task> signOut,
         bool notifyOnClipArrival = true, Action<bool>? setNotifyOnClipArrival = null,
         IReadOnlyList<string>? blockedApps = null, Func<IReadOnlyList<string>>? recentSourceApps = null,
-        Action<IReadOnlyList<string>>? setBlockedApps = null, bool canIdentifySourceApp = true)
+        Action<IReadOnlyList<string>>? setBlockedApps = null, bool canIdentifySourceApp = true,
+        bool isOwner = false, Func<string, string, string, Task<string?>>? changePassphrase = null, Action? addDevice = null)
     {
+        _changePassphrase = changePassphrase;
+        _addDevice = addDevice;
+        _isOwner = isOwner;
+        _canChangePassphrase = isOwner && changePassphrase is not null;
+        _canAddDevice = addDevice is not null;
         Server = server;
         DeviceName = deviceName;
         AutostartLabel = autostartLabel;
@@ -149,6 +157,109 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         IsTypingApp = false;
         TypedApp = "";
+    }
+
+    // ---- Encryption ----
+
+    private readonly bool _isOwner;
+
+    /// <summary>Only the owner may change the passphrase (the server refuses anyone else), and only while unlocked.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsEncryption))]
+    private bool _canChangePassphrase;
+
+    /// <summary>Hands this computer's key to a new device; only while unlocked.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsEncryption))]
+    private bool _canAddDevice;
+
+    public bool ShowsEncryption => CanChangePassphrase || CanAddDevice;
+
+    /// <summary>The vault locked or unlocked while the window is open: the encryption actions follow.</summary>
+    public void SetUnlocked(bool unlocked)
+    {
+        CanChangePassphrase = unlocked && _isOwner && _changePassphrase is not null;
+        CanAddDevice = unlocked && _addDevice is not null;
+        if (!CanChangePassphrase) CancelChangePassphrase();
+    }
+
+    /// <summary>True while the change-passphrase fields are open.</summary>
+    [ObservableProperty]
+    private bool _isChangingPassphrase;
+
+    [ObservableProperty]
+    private string _currentPassphrase = "";
+
+    [ObservableProperty]
+    private string _newPassphrase = "";
+
+    [ObservableProperty]
+    private string _repeatPassphrase = "";
+
+    [ObservableProperty]
+    private string? _passphraseError;
+
+    /// <summary>"Passphrase changed." after a change went through.</summary>
+    [ObservableProperty]
+    private string? _passphraseNotice;
+
+    [ObservableProperty, NotifyCanExecuteChangedFor(nameof(ChangePassphraseCommand))]
+    private bool _isChangingBusy;
+
+    public static string PassphraseRule => PrivatePaste.Client.Core.Vault.PassphraseWrap.RuleMessage;
+
+    [RelayCommand]
+    private void StartChangePassphrase()
+    {
+        ClearPassphrases();
+        PassphraseError = null;
+        PassphraseNotice = null;
+        IsChangingPassphrase = true;
+    }
+
+    [RelayCommand]
+    private void CancelChangePassphrase()
+    {
+        ClearPassphrases();
+        PassphraseError = null;
+        IsChangingPassphrase = false;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRunChange))]
+    private async Task ChangePassphraseAsync()
+    {
+        if (_changePassphrase is null) return;
+        if (VaultCopy.NewPassphraseProblem(NewPassphrase, RepeatPassphrase) is { } problem)
+        {
+            PassphraseError = problem;
+            return;
+        }
+        IsChangingBusy = true;
+        PassphraseError = null;
+        string? result;
+        try { result = await _changePassphrase(CurrentPassphrase, NewPassphrase, RepeatPassphrase); }
+        catch (Exception) { result = VaultCopy.ChangeFailed; }
+        finally { IsChangingBusy = false; }
+        if (result is not null)
+        {
+            PassphraseError = result;
+            return;
+        }
+        ClearPassphrases();
+        IsChangingPassphrase = false;
+        PassphraseNotice = VaultCopy.PassphraseChanged;
+    }
+
+    private bool CanRunChange() => !IsChangingBusy;
+
+    [RelayCommand]
+    private void AddDevice() => _addDevice?.Invoke();
+
+    private void ClearPassphrases()
+    {
+        CurrentPassphrase = "";
+        NewPassphrase = "";
+        RepeatPassphrase = "";
     }
 
     private void SaveBlockedApps()

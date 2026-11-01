@@ -235,7 +235,9 @@ public sealed class ClipCodecTests : IDisposable
             }
         })).ToArray();
         go.Set();
-        await Task.Delay(5);
+        // Dispose only once the workers are sealing, so the race really happens (a fixed delay can fire before they run).
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (sealedBoxes.Count < 8 && DateTime.UtcNow < until) await Task.Yield();
         _key.Dispose();
         await Task.WhenAll(workers);
 

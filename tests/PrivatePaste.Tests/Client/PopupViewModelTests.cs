@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Time.Testing;
 using PrivatePaste.Client.Core.Cache;
 using PrivatePaste.Desktop.ViewModels;
@@ -9,8 +10,9 @@ public class PopupViewModelTests
 {
     private static readonly DateTimeOffset Now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
     private readonly FakeTimeProvider _time = new(Now);
-    private readonly List<string> _serverQueries = [];
-    private IReadOnlyList<ClipDto> _serverResults = [];
+    private readonly List<string> _olderQueries = [];
+    private IReadOnlyList<ClipDto> _olderResults = [];
+    private Exception? _olderFails;
     private readonly List<ClipDto> _activated = [];
 
     private static ClipDto Text(string text, int minutesAgo, long seq, string device = "PC-work", Guid? id = null) =>
@@ -26,11 +28,21 @@ public class PopupViewModelTests
         return cache;
     }
 
+    /// <summary>Stands in for <c>OlderClipSearch</c>: records the query, then yields the results (or fails after recording).</summary>
+    private async IAsyncEnumerable<ClipDto> Older(string query, [EnumeratorCancellation] CancellationToken ct)
+    {
+        _olderQueries.Add(query);
+        await Task.CompletedTask;
+        if (_olderFails is { } e) throw e;
+        foreach (var clip in _olderResults) yield return clip;
+    }
+
     private PopupViewModel Create(HistoryCache cache) => new(
         cache,
-        (q, _) => { _serverQueries.Add(q); return Task.FromResult(_serverResults); },
+        Older,
         clip => { _activated.Add(clip); return Task.CompletedTask; },
-        _time);
+        _time,
+        notify: _toasts.Add);
 
     [Fact]
     public void Empty_query_shows_cache_newest_first()
@@ -48,7 +60,9 @@ public class PopupViewModelTests
         vm.Query = "alpha";
         Assert.Equal(["alpha two", "alpha one"], vm.Items.Select(i => i.Clip.Text));
         Assert.All(vm.Items, i => Assert.False(i.IsNewest));   // highlight only while the query is empty
-        Assert.Empty(_serverQueries);                          // server search is debounced
+        _time.Advance(TimeSpan.FromSeconds(5));
+        Assert.Empty(_olderQueries);                           // typing never asks the server (it can't search)
+        Assert.DoesNotContain(vm.Items, i => i.IsSearchOlder); // there are hits here
     }
 
     [Fact]
@@ -75,40 +89,123 @@ public class PopupViewModelTests
     }
 
     [Fact]
-    public void Server_results_merge_after_cached_without_duplicates()
+    public async Task Popup_SearchOlderRowAppears()
     {
-        var cached = Text("alpha cached", 1, 2);
-        var vm = Create(CacheWith(cached));
-        var onlyOnServer = Text("alpha server", 500, 1);
-        _serverResults = [onlyOnServer, cached];
+        var vm = Create(CacheWith(Text("beta", 1, 2)));
         vm.Query = "alpha";
-        _time.Advance(TimeSpan.FromMilliseconds(250));
-        Assert.Equal(["alpha cached", "alpha server"], vm.Items.Select(i => i.Clip.Text));
-        Assert.Equal(1, vm.Items.Count(i => i.Clip.Id == cached.Id));
+
+        var row = Assert.Single(vm.Items);
+        Assert.True(row.IsSearchOlder);
+        Assert.False(row.IsUnknown);
+        Assert.Equal("Search older clips", row.Preview);
+        Assert.Equal(0, vm.SelectedIndex);
+        Assert.Empty(_olderQueries);   // only when asked
+
+        var old = Text("alpha from last year", 500_000, 1);
+        _olderResults = [old, Text("alpha older still", 600_000, 0), old];
+        await vm.ActivateSelectedAsync();   // Enter on the row
+
+        Assert.Equal(["alpha"], _olderQueries);
+        Assert.Empty(_activated);           // nothing was pasted
+        Assert.Equal(["alpha from last year", "alpha older still"], vm.Items.Select(i => i.Clip.Text));
+        Assert.False(vm.IsSearchingOlder);
+        Assert.Equal(0, vm.SelectedIndex);
+        await vm.ActivateSelectedAsync();   // now a hit is pasted
+        Assert.Equal([old], _activated);
     }
 
     [Fact]
-    public void Fast_typing_debounces_server_calls()
+    public async Task Search_older_with_no_hits_leaves_an_empty_list_and_a_new_query_offers_it_again()
     {
-        var vm = Create(CacheWith(Text("x", 1, 1)));
-        foreach (var q in new[] { "a", "al", "alp", "alph" })
+        var vm = Create(CacheWith(Text("beta", 1, 2)));
+        vm.Query = "alpha";
+        await vm.ActivateSelectedAsync();
+        Assert.Empty(vm.Items);              // "No matches.": the search ran to the end
+        vm.RefreshFromCache();
+        Assert.Empty(vm.Items);
+
+        vm.Query = "alph";
+        Assert.True(Assert.Single(vm.Items).IsSearchOlder);
+    }
+
+    [Fact]
+    public async Task Search_older_failure_keeps_what_was_found_and_offers_the_row_again()
+    {
+        var vm = Create(CacheWith(Text("beta", 1, 2)));
+        _olderFails = new HttpRequestException("offline");
+        vm.Query = "alpha";
+
+        await vm.ActivateSelectedAsync();
+
+        Assert.Equal(["Can't reach the server."], _toasts);
+        Assert.True(Assert.Single(vm.Items).IsSearchOlder);
+    }
+
+    [Fact]
+    public async Task Search_older_stopped_by_a_lock_says_nothing_and_keeps_its_hits()
+    {
+        var found = Text("alpha before the lock", 500_000, 1);
+        async IAsyncEnumerable<ClipDto> LocksMidway(string q, [EnumeratorCancellation] CancellationToken ct)
         {
-            vm.Query = q;
-            _time.Advance(TimeSpan.FromMilliseconds(50));
+            await Task.CompletedTask;
+            yield return found;
+            throw new PrivatePaste.Client.Core.Vault.VaultKeyClosedException(new ObjectDisposedException("key"));
         }
-        Assert.Empty(_serverQueries);
-        _time.Advance(TimeSpan.FromMilliseconds(250));
-        Assert.Equal(["alph"], _serverQueries);
+        var vm = new PopupViewModel(CacheWith(Text("beta", 1, 2)), LocksMidway, _ => Task.CompletedTask, _time, notify: _toasts.Add);
+        vm.Query = "alpha";
+
+        await vm.ActivateSelectedAsync();
+
+        Assert.Empty(_toasts);   // not "Can't reach the server."
+        Assert.Equal(["alpha before the lock"], vm.Items.Select(i => i.Clip.Text));
+        vm.Query = "alph";
+        Assert.Empty(vm.Items);  // no more searches offered while locked
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Only_the_locked_exception_is_quiet(bool locked)
+    {
+        _olderFails = locked ? new VaultLockedException() : new InvalidOperationException("some other bug");
+        var vm = Create(CacheWith(Text("beta", 1, 2)));
+        vm.Query = "alpha";
+
+        await vm.ActivateSelectedAsync();
+
+        Assert.Equal(locked ? [] : ["Can't reach the server."], _toasts);
     }
 
     [Fact]
-    public void Server_failure_keeps_cached_hits()
+    public void No_search_older_row_without_a_query_on_pinned_or_when_locked()
     {
-        var vm = new PopupViewModel(CacheWith(Text("alpha", 1, 1)), (_, _) => throw new HttpRequestException("offline"),
-            _ => Task.CompletedTask, _time);
+        var vm = Create(CacheWith());
+        Assert.Empty(vm.Items);              // empty query: "Nothing to paste yet."
+        vm.SwitchTab();
         vm.Query = "alpha";
-        _time.Advance(TimeSpan.FromMilliseconds(250));
-        Assert.Single(vm.Items);
+        Assert.Empty(vm.Items);              // the Pinned tab lists the server's pins instead
+
+        var locked = new PopupViewModel(CacheWith(), null, _ => Task.CompletedTask, _time) { Query = "alpha" };
+        Assert.Empty(locked.Items);
+    }
+
+    [Fact]
+    public async Task Popup_UnknownRowIsInert()
+    {
+        var unknown = new ClipDto(Guid.NewGuid(), 2, ClipKind.Unknown, null, "h", null, null, 10, null, "Phone", Now.AddMinutes(-1));
+        var vm = Create(CacheWith(Text("plain", 5, 1), unknown));
+
+        var row = vm.Items[0];
+        Assert.True(row.IsUnknown);
+        Assert.False(row.IsText || row.IsLink || row.IsImage || row.IsSearchOlder);
+        Assert.Equal("Update PrivatePaste to see this clip", row.Preview);
+        Assert.Equal("Phone, 1 min ago", row.Meta);
+
+        await vm.ActivateSelectedAsync();   // Enter
+        Assert.Empty(_activated);
+        vm.MoveSelection(1);
+        await vm.ActivateSelectedAsync();
+        Assert.Equal("plain", Assert.Single(_activated).Text);
     }
 
     [Fact]
@@ -175,21 +272,20 @@ public class PopupViewModelTests
     }
 
     [Fact]
-    public void Refresh_with_a_query_reruns_the_filter_and_keeps_server_hits()
+    public async Task Refresh_with_a_query_reruns_the_filter_and_keeps_older_hits()
     {
-        var cache = CacheWith(Text("alpha one", 3, 1), Text("beta", 2, 2));
+        var cache = CacheWith(Text("beta", 2, 2));
         var vm = Create(cache);
-        var serverOnly = Text("alpha on server", 500, 0);
-        _serverResults = [serverOnly];
+        _olderResults = [Text("alpha on server", 500, 0)];
         vm.Query = "alpha";
-        _time.Advance(TimeSpan.FromMilliseconds(250));
+        await vm.ActivateSelectedAsync();
         cache.Upsert(Text("alpha two", 1, 3));
         cache.Upsert(Text("gamma", 0, 4));
 
         vm.RefreshFromCache();
 
         Assert.Equal("alpha", vm.Query);
-        Assert.Equal(["alpha two", "alpha one", "alpha on server"], vm.Items.Select(i => i.Clip.Text));
+        Assert.Equal(["alpha two", "alpha on server"], vm.Items.Select(i => i.Clip.Text));
     }
 
     [Fact]
@@ -217,7 +313,7 @@ public class PopupViewModelTests
 
     private PopupViewModel CreatePins(HistoryCache cache) => new(
         cache,
-        (q, _) => { _serverQueries.Add(q); return Task.FromResult(_serverResults); },
+        Older,
         clip => { _activated.Add(clip); return Task.CompletedTask; },
         _time,
         setPinned: (id, pinned) =>
@@ -267,7 +363,7 @@ public class PopupViewModelTests
     [Fact]
     public void Pinned_tab_survives_a_failing_server()
     {
-        var vm = new PopupViewModel(CacheWith(Pin(Text("p", 1, 1), 1)), (_, _) => Task.FromResult<IReadOnlyList<ClipDto>>([]),
+        var vm = new PopupViewModel(CacheWith(Pin(Text("p", 1, 1), 1)), Older,
             _ => Task.CompletedTask, _time, serverPinned: (_, _) => throw new HttpRequestException("offline"));
         vm.SwitchTab();
         Assert.Single(vm.Items);

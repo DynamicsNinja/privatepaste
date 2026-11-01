@@ -16,11 +16,13 @@ public sealed class OlderClipSearch(PrivatePasteApi api, ClipCodec codec)
 
     /// <summary>
     /// Yields matches newest first, as each page is opened. Starts after <paramref name="afterCursor"/> (null: from the
-    /// newest clip) and runs until the history ends or <paramref name="ct"/> is cancelled.
+    /// newest clip) and runs until the history ends or <paramref name="ct"/> is cancelled. An empty query yields nothing
+    /// (it would match every text clip, paging through the whole history).
     /// </summary>
     public async IAsyncEnumerable<ClipDto> SearchAsync(string query, string? afterCursor,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        if (query.Length == 0) yield break;
         var cursor = afterCursor;
         do
         {

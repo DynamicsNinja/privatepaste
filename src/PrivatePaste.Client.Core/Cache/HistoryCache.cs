@@ -200,8 +200,13 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
         return cache;
     }
 
-    public void Clear()
+    /// <summary>
+    /// Empties the history in memory and removes its file (or, failing that, overwrites it with the empty history). Never
+    /// throws; false when the old file may still be on disk.
+    /// </summary>
+    public bool Clear()
     {
+        var removed = true;
         lock (_saveLock)   // a save in progress finishes first, so the deleted file is not written back
         {
             lock (_gate)
@@ -212,10 +217,18 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
                 _keyId = null;
                 _tombstones.Clear();
             }
-            try { File.Delete(path); } catch (IOException) { }
-            try { File.Delete(path + ".tmp"); } catch (IOException) { }
+            // The memory is clear either way; a file that can't be removed (locked, no access) must not fail the wipe.
+            try { File.Delete(path); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Overwrite it with the empty history instead, so the old one never loads again (the save lock is re-entrant).
+                try { Save(); }
+                catch (Exception again) when (again is IOException or UnauthorizedAccessException) { removed = false; }
+            }
+            try { File.Delete(path + ".tmp"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
         Changed?.Invoke(this, EventArgs.Empty);
+        return removed;
     }
 
     private static int Compare(CachedClip a, CachedClip b)

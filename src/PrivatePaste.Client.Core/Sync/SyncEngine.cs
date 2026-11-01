@@ -468,7 +468,7 @@ public sealed class SyncEngine(
         }
     }
 
-    /// <summary>Applies a remote clip. 401 and cancellation propagate; anything else is reported and skipped.</summary>
+    /// <summary>Applies a remote clip. 401, 426 and cancellation propagate; anything else is reported and skipped.</summary>
     private async Task ApplyAsync(ClipDto clip, CancellationToken ct)
     {
         try
@@ -477,7 +477,7 @@ public sealed class SyncEngine(
             _lastApplied = (clip.Id, clip.Seq);
             if (written) Raise(ClipApplied, clip);
         }
-        catch (UnauthorizedApiException) { throw; }
+        catch (Exception e) when (e is UnauthorizedApiException or UpdateRequiredException) { throw; }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception e)
         {
@@ -529,7 +529,7 @@ public sealed class SyncEngine(
         }
     }
 
-    /// <summary>A periodic retry of the offline queue. Never throws: a 401 ends the link as revoked.</summary>
+    /// <summary>A periodic retry of the offline queue. Never throws: a 401 ends the link as revoked, a 426 halts the engine.</summary>
     private async Task FlushAsync(Link link)
     {
         try
@@ -540,6 +540,10 @@ public sealed class SyncEngine(
         catch (UnauthorizedApiException)
         {
             link.Abort(AbortReason.Revoked);
+        }
+        catch (UpdateRequiredException)
+        {
+            Halt(Outcome.UpdateRequired);
         }
         catch (OperationCanceledException) when (link.Token.IsCancellationRequested) { }
         catch (Exception e)
