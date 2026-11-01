@@ -38,34 +38,37 @@ const page = async (options) => (await browser.newContext(options)).newPage();
 const fileUrl = (name, query = '') => pathToFileURL(join(here, name)).href + query;
 
 // 1. The image clip's picture, plus what a client derives from it before uploading: the content hash of its RGBA
-//    pixels and a PNG thumbnail that fits 256x256. The browser decodes the PNG, as the web UI would.
+//    pixels (hashed here by e2e.js) and a PNG thumbnail that fits 256x256. The browser decodes the PNG, as the web
+//    UI would, and hands back the pixels and the thumbnail as base64.
 const photo = {};
 {
   const p = await page({ viewport: { width: 1600, height: 900 } });
   await p.goto(fileUrl('photo.html'));
   photo.png = await p.screenshot({ path: join(out, 'photo.png') });
-  Object.assign(photo, await p.evaluate(async (base64) => {
+  const decoded = await p.evaluate(async (base64) => {
+    const toBase64 = (bytes) => {
+      let s = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(s);
+    };
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
     const { width, height } = bitmap;
     const full = new OffscreenCanvas(width, height).getContext('2d');
     full.drawImage(bitmap, 0, 0);
-    const rgba = full.getImageData(0, 0, width, height).data;
-    const prefix = new TextEncoder().encode(`i:${width}x${height}:`);
-    const hashed = new Uint8Array(prefix.length + rgba.length);
-    hashed.set(prefix);
-    hashed.set(rgba, prefix.length);
-    const contentHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', hashed)),
-      (b) => b.toString(16).padStart(2, '0')).join('');
+    const rgba = new Uint8Array(full.getImageData(0, 0, width, height).data.buffer);
     const scale = Math.min(1, 256 / width, 256 / height);
     const thumbCanvas = new OffscreenCanvas(Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale)));
     thumbCanvas.getContext('2d').drawImage(bitmap, 0, 0, thumbCanvas.width, thumbCanvas.height);
     const thumb = new Uint8Array(await (await thumbCanvas.convertToBlob({ type: 'image/png' })).arrayBuffer());
-    let thumbBase64 = '';
-    for (let i = 0; i < thumb.length; i += 0x8000) thumbBase64 += String.fromCharCode(...thumb.subarray(i, i + 0x8000));
-    return { width, height, contentHash, thumbBase64: btoa(thumbBase64) };
-  }, photo.png.toString('base64')));
+    return { width, height, rgbaBase64: toBase64(rgba), thumbBase64: toBase64(thumb) };
+  }, photo.png.toString('base64'));
   await p.context().close();
+  photo.width = decoded.width;
+  photo.height = decoded.height;
+  photo.thumbBase64 = decoded.thumbBase64;
+  photo.contentHash = await e2e.contentHashPixels(
+    Uint8Array.from(Buffer.from(decoded.rgbaBase64, 'base64')), decoded.width, decoded.height);
 }
 
 // 2. The people. The owner (created from PP_PASSWORD, named "owner") is renamed and the others are added on the People

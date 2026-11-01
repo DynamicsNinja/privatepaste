@@ -34,7 +34,7 @@ Clips are encrypted on the devices before they reach the server, with a vault ke
 - **Changing the passphrase**: the owner, in Settings on any unlocked device or in the web UI. The history stays and unlocked devices keep working; only devices that unlock later need the new one.
 - **What the server still sees**: who copied each clip, from which device and platform, and when; its kind, exact size and pin state. Never the content or thumbnails.
 - **Search** runs on the devices, which hold the key. The history screens search the clips each device keeps and offer **Search older clips** for the rest.
-- **The web UI** decrypts in the browser with code your server sends. Someone who steals the server and keeps it running could serve altered code to a browser that unlocks afterwards. The apps don't have this risk.
+- **The web UI** decrypts in the browser with code your server sends. Someone who steals the server and keeps it running could serve altered page code to any browser that is unlocked, or unlocks, while it runs. An unlocked tab is exposed as soon as it loads another page, so use **Lock** (or close the tab) when you're done. The apps don't have this risk.
 
 ### Why `PP_DB_KEY` still matters
 

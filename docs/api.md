@@ -91,7 +91,7 @@ Limits, with `PP_MAX_TEXT_KB` and `PP_MAX_IMAGE_MB` (as `limits` in server info)
 - **Image:** the blob may be at most `PP_MAX_IMAGE_MB` × 1 MiB plus the blob header (9 bytes) and a 16-byte tag per 1 MiB chunk; over is 413. The sealed payload (which holds only the size) may be at most 4096 bytes. Clients check the plaintext before uploading: images over 50 megapixels or over `imageMb` are refused on the device, since the server can't decode them.
 - The whole request is capped at the larger of the two cases plus some framing.
 
-Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists under another kind.
+Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers, an image clip without exactly one blob (`An image clip has exactly one blob.`), or a text or link clip with a thumbnail or blobs; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists under another kind.
 
 Live uploads always get the server's time. Backfilled uploads keep `copiedAt`, clamped to no later than the server's time, and are never applied to other devices' clipboards.
 
@@ -153,7 +153,7 @@ The passphrase is separate from the login password, which the server sees at eve
 - On the wire: `{"keyId":"…","kdf":{"alg":"argon2id","memoryKiB":65536,"iterations":3,"parallelism":1,"salt":"<base64>"},"nonce":"<base64>","wrappedKey":"<base64>"}`.
 - The server accepts `keyId` as 16 lowercase hex characters, `alg` `argon2id`, `memoryKiB` 65536 to 262144, `iterations` 3 to 10, `parallelism` 1 to 8, and a 16-byte `salt`, 12-byte `nonce` and 48-byte `wrappedKey` in canonical base64; clients refuse to unwrap anything outside the same bounds. The parameters travel with the wrap so later versions can raise them.
 - To unlock, fetch the wrap, run Argon2id with its parameters and open `wrappedKey`. A wrong passphrase fails the GCM check: show `That passphrase doesn't unlock this server's history.` Then derive `keyId` from the key and check that it matches.
-- A new passphrase must have at least 12 characters and not be in the bundled list of common passphrases (`wwwroot/js/common-passphrases.txt`, the same file on every platform). Apps show `Use at least 12 characters. A short sentence works well.`
+- A new passphrase must have at least 12 characters and not be in the bundled list of common passphrases (`wwwroot/js/common-passphrases.txt`, the same file on every platform). Apps show `Use at least 12 characters. A short sentence works well.` up front and for a short one, and `That passphrase is too common. Pick another.` for one on the list.
 
 ### Small items
 

@@ -110,9 +110,9 @@ Each device signs in with a person's name and password once and gets its own dev
 ## Security
 
 - **Clips are end-to-end encrypted.** Your devices encrypt every clip (AES-256-GCM) before uploading it, with a vault key that the server never sees unwrapped. The server keeps that key only wrapped with your passphrase (Argon2id), which is separate from your password and never sent to it. Someone who steals the server, its disk or its backups, including its configuration and `PP_DB_KEY`, can't read your clips.
-- **What the server can see:** who copied a clip, from which device and platform, and when; its kind (text, link or image); its exact size; and whether it is pinned. It never sees the content of a clip, file names or thumbnails.
+- **What the server can see:** who copied a clip, from which device and platform, and when; its kind (text, link or image); its exact size; and whether it is pinned. It never sees a clip's content (text and images) or thumbnails.
 - **`PP_DB_KEY` still matters.** The database and stored files are also encrypted at rest with it, which hides that metadata from someone who takes the disk without the server's configuration.
-- **The web UI is the exception to keep in mind.** It decrypts in your browser with code the server sends. Someone who steals the server and keeps it running could serve altered page code to a browser that unlocks afterwards. The apps don't have this risk; if it worries you, use the apps.
+- **The web UI is the exception to keep in mind.** It decrypts in your browser with code the server sends. Someone who steals the server and keeps it running could serve altered page code to any browser that is unlocked, or unlocks, while it runs. An unlocked tab is exposed as soon as it loads another page, so use **Lock** (or close the tab) when you're done. The apps don't have this risk; if it worries you, use the apps.
 - **Don't lose the passphrase.** Nobody can recover the history without it, not even the owner of the server. The only way back is **Reset encryption** in the web UI's Settings, which deletes the whole history, pinned clips included, and starts over with a new passphrase.
 - People who share your server share the vault key, by design.
 - Passwords are hashed with Argon2id. Sign-in is rate-limited per client IP.
