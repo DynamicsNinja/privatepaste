@@ -48,6 +48,7 @@ public sealed class E2eSyncTests : IAsyncLifetime
         public required ClipboardCoordinator Coordinator { get; init; }
         public required SyncEngine Engine { get; init; }
         public ClipCodec? Codec { get; set; }
+        public required ListNotifier Notes { get; init; }
         public int Connects;
         public int KeyResets;
         public int CoordinatorKeyResets;
@@ -66,9 +67,10 @@ public sealed class E2eSyncTests : IAsyncLifetime
         var cache = new HistoryCache(Path.Combine(dir, "h.enc"), cacheKey, capacity);
         var queue = new OutboundQueue(Path.Combine(dir, "q.enc"), cacheKey);
         var clipboard = new FakeClipboard();
+        var notes = new ListNotifier();
         Device? device = null;
         var coordinator = new ClipboardCoordinator(clipboard, api, () => device!.Codec, cache, queue,
-            new EchoGuard(_time, TimeSpan.FromSeconds(30)), new ListNotifier(), _time, () => false);
+            new EchoGuard(_time, TimeSpan.FromSeconds(30)), notes, _time, () => false);
         var engine = new SyncEngine(api, cache, coordinator, () => device!.Codec, async ct =>
         {
             Interlocked.Increment(ref device!.Connects);
@@ -83,7 +85,7 @@ public sealed class E2eSyncTests : IAsyncLifetime
         device = new Device
         {
             Api = api, Handler = handler, Cache = cache, Queue = queue, Clipboard = clipboard, Coordinator = coordinator,
-            Engine = engine, Codec = new ClipCodec(key ?? _key),
+            Engine = engine, Codec = new ClipCodec(key ?? _key), Notes = notes,
         };
         engine.KeyReset += (_, _) => Interlocked.Increment(ref device.KeyResets);
         engine.UpdateRequired += (_, _) => Interlocked.Increment(ref device.UpdatesRequired);
@@ -404,6 +406,28 @@ public sealed class E2eSyncTests : IAsyncLifetime
         Assert.Equal(1, Volatile.Read(ref infoAsks));
         Assert.Equal(0, a.Queue.Count);
         Assert.Equal(["small"], a.Handler.Uploads);
+    }
+
+    [Fact]
+    public async Task Coordinator_LockedQueuesAnImageOverTheDefaultAndTheFlushChecksTheRealLimit()
+    {
+        var a = await DeviceAsync("A");
+        var codec = a.Codec;
+        a.Codec = null;   // locked: the server's image limit isn't known
+        // A valid PNG padded past the default 20 MB (trailing bytes after IEND are ignored by decoders).
+        var png = TestImages.MakePng(4, 4).ToArray().Concat(new byte[ClipboardCoordinator.MaxImageBytes]).ToArray();
+        a.Clipboard.Current = new ClipboardContent.Image(png);
+
+        await a.Coordinator.OnClipboardChangedAsync(default);
+
+        Assert.Equal(1, a.Queue.Count);   // not refused for good: the server may allow more
+        Assert.Empty(a.Notes.Messages);
+        a.Codec = codec;
+        await a.Coordinator.FlushQueueAsync(default);
+        // The flush checks what would be sent against the real limit: re-encoded, the padding is gone and it fits.
+        Assert.Equal(0, a.Queue.Count);
+        Assert.Empty(a.Notes.Messages);
+        Assert.Equal([""], a.Handler.Uploads);   // one image went out
     }
 
     [Fact]

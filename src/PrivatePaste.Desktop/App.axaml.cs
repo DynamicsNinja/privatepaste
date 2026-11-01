@@ -148,8 +148,8 @@ public partial class App : Application
             notifyOnClipArrival: s.NotifyOnClipArrival, setNotifyOnClipArrival: _host.SetNotifyOnClipArrival,
             blockedApps: s.BlockedApps, recentSourceApps: () => _host?.Coordinator?.RecentSourceApps ?? [],
             setBlockedApps: _host.SetBlockedApps, canIdentifySourceApp: _host.Platform.CanIdentifySourceApp,
-            isOwner: unlocked && _host.IsOwner, changePassphrase: _host.ChangePassphraseAsync,
-            addDevice: unlocked ? ShowAddDevice : null);
+            isOwner: _host.IsOwner, changePassphrase: _host.ChangePassphraseAsync, addDevice: ShowAddDevice);
+        vm.SetUnlocked(unlocked);
         var window = new SettingsWindow { DataContext = vm };
         window.Closed += (_, _) => _settings = null;
         _settings = window;
@@ -163,13 +163,17 @@ public partial class App : Application
     {
         if (_host is not { } host || _quitting) return;
         var state = host.VaultState;
+        var unlocked = state == VaultState.Unlocked;
+        // A code made under a key that is gone is useless: never leave it on screen.
+        if (!unlocked) _addDevice?.Close();
+        (_settings?.DataContext as SettingsViewModel)?.SetUnlocked(unlocked);
+        if (_popup?.DataContext is PopupViewModel popup) popup.Banner = host.VaultMessage;
         if (state is VaultState.Locked or VaultState.NeedsOwnerSetup)
         {
             ShowUnlock();
             return;
         }
         _unlock?.Close();
-        if (state != VaultState.Unlocked) _addDevice?.Close();
         // Once per change: the tray keeps saying it.
         if (state != VaultState.Unknown && VaultCopy.For(state, keyWasReset: false) is { } message) _toast?.Notify(message);
     }

@@ -142,6 +142,27 @@ public class PopupViewModelTests
     }
 
     [Fact]
+    public async Task Search_older_stopped_by_a_lock_says_nothing_and_keeps_its_hits()
+    {
+        var found = Text("alpha before the lock", 500_000, 1);
+        async IAsyncEnumerable<ClipDto> LocksMidway(string q, [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.CompletedTask;
+            yield return found;
+            throw new PrivatePaste.Client.Core.Vault.VaultKeyClosedException(new ObjectDisposedException("key"));
+        }
+        var vm = new PopupViewModel(CacheWith(Text("beta", 1, 2)), LocksMidway, _ => Task.CompletedTask, _time, notify: _toasts.Add);
+        vm.Query = "alpha";
+
+        await vm.ActivateSelectedAsync();
+
+        Assert.Empty(_toasts);   // not "Can't reach the server."
+        Assert.Equal(["alpha before the lock"], vm.Items.Select(i => i.Clip.Text));
+        vm.Query = "alph";
+        Assert.Empty(vm.Items);  // no more searches offered while locked
+    }
+
+    [Fact]
     public void No_search_older_row_without_a_query_on_pinned_or_when_locked()
     {
         var vm = Create(CacheWith());

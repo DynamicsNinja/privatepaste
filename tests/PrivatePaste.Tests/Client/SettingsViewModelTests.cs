@@ -244,4 +244,28 @@ public class SettingsViewModelTests
         owner.AddDeviceCommand.Execute(null);
         Assert.Equal(1, _addDevice);
     }
+
+    [Fact]
+    public void Encryption_actions_follow_the_vault_while_the_window_is_open()
+    {
+        var owner = CreateEncryption(isOwner: true);
+        owner.StartChangePassphraseCommand.Execute(null);
+        var changed = new List<string?>();
+        owner.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        owner.SetUnlocked(false);   // a reset locked it
+
+        Assert.False(owner.CanChangePassphrase);
+        Assert.False(owner.CanAddDevice);
+        Assert.False(owner.ShowsEncryption);
+        Assert.False(owner.IsChangingPassphrase);
+        Assert.Contains(nameof(SettingsViewModel.ShowsEncryption), changed);
+
+        owner.SetUnlocked(true);
+        Assert.True(owner.CanChangePassphrase);
+        Assert.True(owner.CanAddDevice);
+        var member = CreateEncryption(isOwner: false);
+        member.SetUnlocked(true);
+        Assert.False(member.CanChangePassphrase);
+    }
 }

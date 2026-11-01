@@ -32,8 +32,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         _changePassphrase = changePassphrase;
         _addDevice = addDevice;
-        CanChangePassphrase = isOwner && changePassphrase is not null;
-        CanAddDevice = addDevice is not null;
+        _isOwner = isOwner;
+        _canChangePassphrase = isOwner && changePassphrase is not null;
+        _canAddDevice = addDevice is not null;
         Server = server;
         DeviceName = deviceName;
         AutostartLabel = autostartLabel;
@@ -160,13 +161,27 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     // ---- Encryption ----
 
-    /// <summary>Only the owner may change the passphrase (the server refuses anyone else).</summary>
-    public bool CanChangePassphrase { get; }
+    private readonly bool _isOwner;
+
+    /// <summary>Only the owner may change the passphrase (the server refuses anyone else), and only while unlocked.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsEncryption))]
+    private bool _canChangePassphrase;
 
     /// <summary>Hands this computer's key to a new device; only while unlocked.</summary>
-    public bool CanAddDevice { get; }
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsEncryption))]
+    private bool _canAddDevice;
 
     public bool ShowsEncryption => CanChangePassphrase || CanAddDevice;
+
+    /// <summary>The vault locked or unlocked while the window is open: the encryption actions follow.</summary>
+    public void SetUnlocked(bool unlocked)
+    {
+        CanChangePassphrase = unlocked && _isOwner && _changePassphrase is not null;
+        CanAddDevice = unlocked && _addDevice is not null;
+        if (!CanChangePassphrase) CancelChangePassphrase();
+    }
 
     /// <summary>True while the change-passphrase fields are open.</summary>
     [ObservableProperty]

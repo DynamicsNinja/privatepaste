@@ -301,16 +301,21 @@ public sealed class DesktopHost : IAsyncDisposable
     /// <summary>The server revoked this device (1008 close or a 401): sign out locally without calling the server.</summary>
     private async Task OnRevokedAsync(Session session)
     {
-        await _lifecycle.WaitAsync();
         try
         {
-            if (_session != session) return;   // already signed out or replaced
-            await EndSessionAsync(logout: false);
+            await _lifecycle.WaitAsync();
+            try
+            {
+                if (_session != session) return;   // already signed out or replaced
+                await EndSessionAsync(logout: false);
+            }
+            finally { _lifecycle.Release(); }
+            _log.Info("This device was signed out by the server.");
+            _notifier.Notify("This device was signed out.");
+            RaiseSignedOut();
         }
-        finally { _lifecycle.Release(); }
-        _log.Info("This device was signed out by the server.");
-        _notifier.Notify("This device was signed out.");
-        RaiseSignedOut();
+        // Always started fire-and-forget: a failure must at least be logged (the type only, never content).
+        catch (Exception e) { _log.Error($"Signing out after a revoke failed ({e.GetType().Name})."); }
     }
 
     // Caller holds _lifecycle.
@@ -327,10 +332,10 @@ public sealed class DesktopHost : IAsyncDisposable
             catch (Exception e) { _log.Error("Logout request failed (signed out locally anyway).", e); }
         }
         session.Http.Dispose();
-        _tokenFile.Delete();
-        Cache.Clear();
-        ClearQueue();
-        DeleteVaultKey();   // it belongs to this account's server
+        WipeStep("sign-in", _tokenFile.Delete);
+        WipeStep("history", () => Cache.Clear());
+        WipeStep("queue", ClearQueue);
+        WipeStep("key", DeleteVaultKey);   // it belongs to this account's server
         UpdateSettings(s => s with { DeviceId = null });
         Interlocked.Increment(ref _checkEpoch);
         Cancel(_checkWait);
@@ -509,7 +514,15 @@ public sealed class DesktopHost : IAsyncDisposable
         while (!_shutdown.IsCancellationRequested && Volatile.Read(ref _checkEpoch) == epoch && _session is { } session)
         {
             TimeSpan wait;
-            if (await CheckVaultAsync(session).ConfigureAwait(false))
+            bool settled;
+            // Fire and forget: nothing may end the loop by surprise, or the state would stay Unknown until a restart.
+            try { settled = await CheckVaultAsync(session).ConfigureAwait(false); }
+            catch (Exception e)
+            {
+                _log.Error($"The encryption check failed ({e.GetType().Name}); trying again.");
+                settled = false;
+            }
+            if (settled)
             {
                 // Settled. Only what someone else changes is asked about again: the owner sets up, the server is updated.
                 if (_vaultState is not (VaultState.WaitingForOwner or VaultState.ServerTooOld)) return;
@@ -560,10 +573,18 @@ public sealed class DesktopHost : IAsyncDisposable
         }
         catch (Exception e)
         {
-            _log.Error("Could not ask the server about encryption; trying again.", e);
+            _log.Error($"Could not ask the server about encryption ({e.GetType().Name}); trying again.");
             return false;
         }
-        await ApplyCheckAsync(session, vault, owner).ConfigureAwait(false);
+        try
+        {
+            await ApplyCheckAsync(session, vault, owner).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            _log.Error($"Could not apply the encryption check ({e.GetType().Name}); trying again.");
+            return false;
+        }
         return true;
     }
 
@@ -578,7 +599,7 @@ public sealed class DesktopHost : IAsyncDisposable
             // Already syncing: key changes reach the engine (a reset message, a foreign key id, a 409).
             if (_vaultState == VaultState.Unlocked) return;
             var serverKeyId = vault?.KeyId;
-            if (HasLocalData() && (Cache.KeyId is null || Cache.KeyId != serverKeyId))
+            if (BelongsElsewhere(serverKeyId))
             {
                 _log.Info("Local history belongs to another key (or predates encryption); clearing it.");
                 session = await WipeLocalDataAsync(session).ConfigureAwait(false);
@@ -601,31 +622,71 @@ public sealed class DesktopHost : IAsyncDisposable
     /// </summary>
     private async Task OnKeyResetAsync(Session session)
     {
-        await _lifecycle.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_session != session) return;
-            _log.Info("Encryption was reset on the server; local history cleared until the new passphrase is entered.");
-            await WipeLocalDataAsync(session).ConfigureAwait(false);
-            _keyWasReset = true;
-            SetVaultState(VaultState.Locked);
+            await _lifecycle.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (_session != session) return;
+                _log.Info("Encryption was reset on the server; local history cleared until the new passphrase is entered.");
+                try { await WipeLocalDataAsync(session).ConfigureAwait(false); }
+                finally
+                {
+                    // Whatever the wipe managed, the old key is no use any more: never stay Unlocked on a closed session.
+                    _keyWasReset = true;
+                    SetVaultState(VaultState.Locked);
+                }
+            }
+            finally { _lifecycle.Release(); }
+            // Learns the new vault's key id, so copies made while locked count as this vault's and survive the unlock.
+            BeginVaultCheck();
         }
-        finally { _lifecycle.Release(); }
+        catch (Exception e) { _log.Error($"Handling the encryption reset failed ({e.GetType().Name})."); }
     }
+
+    /// <summary>A test seam: called before each wipe step with its name ("history", "queue", "key"); may throw.</summary>
+    internal Action<string>? WipeFault { get; set; }
 
     /// <summary>
     /// Clears the history (thumbnails included), the queue and the stored key, and replaces the session with a fresh one on
-    /// the same sign-in (its engine not started), so nothing of the old one writes them again. Caller holds _lifecycle.
+    /// the same sign-in (its engine not started), so nothing of the old one writes them again. Each step runs whatever the
+    /// others did (a file that can't be removed must not keep the key). Never throws. Caller holds _lifecycle.
     /// </summary>
     private async Task<Session> WipeLocalDataAsync(Session session)
     {
-        await session.CloseAsync().ConfigureAwait(false);
-        await session.Engine.StopAsync().ConfigureAwait(false);
-        Cache.Clear();
-        ClearQueue();
-        DeleteVaultKey();
+        try { await session.CloseAsync().ConfigureAwait(false); }
+        catch (Exception e) { _log.Error($"Could not close the session ({e.GetType().Name})."); }
+        try { await session.Engine.StopAsync().ConfigureAwait(false); }
+        catch (Exception e) { _log.Error($"Could not stop sync ({e.GetType().Name})."); }
+        WipeStep("history", () => Cache.Clear());
+        WipeStep("queue", ClearQueue);
+        WipeStep("key", DeleteVaultKey);
         return StartSession(session.Server, session.Token, session.DeviceId, session.Http);
     }
+
+    private void WipeStep(string what, Action step)
+    {
+        try
+        {
+            WipeFault?.Invoke(what);
+            step();
+        }
+        catch (Exception e) { _log.Error($"Could not clear the {what} ({e.GetType().Name})."); }
+        finally
+        {
+            if (what == "key") ReplaceVaultKey(null);   // in memory at least, whatever happened to the file
+        }
+    }
+
+    /// <summary>
+    /// Local data that must not mix with the vault of <paramref name="serverKeyId"/>: anything held under another key id, or
+    /// history from before encryption (key id null). Copies queued here while there was no key (locked, or waiting for the
+    /// owner) also have a null key id but no history: they are this user's and go out under the vault's key once unlocked.
+    /// </summary>
+    private bool BelongsElsewhere(string? serverKeyId) =>
+        Cache.KeyId is { } held ? held != serverKeyId && HasLocalData() : HasHistory();
+
+    private bool HasHistory() => Cache.Items.Count > 0 || Cache.HighestSeq > 0 || Cache.LastAppliedAt is not null;
 
     private async Task SettleAsync(Session session, VaultState state)
     {
@@ -646,8 +707,7 @@ public sealed class DesktopHost : IAsyncDisposable
         catch (Exception e) { _log.Error("A vault state listener failed.", e); }
     }
 
-    private bool HasLocalData() =>
-        Cache.Items.Count > 0 || Cache.HighestSeq > 0 || Cache.LastAppliedAt is not null || _queue.Count > 0;
+    private bool HasLocalData() => HasHistory() || _queue.Count > 0;
 
     /// <summary>Marks what is held now (queued copies too) as belonging to <paramref name="keyId"/>, so a restart keeps it.</summary>
     private void ClaimLocalData(string keyId)
@@ -666,8 +726,11 @@ public sealed class DesktopHost : IAsyncDisposable
     private void DeleteVaultKey()
     {
         try { _vaultKeyStore.Delete(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Error("Could not delete the vault key.", e); }
-        ReplaceVaultKey(null);
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _log.Error($"Could not delete the vault key ({e.GetType().Name}).");
+        }
+        finally { ReplaceVaultKey(null); }
     }
 
     // ======================================================================== Vault: unlock, set up, change, hand over
@@ -681,7 +744,7 @@ public sealed class DesktopHost : IAsyncDisposable
             var wrap = await AskAsync(session, VaultCopy.UnlockFailed, ct => session.Api.GetVaultAsync(ct)).ConfigureAwait(false);
             if (wrap is null)
             {
-                await CheckVaultAsync(session).ConfigureAwait(false);   // the vault is gone: set up, or wait for the owner
+                BeginVaultCheck();   // the vault is gone: set up, or wait for the owner (and keep asking)
                 return null;
             }
             return await KeepAsync(session, await UnwrapAsync(wrap, passphrase).ConfigureAwait(false)).ConfigureAwait(false);
@@ -709,7 +772,7 @@ public sealed class DesktopHost : IAsyncDisposable
             }
             catch (Shown)
             {
-                await CheckVaultAsync(session).ConfigureAwait(false);   // set up meanwhile (409), or not the owner after all (403)
+                BeginVaultCheck();   // set up meanwhile (409), or not the owner after all (403): the check loop settles it
                 throw;
             }
             owned = null;
@@ -791,7 +854,7 @@ public sealed class DesktopHost : IAsyncDisposable
         {
             // The same sign-in, even if a wipe replaced the session object meanwhile.
             if (_session is not { } current || current.Token != session.Token) return null;
-            if (HasLocalData() && Cache.KeyId != key.KeyId) current = await WipeLocalDataAsync(current).ConfigureAwait(false);
+            if (BelongsElsewhere(key.KeyId)) current = await WipeLocalDataAsync(current).ConfigureAwait(false);
             try { _vaultKeyStore.Save(key); }
             catch (Exception e)
             {
@@ -1040,9 +1103,12 @@ public sealed class DesktopHost : IAsyncDisposable
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            _log.Error("Could not delete the offline queue.", e);
+            _log.Error($"Could not delete the offline queue ({e.GetType().Name}); emptying it instead.");
+            // Never load the old file back: overwrite it with an empty queue if possible.
+            try { OutboundQueue.Load(_queuePath, _cacheKey).Clear(); }
+            catch (Exception again) { _log.Error($"Could not empty the offline queue ({again.GetType().Name})."); }
         }
-        _queue = OutboundQueue.Load(_queuePath, _cacheKey);
+        _queue = new OutboundQueue(_queuePath, _cacheKey);   // empty in memory whatever the file says
     }
 
     // ======================================================================== Network and power changes

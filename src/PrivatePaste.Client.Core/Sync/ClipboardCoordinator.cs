@@ -23,7 +23,7 @@ namespace PrivatePaste.Client.Core.Sync;
 /// No codec (locked), a refused key, a key disposed mid-encode or a 426: nothing is sent; a live copy is queued and a flush
 /// stops without counting an attempt (a 426 in a flush is rethrown after that, so the sync engine stops).
 /// The server's limits are asked once per session: not while locked, and after a failed ask not again for
-/// <see cref="LimitsRetryDelay"/> on the copy path. While they are unknown, text over the default limit is queued (the
+/// <see cref="LimitsRetryDelay"/> on the copy path. While they are unknown, text or an image over the default limit is queued (the
 /// server's own limit may be higher) instead of being refused for good.
 /// <see cref="UnauthorizedApiException"/> is NOT swallowed, queued or dropped: it propagates to the caller (sync engine/host),
 /// which signs out. A queued item stays queued; a live copy that hit it is not retained.
@@ -120,7 +120,7 @@ public sealed class ClipboardCoordinator(
             var known = await LimitsAsync(force: false, ct).ConfigureAwait(false);
             var limits = known ?? DefaultLimits;
             var over = Oversize(content, limits);
-            if (over is not null && known is null && content is ClipboardContent.Text)
+            if (over is not null && known is null && IsOnlyOverServerLimit(content))
             {
                 // The server's limit isn't known (offline or locked) and may well be higher: keep it for the flush, which
                 // checks against the real limit.
@@ -379,6 +379,10 @@ public sealed class ClipboardCoordinator(
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>Over a limit only the server sets (size), not the fixed 50-megapixel one every client applies.</summary>
+    private static bool IsOnlyOverServerLimit(ClipboardContent content) =>
+        content is ClipboardContent.Text || content is ClipboardContent.Image i && !ImagePreparation.IsOverPixelLimit(i.Png);
 
     private bool IsPrivateOrBlocked(ClipboardContent content) =>
         content.IsPrivate || (content.SourceApp is { Length: > 0 } app && _isBlockedApp(app));

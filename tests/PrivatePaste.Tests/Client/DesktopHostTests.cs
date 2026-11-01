@@ -45,7 +45,8 @@ public class DesktopHostTests : IAsyncLifetime
     }
 
     private DesktopHost NewHost(ISecretProtector? protector = null, Func<HttpMessageHandler>? handler = null,
-        PrivatePasteFactory? server = null, string? dir = null, bool unlocked = true, Func<bool>? wsOffline = null)
+        PrivatePasteFactory? server = null, string? dir = null, bool unlocked = true, Func<bool>? wsOffline = null,
+        TimeProvider? time = null)
     {
         server ??= _server;
         dir ??= _dir;
@@ -76,7 +77,7 @@ public class DesktopHostTests : IAsyncLifetime
             },
         };
         var host = new DesktopHost(platform, dir, _notes, new FileLog(Path.Combine(dir, "logs", "privatepaste.log")),
-            transport: transport);
+            time: time, transport: transport);
         if (unlocked) host.SetVaultKey(VaultKey.FromBytes(_vaultKey.Export()));   // as after entering the passphrase
         _hosts.Add(host);
         return host;
@@ -432,7 +433,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Null(await a.SetUpVaultAsync(Passphrase, Passphrase));
 
         Assert.Equal(VaultCopy.SetUpElsewhere, await b.SetUpVaultAsync("another long passphrase", "another long passphrase"));
-        Assert.Equal(VaultState.Locked, b.VaultState);
+        await WaitUntilAsync(() => b.VaultState == VaultState.Locked);   // the check loop settles it
     }
 
     [Fact]
@@ -587,10 +588,11 @@ public class DesktopHostTests : IAsyncLifetime
         await host.SignOutAsync().WaitAsync(WaitTimeout);
     }
 
-    private int QueuedCount()
+    private int QueuedCount(string? dir = null)
     {
-        var key = Convert.FromBase64String(new SecretFile(Path.Combine(_dir, "cache.key"), new XorProtector()).Read()!);
-        return OutboundQueue.Load(Path.Combine(_dir, "queue.dat"), key).Count;
+        dir ??= _dir;
+        var key = Convert.FromBase64String(new SecretFile(Path.Combine(dir, "cache.key"), new XorProtector()).Read()!);
+        return OutboundQueue.Load(Path.Combine(dir, "queue.dat"), key).Count;
     }
 
     [Fact]
@@ -610,6 +612,97 @@ public class DesktopHostTests : IAsyncLifetime
 
         await WaitUntilAsync(() => host.VaultState == VaultState.UpdateRequired);
         Assert.Equal("Update PrivatePaste to keep syncing.", host.VaultMessage);
+    }
+
+    [Fact]
+    public async Task A_wipe_that_cannot_clear_the_history_still_locks_and_drops_the_key()
+    {
+        var host = await SignedInHostAsync();
+        Assert.True(File.Exists(VaultKeyPath));
+        // The history file can't be removed (no access): the other steps and the lock must happen anyway.
+        var faults = 0;
+        host.WipeFault = step =>
+        {
+            if (step != "history") return;
+            Interlocked.Increment(ref faults);
+            throw new UnauthorizedAccessException("denied");
+        };
+        var owner = await _server.LoginAsync("Web");
+        using var newKey = VaultKey.Create();
+
+        (await owner.PostAsJsonAsync("/api/vault/reset", PrivatePasteFactory.RandomWrap(newKey.KeyId), ProtocolJson.Options))
+            .EnsureSuccessStatusCode();
+
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked);
+        Assert.False(File.Exists(VaultKeyPath));
+        Assert.Null(host.Codec);
+        Assert.True(host.KeyWasReset);
+        Assert.Equal(1, Volatile.Read(ref faults));
+        // The log names the type only, never the exception's text. (The line itself isn't asserted: the log drops a write
+        // it can't make, e.g. while a scanner holds the file.)
+        Assert.DoesNotContain("denied", File.ReadAllText(Path.Combine(_dir, "logs", "privatepaste.log")));
+    }
+
+    [Fact]
+    public async Task Copies_made_while_locked_after_a_reset_go_out_under_the_new_key()
+    {
+        SwitchHandler? sw = null;
+        var host = NewHost(handler: () => sw = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+        await SignInAsync(host);
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+        using var newKey = VaultKey.Create();
+        const string next = "the passphrase after the reset";
+        var owner = await _server.LoginAsync("Web");
+        (await owner.PostAsJsonAsync("/api/vault/reset", PassphraseWrap.Wrap(newKey, next), ProtocolJson.Options))
+            .EnsureSuccessStatusCode();
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked && host.Cache.KeyId == newKey.KeyId);   // claimed
+
+        _clipboard.Current = new ClipboardContent.Text("copied while locked");
+        _clipboard.RaiseChanged();
+        await WaitUntilAsync(() => QueuedCount() == 1);
+        sw!.Key = newKey;
+
+        Assert.Null(await host.UnlockAsync(next));
+
+        await WaitUntilAsync(() => sw.Uploads.Contains("copied while locked"));
+        Assert.Equal(newKey.KeyId, sw.UploadKeyIds[sw.Uploads.IndexOf("copied while locked")]);
+        await WaitUntilAsync(() => QueuedCount() == 0);
+    }
+
+    [Fact]
+    public async Task Copies_made_while_waiting_for_the_owner_survive_a_recheck()
+    {
+        using var server = new PrivatePasteFactory();
+        await server.AddPersonAsync("ana", "ana-password-1");
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var infoAsks = 0;
+        var dir = Path.Combine(_dir, "ana");
+        var ana = NewHost(server: server, dir: dir, unlocked: false, time: time,
+            handler: () => new SwitchHandler(server.Server.CreateHandler())
+            {
+                Respond = r =>
+                {
+                    if (r.RequestUri!.AbsolutePath == "/api/server-info") Interlocked.Increment(ref infoAsks);
+                    return null;
+                },
+            });
+        await SignInAsync(ana, "ana", "ana-password-1");
+        Assert.Equal(VaultState.WaitingForOwner, ana.VaultState);
+        _clipboard.Current = new ClipboardContent.Text("copied while waiting");
+        _clipboard.RaiseChanged();
+        await WaitUntilAsync(() => QueuedCount(dir) == 1);
+        var coordinator = ana.Coordinator;
+        var asked = Volatile.Read(ref infoAsks);
+
+        await WaitUntilAsync(() =>
+        {
+            time.Advance(DesktopHost.RecheckInterval);
+            return Volatile.Read(ref infoAsks) > asked + 1;   // asked again, twice
+        });
+
+        Assert.Equal(VaultState.WaitingForOwner, ana.VaultState);
+        Assert.Equal(1, QueuedCount(dir));
+        Assert.Same(coordinator, ana.Coordinator);   // nothing was wiped or rebuilt
     }
 
     /// <summary>A server from before end-to-end encryption: no /api/server-info.</summary>

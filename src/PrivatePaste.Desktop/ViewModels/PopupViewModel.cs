@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using PrivatePaste.Client.Core.Cache;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Desktop.Theme;
 using PrivatePaste.Protocol;
 
@@ -72,6 +73,8 @@ public sealed partial class PopupViewModel : ObservableObject
     /// <summary>The query an older-clip search ran for (or runs for), and whether it reached the end.</summary>
     private string? _olderQuery;
     private bool _olderDone;
+    /// <summary>The vault locked (or the sign-in ended) under a search: no more older-clip searches in this popup.</summary>
+    private bool _olderUnavailable;
 
     /// <param name="searchOlder">(query, ct) → the server's older clips that match, newest first; null: no such search.</param>
     public PopupViewModel(
@@ -152,7 +155,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private void AddSearchOlderRow()
     {
         var query = Query.Trim();
-        if (_searchOlder is null || Tab != PopupTab.History || query.Length == 0 || Items.Count > 0) return;
+        if (_searchOlder is null || _olderUnavailable || Tab != PopupTab.History || query.Length == 0 || Items.Count > 0) return;
         if (_olderQuery == query && (IsSearchingOlder || _olderDone)) return;
         Items.Add(PopupItem.SearchOlder);
         SelectedIndex = 0;
@@ -185,6 +188,11 @@ public sealed partial class PopupViewModel : ObservableObject
             _olderDone = true;
         }
         catch (OperationCanceledException) { return; }
+        catch (Exception e) when (e is VaultKeyClosedException or InvalidOperationException)
+        {
+            // Locked (a reset, a sign-out) meanwhile: not a network problem. What was found stays; the banner says the rest.
+            _olderUnavailable = true;
+        }
         catch (Exception)
         {
             if (search.IsCancellationRequested) return;

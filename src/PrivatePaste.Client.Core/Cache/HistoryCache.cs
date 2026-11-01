@@ -212,8 +212,14 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
                 _keyId = null;
                 _tombstones.Clear();
             }
-            try { File.Delete(path); } catch (IOException) { }
-            try { File.Delete(path + ".tmp"); } catch (IOException) { }
+            // The memory is clear either way; a file that can't be removed (locked, no access) must not fail the wipe.
+            try { File.Delete(path); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Overwrite it with the empty history instead, so the old one never loads again (the save lock is re-entrant).
+                try { Save(); } catch (Exception again) when (again is IOException or UnauthorizedAccessException) { }
+            }
+            try { File.Delete(path + ".tmp"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
         Changed?.Invoke(this, EventArgs.Empty);
     }
