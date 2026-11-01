@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:PrivatePaste.Desktop.ViewModels"
+        xmlns:views="using:PrivatePaste.Desktop.Views"
+        x:Class="PrivatePaste.Desktop.Views.UnlockWindow"
+        x:DataType="vm:UnlockViewModel"
+        Title="{Binding Title}"
+        Icon="avares://PrivatePaste/Assets/app.ico"
+        Width="420" MinWidth="380" MinHeight="360" SizeToContent="Height" CanResize="True"
+        ExtendClientAreaToDecorationsHint="True" WindowDecorations="BorderOnly"
+        ExtendClientAreaTitleBarHeightHint="36"
+        WindowStartupLocation="CenterScreen">
+  <DockPanel>
+    <views:TitleBar DockPanel.Dock="Top" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="28,28,28,28" Spacing="20" MaxWidth="420">
+        <views:Wordmark HorizontalAlignment="Left" />
+
+        <StackPanel Spacing="4">
+          <TextBlock x:Name="Heading" Classes="heading" Text="{Binding Title}" />
+          <TextBlock x:Name="MessageText" Foreground="{DynamicResource PpMuted}" TextWrapping="Wrap" Text="{Binding Message}"
+                     IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}" />
+        </StackPanel>
+
+        <Border Classes="panel">
+          <StackPanel Spacing="14">
+            <StackPanel>
+              <TextBlock Classes="label" Text="Passphrase" />
+              <TextBox x:Name="PassphraseBox" Text="{Binding Passphrase}" PasswordChar="•" />
+            </StackPanel>
+            <StackPanel IsVisible="{Binding IsSetup}">
+              <TextBlock Classes="label" Text="Repeat passphrase" />
+              <TextBox x:Name="RepeatBox" Text="{Binding Repeat}" PasswordChar="•" />
+              <TextBlock x:Name="RuleText" Margin="2,6,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource PpMuted}"
+                         Text="{x:Static vm:UnlockViewModel.Rule}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <TextBlock x:Name="ErrorText" Classes="error" TextWrapping="Wrap" Text="{Binding Error}"
+                   IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+        <Button x:Name="SubmitButton" Classes="primary" Content="{Binding ButtonText}" IsDefault="True" HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Center" Command="{Binding SubmitCommand}" />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

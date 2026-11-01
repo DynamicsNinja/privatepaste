@@ -349,6 +349,94 @@ public sealed class E2eSyncTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Sync_UpdateRequiredWhileApplyingHalts()
+    {
+        var b = await ConnectedAsync("B");
+        b.Handler.Respond = r => r.RequestUri!.AbsolutePath.EndsWith("/blobs/0")
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.UpgradeRequired) : null;
+
+        await _server.UploadImageAsync(await _server.LoginAsync("Phone"), _key, TestImages.MakePng(8, 8).ToArray());
+
+        await WaitUntilAsync(() => Volatile.Read(ref b.UpdatesRequired) == 1 && b.Engine.State == SyncState.Offline);
+        Assert.Empty(b.Clipboard.Writes);
+        Assert.Equal(1, Volatile.Read(ref b.Connects));
+    }
+
+    [Fact]
+    public async Task Sync_UpdateRequiredOnTheQueueRetryHalts()
+    {
+        var b = await ConnectedAsync("B");
+        b.Handler.Statuses.Enqueue(503);
+        await CopyAsync(b, "waits in the queue");
+        Assert.Equal(1, b.Queue.Count);
+        b.Handler.Respond = r => SwitchHandler.IsUpload(r) ? new HttpResponseMessage(System.Net.HttpStatusCode.UpgradeRequired) : null;
+
+        await WaitUntilAsync(() => Volatile.Read(ref b.UpdatesRequired) == 1, () => _time.Advance(TimeSpan.FromSeconds(1)));
+
+        await WaitUntilAsync(() => b.Engine.State == SyncState.Offline);
+        Assert.Equal(1, b.Queue.Count);   // nothing was sent: it stays for the updated app
+    }
+
+    [Fact]
+    public async Task Coordinator_LockedAsksNoLimitsAndQueuesTextOverTheDefault()
+    {
+        var a = await DeviceAsync("A");
+        var infoAsks = 0;
+        a.Handler.Respond = r =>
+        {
+            if (r.RequestUri!.AbsolutePath == "/api/server-info") Interlocked.Increment(ref infoAsks);
+            return null;
+        };
+        var codec = a.Codec;
+        a.Codec = null;   // locked
+        var big = new string('x', 1_048_577);
+
+        await CopyAsync(a, big);
+        await CopyAsync(a, "small");
+
+        Assert.Equal(0, Volatile.Read(ref infoAsks));
+        Assert.Equal(2, a.Queue.Count);   // the server's limit may be higher: not refused for good
+        Assert.Empty(a.Handler.Uploads);
+
+        // Unlocked: the flush asks for the real limit, which the big copy is over.
+        a.Codec = codec;
+        await a.Coordinator.FlushQueueAsync(default);
+        Assert.Equal(1, Volatile.Read(ref infoAsks));
+        Assert.Equal(0, a.Queue.Count);
+        Assert.Equal(["small"], a.Handler.Uploads);
+    }
+
+    [Fact]
+    public async Task Coordinator_AfterAFailedLimitsAskCopiesDontAskAgainAtOnce()
+    {
+        var a = await DeviceAsync("A");
+        var infoAsks = 0;
+        a.Handler.Respond = r =>
+        {
+            if (r.RequestUri!.AbsolutePath == "/api/server-info") Interlocked.Increment(ref infoAsks);
+            return null;
+        };
+        a.Handler.Offline = true;
+
+        await CopyAsync(a, "one");
+        await CopyAsync(a, "two");
+        Assert.Equal(1, Volatile.Read(ref infoAsks));
+        _time.Advance(ClipboardCoordinator.LimitsRetryDelay);
+        await CopyAsync(a, "three");
+        Assert.Equal(2, Volatile.Read(ref infoAsks));
+        Assert.Equal(3, a.Queue.Count);
+
+        // A flush asks regardless (the engine paces flushes itself), and waits without counting attempts while offline.
+        await a.Coordinator.FlushQueueAsync(default);
+        Assert.Equal(3, Volatile.Read(ref infoAsks));
+        Assert.True(a.Queue.TryPeek(out var head));
+        Assert.Equal(0, head.Attempts);
+        a.Handler.Offline = false;
+        await a.Coordinator.FlushQueueAsync(default);
+        Assert.Equal(0, a.Queue.Count);
+    }
+
+    [Fact]
     public async Task Sync_WithoutACodecStaysOfflineAndFetchesNothing()
     {
         var b = await DeviceAsync("B");
@@ -427,6 +515,18 @@ public sealed class E2eSyncTests : IAsyncLifetime
             found.Add(clip.Text);
 
         Assert.Equal(["needle old"], found);
+    }
+
+    [Fact]
+    public async Task OlderSearch_EmptyQueryAsksNothing()
+    {
+        var b = await DeviceAsync("B");
+        b.Handler.Offline = true;   // a request would throw
+
+        var found = new List<ClipDto>();
+        await foreach (var clip in new OlderClipSearch(b.Api, b.Codec!).SearchAsync("", null, default)) found.Add(clip);
+
+        Assert.Empty(found);
     }
 
     // ---------------------------------------------------------------- protocol header

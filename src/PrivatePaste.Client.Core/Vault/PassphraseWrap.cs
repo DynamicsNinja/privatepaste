@@ -7,8 +7,14 @@ using PrivatePaste.Protocol.Crypto;
 
 namespace PrivatePaste.Client.Core.Vault;
 
-/// <summary>Thrown by <see cref="PassphraseWrap.Unwrap"/> when the wrap can't be opened with the passphrase, or isn't a wrap this client accepts.</summary>
+/// <summary>Thrown by <see cref="PassphraseWrap.Unwrap"/> when the wrap can't be opened with the passphrase.</summary>
 public sealed class WrongPassphraseException(string message) : CryptographicException(message);
+
+/// <summary>
+/// Thrown by <see cref="PassphraseWrap.Unwrap"/> when the wrap isn't one this client accepts (malformed, another algorithm,
+/// or Argon2 settings outside the bounds), whatever the passphrase: the user is told to update, not to retype it.
+/// </summary>
+public sealed class UnsupportedWrapException(string message) : CryptographicException(message);
 
 /// <summary>
 /// The vault key wrapped under a passphrase, so a new device can recover it: Argon2id stretches the (NFC-normalised)
@@ -65,7 +71,8 @@ public static partial class PassphraseWrap
         }
     }
 
-    /// <exception cref="WrongPassphraseException">The passphrase is wrong, or the wrap is malformed or outside the accepted Argon2 bounds (checked before any key derivation).</exception>
+    /// <exception cref="WrongPassphraseException">The passphrase doesn't open the wrap.</exception>
+    /// <exception cref="UnsupportedWrapException">The wrap is malformed or outside the accepted Argon2 bounds (checked before any key derivation).</exception>
     public static VaultKey Unwrap(VaultWrapDto wrap, string passphrase)
     {
         var kdf = wrap.Kdf;
@@ -77,7 +84,7 @@ public static partial class PassphraseWrap
             || !TryDecode(kdf.Salt, SaltSize, out var salt)
             || !TryDecode(wrap.Nonce, NonceSize, out var nonce)
             || !TryDecode(wrap.WrappedKey, KeySize + TagSize, out var wrapped))
-            throw new WrongPassphraseException("Unsupported passphrase wrap.");
+            throw new UnsupportedWrapException("Unsupported passphrase wrap.");
 
         var kek = DeriveKek(passphrase, salt, kdf.MemoryKiB, kdf.Iterations, kdf.Parallelism);
         var vk = new byte[KeySize];

@@ -82,6 +82,45 @@
           </StackPanel>
         </Border>
 
+        <Border x:Name="EncryptionPanel" Classes="panel" IsVisible="{Binding ShowsEncryption}">
+          <StackPanel Spacing="12">
+            <TextBlock Classes="label" Text="Encryption" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button x:Name="ChangePassphraseButton" Content="Change passphrase" Command="{Binding StartChangePassphraseCommand}"
+                      IsVisible="{Binding CanChangePassphrase}" IsEnabled="{Binding !IsChangingPassphrase}" />
+              <Button x:Name="AddDeviceButton" Content="Add a device" Command="{Binding AddDeviceCommand}"
+                      IsVisible="{Binding CanAddDevice}" />
+            </StackPanel>
+
+            <TextBlock FontSize="12" Foreground="{DynamicResource PpMuted}" Text="{Binding PassphraseNotice}"
+                       IsVisible="{Binding PassphraseNotice, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+            <StackPanel x:Name="ChangePassphrasePanel" Spacing="12" IsVisible="{Binding IsChangingPassphrase}">
+              <StackPanel>
+                <TextBlock Classes="label" Text="Current passphrase" />
+                <TextBox x:Name="CurrentPassphraseBox" Text="{Binding CurrentPassphrase}" PasswordChar="•" />
+              </StackPanel>
+              <StackPanel>
+                <TextBlock Classes="label" Text="New passphrase" />
+                <TextBox Text="{Binding NewPassphrase}" PasswordChar="•" />
+              </StackPanel>
+              <StackPanel>
+                <TextBlock Classes="label" Text="Repeat passphrase" />
+                <TextBox x:Name="RepeatPassphraseBox" Text="{Binding RepeatPassphrase}" PasswordChar="•" />
+                <TextBlock Margin="2,6,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource PpMuted}"
+                           Text="{x:Static vm:SettingsViewModel.PassphraseRule}" />
+              </StackPanel>
+              <TextBlock Classes="error" FontSize="12" TextWrapping="Wrap" Text="{Binding PassphraseError}"
+                         IsVisible="{Binding PassphraseError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Classes="primary" Content="Change" Command="{Binding ChangePassphraseCommand}" />
+                <Button Content="Cancel" Command="{Binding CancelChangePassphraseCommand}" />
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
         <Button Classes="danger" Content="Sign out" HorizontalAlignment="Left" Command="{Binding SignOutCommand}" />
       </StackPanel>
     </ScrollViewer>

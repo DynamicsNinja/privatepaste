@@ -27,6 +27,8 @@ public partial class App : Application
     private TrayController? _tray;
     private SignInWindow? _signIn;
     private SettingsWindow? _settings;
+    private UnlockWindow? _unlock;
+    private AddDeviceWindow? _addDevice;
     private PopupWindow? _popup;
     private HotkeyService? _hotkeys;
     private PasteInjector? _injector;
@@ -54,6 +56,7 @@ public partial class App : Application
 
         // ---- Tray menu ----
         _tray.SignInRequested += (_, _) => ShowSignIn();
+        _tray.UnlockRequested += (_, _) => ShowUnlock();
         _tray.SettingsRequested += (_, _) => ShowSettings();
         _tray.SignOutRequested += (_, _) => _ = _host.SignOutAsync();
         _tray.OpenHistoryRequested += (_, _) =>
@@ -70,8 +73,11 @@ public partial class App : Application
         _host.SignedOut += (_, _) => Dispatcher.UIThread.Post(() =>
         {
             _settings?.Close();
+            _unlock?.Close();
+            _addDevice?.Close();
             if (!_quitting) ShowSignIn();
         });
+        _host.VaultStateChanged += (_, _) => Dispatcher.UIThread.Post(OnVaultStateChanged);
 
         // A clip from another device just landed on the clipboard (the host checks the setting). Raised on the sync loop:
         // build the content there and only post to the UI thread, so the loop never waits for the UI.
@@ -134,16 +140,76 @@ public partial class App : Application
             return;
         }
         var s = _host.Settings;
+        var unlocked = _host.VaultState == VaultState.Unlocked;
         var vm = new SettingsViewModel(
             server: s.ServerUrl?.TrimEnd('/') ?? "", deviceName: s.DeviceName, hotkey: s.Hotkey, autostart: s.Autostart,
             autostartLabel: _host.Platform.AutostartLabel,
             applyHotkey: _host.SetHotkey, setAutostart: _host.SetAutostart, signOut: _host.SignOutAsync,
             notifyOnClipArrival: s.NotifyOnClipArrival, setNotifyOnClipArrival: _host.SetNotifyOnClipArrival,
             blockedApps: s.BlockedApps, recentSourceApps: () => _host?.Coordinator?.RecentSourceApps ?? [],
-            setBlockedApps: _host.SetBlockedApps, canIdentifySourceApp: _host.Platform.CanIdentifySourceApp);
+            setBlockedApps: _host.SetBlockedApps, canIdentifySourceApp: _host.Platform.CanIdentifySourceApp,
+            isOwner: unlocked && _host.IsOwner, changePassphrase: _host.ChangePassphraseAsync,
+            addDevice: unlocked ? ShowAddDevice : null);
         var window = new SettingsWindow { DataContext = vm };
         window.Closed += (_, _) => _settings = null;
         _settings = window;
+        window.Show();
+    }
+
+    // ======================================================================== Encryption: unlock, set up, add a device
+
+    /// <summary>UI thread. Opens (or updates) the unlock window when the vault needs a passphrase, and closes it otherwise.</summary>
+    private void OnVaultStateChanged()
+    {
+        if (_host is not { } host || _quitting) return;
+        var state = host.VaultState;
+        if (state is VaultState.Locked or VaultState.NeedsOwnerSetup)
+        {
+            ShowUnlock();
+            return;
+        }
+        _unlock?.Close();
+        if (state != VaultState.Unlocked) _addDevice?.Close();
+        // Once per change: the tray keeps saying it.
+        if (state != VaultState.Unknown && VaultCopy.For(state, keyWasReset: false) is { } message) _toast?.Notify(message);
+    }
+
+    private void ShowUnlock()
+    {
+        if (_host is not { IsSignedIn: true } host) return;
+        var state = host.VaultState;
+        if (state is not (VaultState.Locked or VaultState.NeedsOwnerSetup)) return;
+        var mode = state == VaultState.NeedsOwnerSetup ? UnlockMode.Setup : UnlockMode.Unlock;
+        var message = host.KeyWasReset ? VaultCopy.WasReset : null;
+        if (_unlock is { DataContext: UnlockViewModel open })
+        {
+            open.Show(mode, message);
+            _unlock.Activate();
+            return;
+        }
+        var vm = new UnlockViewModel(host.UnlockAsync, host.SetUpVaultAsync, mode, message);
+        var window = new UnlockWindow { DataContext = vm };
+        vm.Done += (_, _) =>
+        {
+            window.Close();
+            _tray?.Refresh();
+        };
+        window.Closed += (_, _) => { if (_unlock == window) _unlock = null; };
+        _unlock = window;
+        window.Show();
+    }
+
+    private void ShowAddDevice()
+    {
+        if (_host is not { } host) return;
+        if (_addDevice is not null)
+        {
+            _addDevice.Activate();
+            return;
+        }
+        var window = new AddDeviceWindow { DataContext = new AddDeviceViewModel(host.CreateHandoverAsync, TimeProvider.System) };
+        window.Closed += (_, _) => { if (_addDevice == window) _addDevice = null; };
+        _addDevice = window;
         window.Show();
     }
 
@@ -210,8 +276,11 @@ public partial class App : Application
             return;
         }
         var host = _host;
-        var vm = new PopupViewModel(host.Cache, SearchServerAsync, ActivateFromPopupAsync, TimeProvider.System,
-            PinFromPopupAsync, ListPinnedFromServerAsync, message => _toast?.Notify(message));
+        var vm = new PopupViewModel(host.Cache, host.Codec is null ? null : SearchOlder, ActivateFromPopupAsync,
+            TimeProvider.System, PinFromPopupAsync, ListPinnedFromServerAsync, message => _toast?.Notify(message))
+        {
+            Banner = host.VaultMessage,
+        };
         var window = new PopupWindow { DataContext = vm };
         // History that arrives while the popup is open shows up in it (the query and selection are kept).
         EventHandler onHistory = (_, _) => Dispatcher.UIThread.Post(() => { if (_popup == window) vm.RefreshFromCache(); });
@@ -240,18 +309,11 @@ public partial class App : Application
         window.ShowAt(cursor);
     }
 
-    /// <summary>The server can't search: page through the history and match on this device, up to 50 hits.</summary>
-    private async Task<IReadOnlyList<ClipDto>> SearchServerAsync(string query, CancellationToken ct)
-    {
-        if (_host?.Api is not { } api || _host.Codec is not { } codec) return [];
-        var hits = new List<ClipDto>();
-        await foreach (var clip in new OlderClipSearch(api, codec).SearchAsync(query, null, ct))
-        {
-            hits.Add(clip);
-            if (hits.Count == 50) break;
-        }
-        return hits;
-    }
+    /// <summary>"Search older clips": the server can't search, so its history is paged through and matched on this device.</summary>
+    private IAsyncEnumerable<ClipDto> SearchOlder(string query, CancellationToken ct) =>
+        _host?.Api is { } api && _host.Codec is { } codec
+            ? new OlderClipSearch(api, codec).SearchAsync(query, null, ct)
+            : throw new InvalidOperationException("Locked or signed out.");
 
     private async Task<ClipDto> PinFromPopupAsync(Guid id, bool pinned) =>
         Codec().Decode(await (_host?.Api ?? throw new InvalidOperationException("Signed out.")).PinAsync(id, pinned));

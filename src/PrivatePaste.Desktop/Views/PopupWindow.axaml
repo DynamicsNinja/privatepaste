@@ -123,7 +123,16 @@
   <Border Background="{DynamicResource PpNight}" BorderBrush="{DynamicResource PpLine}" BorderThickness="1"
           CornerRadius="{StaticResource PpPanelRadius}" Padding="12">
     <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
-      <TextBox x:Name="SearchBox" Text="{Binding Query}" PlaceholderText="Search history" />
+      <!-- A stack, not a grid row: a hidden banner takes no space or spacing. -->
+      <StackPanel Spacing="10">
+        <!-- Why sync isn't running (an old app or server, a reset): the history below is what this computer still holds. -->
+        <Border x:Name="BannerPanel" Background="{DynamicResource PpRaised}" CornerRadius="{StaticResource PpControlRadius}"
+                Padding="12,8" IsVisible="{Binding Banner, Converter={x:Static ObjectConverters.IsNotNull}}">
+          <TextBlock x:Name="BannerText" Text="{Binding Banner}" TextWrapping="Wrap" FontSize="12"
+                     Foreground="{DynamicResource PpText}" />
+        </Border>
+        <TextBox x:Name="SearchBox" Text="{Binding Query}" PlaceholderText="Search history" />
+      </StackPanel>
 
       <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="4">
         <Border x:Name="HistoryTabButton" Classes="tab" Classes.active="{Binding IsHistoryTab}" Focusable="False">
@@ -157,6 +166,16 @@
                         <Canvas IsVisible="{Binding IsText}">
                           <Path Data="M5 6h14M5 12h14M5 18h9" />
                         </Canvas>
+                        <!-- A clip this app can't show: a question mark. -->
+                        <Canvas IsVisible="{Binding IsUnknown}">
+                          <Ellipse Canvas.Left="3" Canvas.Top="3" Width="18" Height="18" />
+                          <Path Data="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01" />
+                        </Canvas>
+                        <!-- Search older clips: a magnifier. -->
+                        <Canvas IsVisible="{Binding IsSearchOlder}">
+                          <Ellipse Canvas.Left="4" Canvas.Top="4" Width="13" Height="13" />
+                          <Path Data="M20 20l-4.2-4.2" />
+                        </Canvas>
                       </Panel>
                     </Viewbox>
                     <Image Source="{Binding Thumbnail, Converter={x:Static views:PopupWindow.ThumbnailConverter}}"
@@ -166,7 +185,7 @@
                 <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
                   <TextBlock Text="{Binding Preview}" TextTrimming="CharacterEllipsis" MaxLines="1" />
                   <!-- Spacing is per element margin, so a hidden chip or pin leaves no gap. -->
-                  <Grid ColumnDefinitions="Auto,Auto,Auto,*">
+                  <Grid ColumnDefinitions="Auto,Auto,Auto,*" IsVisible="{Binding IsClip}">
                     <!-- Who copied it; a plain Border so nothing in the popup can take the focus. -->
                     <Border x:Name="PersonChip" Background="{DynamicResource PpChipBackground}"
                             CornerRadius="9" Padding="7,1" Margin="0,0,5,0" VerticalAlignment="Center"
@@ -192,7 +211,8 @@
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                   </Grid>
                 </StackPanel>
-                <Button Grid.Column="2" Classes="pin" AutomationProperties.Name="{Binding PinLabel}" ToolTip.Tip="{Binding PinLabel}">
+                <Button Grid.Column="2" Classes="pin" AutomationProperties.Name="{Binding PinLabel}" ToolTip.Tip="{Binding PinLabel}"
+                        IsVisible="{Binding IsClip}">
                   <Viewbox Width="16" Height="16">
                     <Canvas Width="24" Height="24">
                       <Path Classes="pinicon" Classes.pinned="{Binding IsPinned}" Data="{StaticResource PpIconPin}" />

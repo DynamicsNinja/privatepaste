@@ -1,0 +1,42 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:PrivatePaste.Desktop.ViewModels"
+        xmlns:views="using:PrivatePaste.Desktop.Views"
+        x:Class="PrivatePaste.Desktop.Views.AddDeviceWindow"
+        x:DataType="vm:AddDeviceViewModel"
+        Title="Add a device"
+        Icon="avares://PrivatePaste/Assets/app.ico"
+        Width="420" MinWidth="380" MinHeight="420" SizeToContent="Height" CanResize="True"
+        ExtendClientAreaToDecorationsHint="True" WindowDecorations="BorderOnly"
+        ExtendClientAreaTitleBarHeightHint="36"
+        WindowStartupLocation="CenterScreen">
+  <DockPanel>
+    <views:TitleBar DockPanel.Dock="Top" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="28,28,28,28" Spacing="20" MaxWidth="420">
+        <views:Wordmark HorizontalAlignment="Left" />
+
+        <TextBlock Classes="heading" Text="Add a device" />
+
+        <!-- Dark modules on a white card in both themes: scanners expect dark on light, with a quiet zone around it. -->
+        <StackPanel x:Name="CodePanel" Spacing="14" IsVisible="{Binding HasCode}">
+          <Border x:Name="QrCard" Background="White" CornerRadius="{StaticResource PpPanelRadius}" Padding="20"
+                  HorizontalAlignment="Center" Width="280" Height="280">
+            <Image x:Name="QrImage" Source="{Binding QrText, Converter={x:Static views:AddDeviceWindow.QrConverter}}"
+                   Stretch="Uniform" RenderOptions.BitmapInterpolationMode="None"
+                   AutomationProperties.Name="QR code for adding a device" />
+          </Border>
+          <TextBlock TextWrapping="Wrap" TextAlignment="Center" Text="{x:Static vm:AddDeviceViewModel.Body}" />
+          <TextBlock x:Name="TimeLeftText" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                     Text="{Binding TimeLeft}" />
+        </StackPanel>
+
+        <StackPanel x:Name="ProblemPanel" Spacing="14" IsVisible="{Binding HasProblem}">
+          <TextBlock x:Name="ProblemText" TextWrapping="Wrap" Text="{Binding Problem}" />
+          <Button Classes="primary" Content="{Binding ButtonText}" HorizontalAlignment="Left"
+                  Command="{Binding ShowNewCodeCommand}" />
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

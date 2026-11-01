@@ -94,7 +94,8 @@ public partial class PopupWindow : Window
     {
         if (vm is null) return;
         EmptyText.IsVisible = vm.Items.Count == 0;
-        EmptyText.Text = vm.Query.Trim().Length > 0 ? "No matches."
+        EmptyText.Text = vm.IsSearchingOlder ? PopupViewModel.SearchingOlderText
+            : vm.Query.Trim().Length > 0 ? "No matches."
             : vm.Tab == PopupTab.Pinned ? "Nothing pinned yet." : "Nothing to paste yet.";
     }
 
@@ -108,7 +109,8 @@ public partial class PopupWindow : Window
     {
         if (e.PropertyName == nameof(PopupViewModel.SelectedIndex) && sender is PopupViewModel { SelectedIndex: >= 0 } vm)
             ItemsList.ScrollIntoView(vm.SelectedIndex);
-        else if (e.PropertyName == nameof(PopupViewModel.Query)) UpdateEmpty(sender as PopupViewModel);
+        else if (e.PropertyName is nameof(PopupViewModel.Query) or nameof(PopupViewModel.IsSearchingOlder))
+            UpdateEmpty(sender as PopupViewModel);
         else if (e.PropertyName == nameof(PopupViewModel.Tab) && sender is PopupViewModel tabbed) ApplyTab(tabbed);
     }
 

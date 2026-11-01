@@ -19,14 +19,30 @@ using PrivatePaste.Protocol.Crypto;
 namespace PrivatePaste.Desktop;
 
 /// <summary>
-/// Composition root: owns settings, secrets, the local cache and offline queue, and, while signed in, one
+/// Composition root: owns settings, secrets, the local cache and offline queue, the vault key, and, while signed in, one
 /// <see cref="Session"/> (HTTP client, API, coordinator, sync engine). UI-free; events are raised on background
 /// threads, so UI subscribers must marshal to the UI thread.
+/// <para>
+/// The vault state machine runs at start and after each sign-in (<see cref="VaultState"/>): a server without
+/// <c>/api/server-info</c> is <see cref="ViewModels.VaultState.ServerTooOld"/>. Local history or queued copies that weren't
+/// opened with the server's current key (from before encryption, or from before a reset this computer missed) are wiped,
+/// with the stored key, before anything syncs. Then no vault is <see cref="ViewModels.VaultState.NeedsOwnerSetup"/> for the
+/// owner and <see cref="ViewModels.VaultState.WaitingForOwner"/> for others; a stored key with the vault's key id is
+/// <see cref="ViewModels.VaultState.Unlocked"/> (and only then does the engine start), anything else
+/// <see cref="ViewModels.VaultState.Locked"/>. A key reset wipes the same way and locks; signing out or being revoked
+/// deletes the key too. The copy returned by <see cref="UnlockAsync"/>, <see cref="SetUpVaultAsync"/> and
+/// <see cref="ChangePassphraseAsync"/> is the same as Android's. Never log passphrases, keys or the handover QR text.
+/// </para>
 /// </summary>
 public sealed class DesktopHost : IAsyncDisposable
 {
     private static readonly TimeSpan EchoWindow = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan LogoutTimeout = TimeSpan.FromSeconds(5);
+    /// <summary>The first wait before asking the server about its vault again after it couldn't be reached; doubles up to <see cref="CheckRetryMax"/>.</summary>
+    private static readonly TimeSpan CheckRetryFirst = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan CheckRetryMax = TimeSpan.FromMinutes(1);
+    /// <summary>How often a state only someone else can change (no vault yet, an old server) is asked about again.</summary>
+    public static readonly TimeSpan RecheckInterval = TimeSpan.FromMinutes(1);
 
     private readonly INotifier _notifier;
     private readonly FileLog _log;
@@ -52,6 +68,12 @@ public sealed class DesktopHost : IAsyncDisposable
     private OutboundQueue _queue;
     private volatile Session? _session;
     private volatile bool _paused;
+    private volatile VaultState _vaultState = VaultState.Unknown;
+    private volatile bool _isOwner;
+    private volatile bool _keyWasReset;
+    /// <summary>Bumped by every sign-in, sign-out and start: a vault check loop of an earlier one stops.</summary>
+    private int _checkEpoch;
+    private volatile CancellationTokenSource? _checkWait;
 
     public DesktopHost(
         PlatformServices platform, string dataDirectory, INotifier notifier, FileLog log,
@@ -114,8 +136,26 @@ public sealed class DesktopHost : IAsyncDisposable
     /// <summary>The coordinator of the current session; null while signed out.</summary>
     public ClipboardCoordinator? Coordinator => _session?.Coordinator;
 
-    /// <summary>Seals and opens clips with this device's vault key; null while there is no key (locked).</summary>
-    public ClipCodec? Codec => _codec;
+    /// <summary>
+    /// Seals and opens clips with this device's vault key; null unless <see cref="VaultState"/> is Unlocked (a stored key
+    /// is used only once the server confirmed it is still the vault's).
+    /// </summary>
+    public ClipCodec? Codec => _vaultState == VaultState.Unlocked ? _codec : null;
+
+    /// <summary>Where this computer stands with the server's encryption. Unknown while signed out or not asked yet.</summary>
+    public VaultState VaultState => _vaultState;
+
+    /// <summary>Whether this account is the server's owner, as of the last vault check.</summary>
+    public bool IsOwner => _isOwner;
+
+    /// <summary>The owner reset encryption while this computer held the old key: the unlock window says so.</summary>
+    public bool KeyWasReset => _keyWasReset;
+
+    /// <summary>The copy for the current <see cref="VaultState"/> (tray, popup banner), or null (see <see cref="VaultCopy.For"/>).</summary>
+    public string? VaultMessage => VaultCopy.For(_vaultState, _keyWasReset);
+
+    /// <summary>Raised on a background thread whenever <see cref="VaultState"/> changes.</summary>
+    public event EventHandler<VaultState>? VaultStateChanged;
 
     /// <summary>
     /// Stores <paramref name="key"/> as this device's vault key (protected like the sign-in token) and uses it from now on.
@@ -181,6 +221,7 @@ public sealed class DesktopHost : IAsyncDisposable
             var token = _tokenFile.Read();
             if (token is null || _settings.DeviceId is not { } deviceId || ServerUri is not { } server) return false;
             StartSession(server, token, deviceId);
+            BeginVaultCheck();
             _log.Info("Resumed the stored session.");
             return true;
         }
@@ -236,6 +277,7 @@ public sealed class DesktopHost : IAsyncDisposable
             UpdateSettings(s => s with { ServerUrl = server.AbsoluteUri, DeviceName = deviceName, DeviceId = login.DeviceId,
                 Username = username.Trim() });
             StartSession(server, login.Token, login.DeviceId, http);
+            BeginVaultCheck();
             _log.Info("Signed in.");
             return new SignInOutcome(SignInResult.Ok, null);
         }
@@ -288,7 +330,13 @@ public sealed class DesktopHost : IAsyncDisposable
         _tokenFile.Delete();
         Cache.Clear();
         ClearQueue();
+        DeleteVaultKey();   // it belongs to this account's server
         UpdateSettings(s => s with { DeviceId = null });
+        Interlocked.Increment(ref _checkEpoch);
+        Cancel(_checkWait);
+        _isOwner = false;
+        _keyWasReset = false;
+        SetVaultState(VaultState.Unknown);
     }
 
     private void RaiseSignedOut()
@@ -306,8 +354,12 @@ public sealed class DesktopHost : IAsyncDisposable
 
     // ======================================================================== Session (HTTP, API, coordinator, engine)
 
-    /// <summary>One signed-in session. Clipboard work runs through <see cref="TryRun"/> so it can be cancelled and drained.</summary>
-    private sealed class Session(HttpClient http, PrivatePasteApi api, ClipboardCoordinator coordinator, SyncEngine engine)
+    /// <summary>
+    /// One signed-in session. Clipboard work runs through <see cref="TryRun"/> so it can be cancelled and drained. A wipe of
+    /// the local data (a key reset) replaces it with a new one on the same sign-in.
+    /// </summary>
+    private sealed class Session(HttpClient http, PrivatePasteApi api, ClipboardCoordinator coordinator, SyncEngine engine,
+        Uri server, string token, Guid deviceId)
     {
         private readonly object _gate = new();
         private readonly HashSet<Task> _inFlight = [];
@@ -318,6 +370,9 @@ public sealed class DesktopHost : IAsyncDisposable
         public PrivatePasteApi Api => api;
         public ClipboardCoordinator Coordinator => coordinator;
         public SyncEngine Engine => engine;
+        public Uri Server => server;
+        public string Token => token;
+        public Guid DeviceId => deviceId;
 
         /// <summary>Starts tracked work (which must not throw); false once the session is closing.</summary>
         public bool TryRun(Func<CancellationToken, Task> work)
@@ -349,21 +404,25 @@ public sealed class DesktopHost : IAsyncDisposable
         }
     }
 
-    // Caller holds _lifecycle.
-    private void StartSession(Uri server, string token, Guid deviceId, HttpClient? http = null)
+    /// <summary>
+    /// Builds a session and makes it the current one. Caller holds _lifecycle. The engine is not started: that waits for
+    /// the vault check (<see cref="ApplyCheckAsync"/>) or an unlock to say this computer holds the vault's key.
+    /// </summary>
+    private Session StartSession(Uri server, string token, Guid deviceId, HttpClient? http = null)
     {
         http ??= CreateHttpClient(server);
         var api = new PrivatePasteApi(http, _time) { Token = token };
+        // Both take the codec only while unlocked: until then copies wait in the queue and nothing is fetched.
         var coordinator = new ClipboardCoordinator(
-            Platform.Clipboard, api, () => _codec, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused,
+            Platform.Clipboard, api, () => Codec, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused,
             app => BlockedApps.Matches(_settings.BlockedApps, app),   // reads the current settings, so edits apply at once
             _log.Info);
         var wsUri = WebSocketUri(http.BaseAddress!);
         var engine = new SyncEngine(
-            api, Cache, coordinator, () => _codec, ct => ConnectWithTimeoutAsync(t => _transport.Connect(wsUri, token, t), _time, ct),
+            api, Cache, coordinator, () => Codec, ct => ConnectWithTimeoutAsync(t => _transport.Connect(wsUri, token, t), _time, ct),
             deviceId, _time, new Backoff(Random.Shared), () => _paused);
 
-        var session = new Session(http, api, coordinator, engine);
+        var session = new Session(http, api, coordinator, engine, server, token, deviceId);
         engine.StateChanged += (_, state) =>
         {
             if (state is SyncState.Connected or SyncState.Offline or SyncState.Paused) _log.Info($"Sync state: {state}.");
@@ -374,13 +433,13 @@ public sealed class DesktopHost : IAsyncDisposable
         {
             if (_session == session && !_paused && _settings.NotifyOnClipArrival) ClipArrived?.Invoke(this, clip);
         };
-        // Never block the engine loop: sign out on another task.
+        // Never block the engine loop (or the coordinator's gate, which a reset can be raised under): act on another task.
         engine.Revoked += (_, _) => _ = Task.Run(() => OnRevokedAsync(session));
-        engine.KeyReset += (_, _) => _log.Info("Encryption was reset on the server; sync stopped until the new passphrase is entered.");
-        engine.UpdateRequired += (_, _) => _log.Info("The server needs a newer version of this app; sync stopped.");
+        engine.KeyReset += (_, _) => _ = Task.Run(() => OnKeyResetAsync(session));
+        engine.UpdateRequired += (_, _) => _ = Task.Run(() => SettleAsync(session, VaultState.UpdateRequired));
 
         _session = session;
-        engine.Start();
+        return session;
     }
 
     /// <summary>BaseAddress = normalized server URL with a trailing '/', so relative API paths keep any sub-path.</summary>
@@ -432,6 +491,374 @@ public sealed class DesktopHost : IAsyncDisposable
             Scheme = baseAddress.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
         };
         return builder.Uri;
+    }
+
+
+    // ======================================================================== Vault: the state machine
+
+    /// <summary>Starts asking the server about its vault for the current sign-in: in the background, retried while offline.</summary>
+    private void BeginVaultCheck()
+    {
+        var epoch = Interlocked.Increment(ref _checkEpoch);
+        _ = Task.Run(() => VaultCheckLoopAsync(epoch));
+    }
+
+    private async Task VaultCheckLoopAsync(int epoch)
+    {
+        var retry = CheckRetryFirst;
+        while (!_shutdown.IsCancellationRequested && Volatile.Read(ref _checkEpoch) == epoch && _session is { } session)
+        {
+            TimeSpan wait;
+            if (await CheckVaultAsync(session).ConfigureAwait(false))
+            {
+                // Settled. Only what someone else changes is asked about again: the owner sets up, the server is updated.
+                if (_vaultState is not (VaultState.WaitingForOwner or VaultState.ServerTooOld)) return;
+                wait = RecheckInterval;
+                retry = CheckRetryFirst;
+            }
+            else
+            {
+                wait = retry;
+                retry = TimeSpan.FromTicks(Math.Min(retry.Ticks * 2, CheckRetryMax.Ticks));
+            }
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+            _checkWait = cts;
+            try { await Task.Delay(wait, _time, cts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }   // a network change, a sign-out or shutdown: the loop condition decides
+            finally { _checkWait = null; }
+        }
+    }
+
+    /// <summary>Asks the server once and settles the state. False when it couldn't be asked (offline, a server error).</summary>
+    private async Task<bool> CheckVaultAsync(Session session)
+    {
+        VaultWrapDto? vault;
+        bool owner;
+        try
+        {
+            if (await session.Api.GetServerInfoAsync(_shutdown.Token).ConfigureAwait(false) is null)
+            {
+                await SettleAsync(session, VaultState.ServerTooOld).ConfigureAwait(false);
+                return true;
+            }
+            vault = await session.Api.GetVaultAsync(_shutdown.Token).ConfigureAwait(false);
+            owner = (await session.Api.GetMeAsync(_shutdown.Token).ConfigureAwait(false)).IsOwner;
+        }
+        catch (UpdateRequiredException)
+        {
+            await SettleAsync(session, VaultState.UpdateRequired).ConfigureAwait(false);
+            return true;
+        }
+        catch (UnauthorizedApiException)
+        {
+            _ = Task.Run(() => OnRevokedAsync(session));
+            return true;
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            return true;
+        }
+        catch (Exception e)
+        {
+            _log.Error("Could not ask the server about encryption; trying again.", e);
+            return false;
+        }
+        await ApplyCheckAsync(session, vault, owner).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Steps 2 to 4 of the state machine (see the class docs) with the server's answer.</summary>
+    private async Task ApplyCheckAsync(Session session, VaultWrapDto? vault, bool owner)
+    {
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_session != session) return;   // signed out or replaced meanwhile
+            _isOwner = owner;
+            // Already syncing: key changes reach the engine (a reset message, a foreign key id, a 409).
+            if (_vaultState == VaultState.Unlocked) return;
+            var serverKeyId = vault?.KeyId;
+            if (HasLocalData() && (Cache.KeyId is null || Cache.KeyId != serverKeyId))
+            {
+                _log.Info("Local history belongs to another key (or predates encryption); clearing it.");
+                session = await WipeLocalDataAsync(session).ConfigureAwait(false);
+            }
+            if (HeldKeyId() is { } held && held != serverKeyId) DeleteVaultKey();
+            if (serverKeyId is not null) ClaimLocalData(serverKeyId);
+            var state = vault is null ? (owner ? VaultState.NeedsOwnerSetup : VaultState.WaitingForOwner)
+                : HeldKeyId() is not null ? VaultState.Unlocked
+                : VaultState.Locked;
+            SetVaultState(state);
+            if (state == VaultState.Unlocked) session.Engine.Start();
+        }
+        finally { _lifecycle.Release(); }
+    }
+
+    /// <summary>
+    /// The owner reset encryption (a reset message, a clip under another key id, or a 409 on upload): the stored key opens
+    /// nothing new, and the history it opened is gone from the server. Wipes both and locks; the sign-in stays. Runs off the
+    /// engine loop and the coordinator's gate (the event can be raised under either).
+    /// </summary>
+    private async Task OnKeyResetAsync(Session session)
+    {
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_session != session) return;
+            _log.Info("Encryption was reset on the server; local history cleared until the new passphrase is entered.");
+            await WipeLocalDataAsync(session).ConfigureAwait(false);
+            _keyWasReset = true;
+            SetVaultState(VaultState.Locked);
+        }
+        finally { _lifecycle.Release(); }
+    }
+
+    /// <summary>
+    /// Clears the history (thumbnails included), the queue and the stored key, and replaces the session with a fresh one on
+    /// the same sign-in (its engine not started), so nothing of the old one writes them again. Caller holds _lifecycle.
+    /// </summary>
+    private async Task<Session> WipeLocalDataAsync(Session session)
+    {
+        await session.CloseAsync().ConfigureAwait(false);
+        await session.Engine.StopAsync().ConfigureAwait(false);
+        Cache.Clear();
+        ClearQueue();
+        DeleteVaultKey();
+        return StartSession(session.Server, session.Token, session.DeviceId, session.Http);
+    }
+
+    private async Task SettleAsync(Session session, VaultState state)
+    {
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_session == session) SetVaultState(state);
+        }
+        finally { _lifecycle.Release(); }
+    }
+
+    private void SetVaultState(VaultState state)
+    {
+        if (_vaultState == state) return;
+        _vaultState = state;
+        _log.Info($"Encryption: {state}.");
+        try { VaultStateChanged?.Invoke(this, state); }
+        catch (Exception e) { _log.Error("A vault state listener failed.", e); }
+    }
+
+    private bool HasLocalData() =>
+        Cache.Items.Count > 0 || Cache.HighestSeq > 0 || Cache.LastAppliedAt is not null || _queue.Count > 0;
+
+    /// <summary>Marks what is held now (queued copies too) as belonging to <paramref name="keyId"/>, so a restart keeps it.</summary>
+    private void ClaimLocalData(string keyId)
+    {
+        if (Cache.KeyId == keyId) return;
+        Cache.KeyId = keyId;
+        try { Cache.Save(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Error("Could not save local history.", e); }
+    }
+
+    private string? HeldKeyId()
+    {
+        lock (_keyGate) return _vaultKey?.KeyId;
+    }
+
+    private void DeleteVaultKey()
+    {
+        try { _vaultKeyStore.Delete(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Error("Could not delete the vault key.", e); }
+        ReplaceVaultKey(null);
+    }
+
+    // ======================================================================== Vault: unlock, set up, change, hand over
+
+    /// <summary>Unlocks with the passphrase (Argon2 runs off the calling thread). Null when unlocked; otherwise the copy to show.</summary>
+    public async Task<string?> UnlockAsync(string passphrase)
+    {
+        if (_session is not { } session) return null;
+        try
+        {
+            var wrap = await AskAsync(session, VaultCopy.UnlockFailed, ct => session.Api.GetVaultAsync(ct)).ConfigureAwait(false);
+            if (wrap is null)
+            {
+                await CheckVaultAsync(session).ConfigureAwait(false);   // the vault is gone: set up, or wait for the owner
+                return null;
+            }
+            return await KeepAsync(session, await UnwrapAsync(wrap, passphrase).ConfigureAwait(false)).ConfigureAwait(false);
+        }
+        catch (Shown e) { return e.Copy; }
+    }
+
+    /// <summary>The owner sets up encryption with a new key. Null when done (unlocked); otherwise the copy to show.</summary>
+    public async Task<string?> SetUpVaultAsync(string passphrase, string repeat)
+    {
+        if (VaultCopy.NewPassphraseProblem(passphrase, repeat) is { } problem) return problem;
+        if (_session is not { } session) return null;
+        VaultKey? owned = VaultKey.Create();
+        try
+        {
+            var key = owned;
+            var wrap = await Task.Run(() => PassphraseWrap.Wrap(key, passphrase)).ConfigureAwait(false);
+            try
+            {
+                await AskAsync(session, VaultCopy.SetupFailed, async ct =>
+                {
+                    await session.Api.PutVaultAsync(wrap, ct).ConfigureAwait(false);
+                    return true;
+                }, forbidden: VaultCopy.WaitingForOwner, conflict: VaultCopy.SetUpElsewhere).ConfigureAwait(false);
+            }
+            catch (Shown)
+            {
+                await CheckVaultAsync(session).ConfigureAwait(false);   // set up meanwhile (409), or not the owner after all (403)
+                throw;
+            }
+            owned = null;
+            return await KeepAsync(session, key).ConfigureAwait(false);
+        }
+        catch (Shown e) { return e.Copy; }
+        finally { owned?.Dispose(); }
+    }
+
+    /// <summary>The owner re-wraps the same key under <paramref name="next"/>, proving <paramref name="current"/> first. Null when changed.</summary>
+    public async Task<string?> ChangePassphraseAsync(string current, string next, string repeat)
+    {
+        if (VaultCopy.NewPassphraseProblem(next, repeat) is { } problem) return problem;
+        if (_session is not { } session) return VaultCopy.ChangeFailed;
+        try
+        {
+            var wrap = await AskAsync(session, VaultCopy.ChangeFailed, ct => session.Api.GetVaultAsync(ct)).ConfigureAwait(false)
+                ?? throw new Shown(VaultCopy.ChangeFailed);
+            VaultKey key;
+            try { key = await UnwrapAsync(wrap, current).ConfigureAwait(false); }
+            catch (Shown e) when (e.Copy == VaultCopy.WrongPassphrase) { throw new Shown(VaultCopy.WrongCurrentPassphrase); }
+            using var _ = key;
+            var rewrapped = await Task.Run(() => PassphraseWrap.Wrap(key, next)).ConfigureAwait(false);
+            await AskAsync(session, VaultCopy.ChangeFailed, async ct =>
+            {
+                await session.Api.PutVaultAsync(rewrapped, ct).ConfigureAwait(false);
+                return true;
+            }, forbidden: VaultCopy.OwnerOnly).ConfigureAwait(false);
+            _log.Info("Changed the passphrase.");
+            return null;
+        }
+        catch (Shown e) { return e.Copy; }
+    }
+
+    /// <summary>
+    /// Hands this computer's vault key to a new device: the server keeps the sealed key for 10 minutes, and the returned
+    /// QR text holds the one-time key that opens it. Never log the QR text.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Signed out or not unlocked.</exception>
+    /// <exception cref="HttpRequestException">Offline.</exception>
+    /// <exception cref="ApiException">The server refused.</exception>
+    public async Task<(HandoverCreated Created, string QrText)> CreateHandoverAsync(CancellationToken ct = default)
+    {
+        var session = _session ?? throw new InvalidOperationException("Signed out.");
+        byte[] otk;
+        byte[] blob;
+        string keyId;
+        lock (_keyGate)
+        {
+            if (_vaultState != VaultState.Unlocked || _vaultKey is not { } key) throw new InvalidOperationException("Locked.");
+            (otk, blob) = Handover.Wrap(key);
+            keyId = key.KeyId;
+        }
+        try
+        {
+            var created = await session.Api.CreateHandoverAsync(blob, ct).ConfigureAwait(false);
+            return (created, Handover.QrText(created.Id, otk, keyId));
+        }
+        finally { CryptographicOperations.ZeroMemory(otk); }
+    }
+
+    /// <summary>Argon2 off the calling thread; the two failures become their copy.</summary>
+    private static async Task<VaultKey> UnwrapAsync(VaultWrapDto wrap, string passphrase)
+    {
+        try { return await Task.Run(() => PassphraseWrap.Unwrap(wrap, passphrase)).ConfigureAwait(false); }
+        catch (WrongPassphraseException) { throw new Shown(VaultCopy.WrongPassphrase); }
+        catch (UnsupportedWrapException) { throw new Shown(VaultCopy.Unsupported); }
+    }
+
+    /// <summary>
+    /// Keeps <paramref name="key"/> as this sign-in's unlocked key and starts syncing. Owns the key: it is disposed when not
+    /// kept. Local data from another key is wiped first. Null when kept (or signed out meanwhile); otherwise the copy.
+    /// </summary>
+    private async Task<string?> KeepAsync(Session session, VaultKey key)
+    {
+        var kept = false;
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // The same sign-in, even if a wipe replaced the session object meanwhile.
+            if (_session is not { } current || current.Token != session.Token) return null;
+            if (HasLocalData() && Cache.KeyId != key.KeyId) current = await WipeLocalDataAsync(current).ConfigureAwait(false);
+            try { _vaultKeyStore.Save(key); }
+            catch (Exception e)
+            {
+                _log.Error("Could not store the vault key.", e);
+                return VaultCopy.SaveFailed;
+            }
+            ReplaceVaultKey(key);
+            kept = true;
+            ClaimLocalData(key.KeyId);
+            _keyWasReset = false;
+            SetVaultState(VaultState.Unlocked);
+            current.Engine.Start();
+            return null;
+        }
+        finally
+        {
+            _lifecycle.Release();
+            if (!kept) key.Dispose();
+        }
+    }
+
+    /// <summary>Copy to show, thrown out of a call by <see cref="AskAsync{T}"/> and caught by the public method.</summary>
+    private sealed class Shown(string copy) : Exception(copy)
+    {
+        public string Copy => Message;
+    }
+
+    /// <summary>
+    /// Runs a server call, turning its failures into copy (<see cref="Shown"/>): <paramref name="forbidden"/> for a 403 and
+    /// <paramref name="conflict"/> for a 409 when given, else the action's <paramref name="failed"/> line. The server's own
+    /// text is never shown. A 401 signs out (the device was revoked).
+    /// </summary>
+    private async Task<T> AskAsync<T>(Session session, string failed, Func<CancellationToken, Task<T>> call,
+        string? forbidden = null, string? conflict = null)
+    {
+        try
+        {
+            return await call(_shutdown.Token).ConfigureAwait(false);
+        }
+        catch (UpdateRequiredException)
+        {
+            await SettleAsync(session, VaultState.UpdateRequired).ConfigureAwait(false);
+            throw new Shown(VaultCopy.UpdateRequired);
+        }
+        catch (UnauthorizedApiException)
+        {
+            _ = Task.Run(() => OnRevokedAsync(session));
+            throw new Shown(failed);
+        }
+        catch (ApiException e)
+        {
+            throw new Shown(e.Status switch
+            {
+                HttpStatusCode.Forbidden when forbidden is not null => forbidden,
+                HttpStatusCode.Conflict when conflict is not null => conflict,
+                _ => failed,
+            });
+        }
+        catch (HttpRequestException)
+        {
+            throw new Shown(SignInViewModel.UnreachableMessage);
+        }
+    }
+
+    private static void Cancel(CancellationTokenSource? cts)
+    {
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { }
     }
 
 
@@ -668,6 +1095,7 @@ public sealed class DesktopHost : IAsyncDisposable
         var last = Interlocked.Read(ref _lastNudgeTicks);
         if (last != 0 && now - last < NudgeCoalesce.Ticks) return;
         if (Interlocked.CompareExchange(ref _lastNudgeTicks, now, last) != last) return;   // another event got there first
+        Cancel(_checkWait);   // a vault check waiting to retry asks now
         if (_session is not { } session) return;
         _log.Info($"{what}: reconnecting.");
         session.Engine.Nudge();

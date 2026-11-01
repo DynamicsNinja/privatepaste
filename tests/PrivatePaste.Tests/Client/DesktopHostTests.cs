@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.WebSockets;
+using Microsoft.Extensions.DependencyInjection;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Security;
 using PrivatePaste.Client.Core.Sync;
@@ -11,6 +13,7 @@ using PrivatePaste.Desktop.Tray;
 using PrivatePaste.Desktop.ViewModels;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
+using PrivatePaste.Server.Storage;
 
 namespace PrivatePaste.Tests.Client;
 
@@ -41,8 +44,12 @@ public class DesktopHostTests : IAsyncLifetime
         try { Directory.Delete(_dir, true); } catch { }
     }
 
-    private DesktopHost NewHost(ISecretProtector? protector = null, Func<HttpMessageHandler>? handler = null)
+    private DesktopHost NewHost(ISecretProtector? protector = null, Func<HttpMessageHandler>? handler = null,
+        PrivatePasteFactory? server = null, string? dir = null, bool unlocked = true, Func<bool>? wsOffline = null)
     {
+        server ??= _server;
+        dir ??= _dir;
+        Directory.CreateDirectory(dir);
         var platform = new PlatformServices
         {
             Clipboard = _clipboard,
@@ -53,12 +60,13 @@ public class DesktopHostTests : IAsyncLifetime
         };
         var transport = new HostTransport
         {
-            CreateHandler = handler ?? (() => _server.Server.CreateHandler()),
+            CreateHandler = handler ?? (() => server.Server.CreateHandler()),
             Connect = (uri, token, ct) =>
             {
                 Interlocked.Increment(ref _connects);
                 Assert.Equal("ws", uri.Scheme);
-                var client = _server.Server.CreateWebSocketClient();
+                if (wsOffline?.Invoke() == true) throw new WebSocketException("offline");
+                var client = server.Server.CreateWebSocketClient();
                 client.ConfigureRequest = r =>
                 {
                     r.Headers.Authorization = "Bearer " + token;
@@ -67,9 +75,9 @@ public class DesktopHostTests : IAsyncLifetime
                 return client.ConnectAsync(new UriBuilder(uri) { Scheme = "http" }.Uri, ct);
             },
         };
-        var host = new DesktopHost(platform, _dir, _notes, new FileLog(Path.Combine(_dir, "logs", "privatepaste.log")),
+        var host = new DesktopHost(platform, dir, _notes, new FileLog(Path.Combine(dir, "logs", "privatepaste.log")),
             transport: transport);
-        host.SetVaultKey(VaultKey.FromBytes(_vaultKey.Export()));   // unlocked, as after entering the passphrase
+        if (unlocked) host.SetVaultKey(VaultKey.FromBytes(_vaultKey.Export()));   // as after entering the passphrase
         _hosts.Add(host);
         return host;
     }
@@ -207,6 +215,7 @@ public class DesktopHostTests : IAsyncLifetime
         await WaitUntilAsync(() => Volatile.Read(ref signedOut) == 1);
         Assert.False(host.IsSignedIn);
         Assert.False(File.Exists(TokenPath));
+        Assert.False(File.Exists(VaultKeyPath));   // the key goes with the sign-in
         Assert.Contains("This device was signed out.", _notes.Messages);
     }
 
@@ -303,6 +312,313 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Equal("Paused", TrayController.StatusText(true, true, SyncState.Connected, server));
         Assert.Equal("Signed out", TrayController.StatusText(false, false, SyncState.SignedOut, server));
         Assert.Equal("Signed out", TrayController.StatusText(true, false, SyncState.SignedOut, server));
+        // While the vault keeps sync from running, that comes first.
+        Assert.Equal("Locked", TrayController.StatusText(true, false, SyncState.Offline, server, VaultState.Locked));
+        Assert.Equal("Encryption isn't set up", TrayController.StatusText(true, false, SyncState.Offline, server, VaultState.NeedsOwnerSetup));
+        Assert.Equal("Update PrivatePaste to keep syncing.", TrayController.StatusText(true, false, SyncState.Offline, server,
+            VaultState.UpdateRequired, VaultCopy.For(VaultState.UpdateRequired, false)));
+        Assert.Equal("Signed out", TrayController.StatusText(false, false, SyncState.SignedOut, server, VaultState.Locked));
+    }
+
+    // ---------------------------------------------------------------- the vault state machine
+
+    private const string Passphrase = "my cat eats lemons daily";
+
+    private async Task<DesktopHost> SignInAsync(DesktopHost host, string name = PrivatePasteFactory.OwnerName,
+        string password = PrivatePasteFactory.Password)
+    {
+        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, name, password, "PC-" + Guid.NewGuid().ToString("N")[..6])).Result);
+        await WaitUntilAsync(() => host.VaultState != VaultState.Unknown);
+        return host;
+    }
+
+    private string VaultKeyPath => Path.Combine(_dir, "vault.dat");
+
+    [Fact]
+    public async Task Host_PreE2eCacheIsWipedBeforeFirstSync()
+    {
+        var first = await SignedInHostAsync();
+        await first.DisposeAsync();
+        _hosts.Remove(first);
+        // Today's app wrote these: plain history and a queued copy, with no key id.
+        var cacheKey = Convert.FromBase64String(new SecretFile(Path.Combine(_dir, "cache.key"), new XorProtector()).Read()!);
+        var old = new global::PrivatePaste.Client.Core.Cache.HistoryCache(Path.Combine(_dir, "cache.dat"), cacheKey);
+        old.Upsert(new ClipDto(Guid.NewGuid(), 7, ClipKind.Text, "from before encryption", "h", null, null, 22, null, "PC",
+            DateTimeOffset.UtcNow));
+        old.KeyId = null;
+        old.Save();
+        new OutboundQueue(Path.Combine(_dir, "queue.dat"), cacheKey).Enqueue(new ClipboardContent.Text("queued before encryption"),
+            DateTimeOffset.UtcNow);
+        SwitchHandler? uploads = null;
+        var host = NewHost(handler: () => uploads = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+        Assert.Contains(host.Cache.Items, i => i.Clip.Text == "from before encryption");
+
+        Assert.True(await host.StartAsync());
+        // The stored key goes with the wipe (a pre-encryption app never had one anyway): enter the passphrase again.
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked);
+
+        Assert.Empty(host.Cache.Items);
+        Assert.False(File.Exists(VaultKeyPath));
+        Assert.Equal(_vaultKey.KeyId, host.Cache.KeyId);
+        Assert.Equal(0, OutboundQueue.Load(Path.Combine(_dir, "queue.dat"), cacheKey).Count);
+        Assert.Empty(uploads!.Uploads);   // the queued plaintext copy never went out
+    }
+
+    [Fact]
+    public async Task Host_OldServerShowsServerTooOld()
+    {
+        var host = NewHost(handler: () => new OldServer(_server.Server.CreateHandler()));
+        await SignInAsync(host);
+
+        Assert.Equal(VaultState.ServerTooOld, host.VaultState);
+        Assert.Equal("Update your PrivatePaste server to keep syncing.", host.VaultMessage);
+        Assert.Null(host.Codec);
+        await Task.Delay(200);
+        Assert.Equal(0, Volatile.Read(ref _connects));   // sync never starts
+    }
+
+    [Fact]
+    public async Task Host_NonOwnerWithoutVaultWaits()
+    {
+        using var server = new PrivatePasteFactory();
+        await server.AddPersonAsync("ana", "ana-password-1");
+        var ana = await SignInAsync(NewHost(server: server, unlocked: false), "ana", "ana-password-1");
+        Assert.Equal(VaultState.WaitingForOwner, ana.VaultState);
+        Assert.Equal("Ask the owner to set up encryption.", ana.VaultMessage);
+        Assert.False(ana.IsOwner);
+        Assert.Equal(VaultCopy.WaitingForOwner, await ana.SetUpVaultAsync(Passphrase, Passphrase));   // 403
+
+        var owner = await SignInAsync(NewHost(server: server, dir: Path.Combine(_dir, "owner"), unlocked: false));
+        Assert.Equal(VaultState.NeedsOwnerSetup, owner.VaultState);
+        Assert.True(owner.IsOwner);
+        Assert.Null(owner.VaultMessage);
+    }
+
+    [Fact]
+    public async Task Setup_then_another_computer_unlocks_with_the_passphrase()
+    {
+        using var server = new PrivatePasteFactory();
+        var owner = await SignInAsync(NewHost(server: server, unlocked: false));
+        Assert.Equal(VaultState.NeedsOwnerSetup, owner.VaultState);
+        Assert.Equal(PassphraseWrap.RuleMessage, await owner.SetUpVaultAsync("short", "short"));
+        Assert.Equal(VaultCopy.Mismatch, await owner.SetUpVaultAsync(Passphrase, Passphrase + "!"));
+
+        Assert.Null(await owner.SetUpVaultAsync(Passphrase, Passphrase));
+
+        Assert.Equal(VaultState.Unlocked, owner.VaultState);
+        Assert.True(File.Exists(VaultKeyPath));
+        await WaitUntilAsync(() => owner.State == SyncState.Connected);
+        _clipboard.Current = new ClipboardContent.Text("sealed here");
+        _clipboard.RaiseChanged();
+        await WaitUntilAsync(() => owner.Cache.Items.Any(i => i.Clip.Text == "sealed here"));
+
+        // Setting up again from elsewhere: already done.
+        var late = await SignInAsync(NewHost(server: server, dir: Path.Combine(_dir, "late"), unlocked: false));
+        Assert.Equal(VaultState.Locked, late.VaultState);
+        Assert.Null(late.Codec);
+        Assert.Empty(late.Cache.Items);
+        Assert.Equal(VaultCopy.WrongPassphrase, await late.UnlockAsync("not the passphrase at all"));
+        Assert.Null(await late.UnlockAsync(Passphrase));
+        Assert.Equal(VaultState.Unlocked, late.VaultState);
+        await WaitUntilAsync(() => late.Cache.Items.Any(i => i.Clip.Text == "sealed here"));
+    }
+
+    [Fact]
+    public async Task A_second_setup_gets_the_set_up_elsewhere_copy_and_locks()
+    {
+        using var server = new PrivatePasteFactory();
+        var a = await SignInAsync(NewHost(server: server, unlocked: false));
+        var b = await SignInAsync(NewHost(server: server, dir: Path.Combine(_dir, "b"), unlocked: false));
+        Assert.Null(await a.SetUpVaultAsync(Passphrase, Passphrase));
+
+        Assert.Equal(VaultCopy.SetUpElsewhere, await b.SetUpVaultAsync("another long passphrase", "another long passphrase"));
+        Assert.Equal(VaultState.Locked, b.VaultState);
+    }
+
+    [Fact]
+    public async Task Unlock_WrongPassphraseShowsCopy()
+    {
+        using var server = new PrivatePasteFactory();
+        var owner = await SignInAsync(NewHost(server: server, unlocked: false));
+        Assert.Null(await owner.SetUpVaultAsync(Passphrase, Passphrase));
+        var other = await SignInAsync(NewHost(server: server, dir: Path.Combine(_dir, "other"), unlocked: false));
+
+        Assert.Equal("That passphrase doesn't unlock this server's history.", await other.UnlockAsync("my dog eats lemons daily"));
+
+        Assert.Equal(VaultState.Locked, other.VaultState);
+        Assert.False(File.Exists(Path.Combine(_dir, "other", "vault.dat")));
+    }
+
+    [Fact]
+    public async Task Unlock_of_an_unsupported_wrap_says_to_update()
+    {
+        using var server = new PrivatePasteFactory();
+        using var key = VaultKey.Create();
+        var wrap = PrivatePasteFactory.RandomWrap(key.KeyId);
+        // Stored straight in the database: a wrap from a newer app the server lets through, this client doesn't accept.
+        Assert.True(await server.Services.GetRequiredService<VaultRepository>()
+            .CreateAsync(wrap with { Kdf = wrap.Kdf with { Alg = "argon3" } }));
+        var host = await SignInAsync(NewHost(server: server, unlocked: false));
+        Assert.Equal(VaultState.Locked, host.VaultState);
+
+        Assert.Equal("This server's encryption settings aren't supported. Update PrivatePaste.", await host.UnlockAsync(Passphrase));
+    }
+
+    [Fact]
+    public async Task Settings_ChangePassphraseOwnerOnly()
+    {
+        using var server = new PrivatePasteFactory();
+        await server.AddPersonAsync("ana", "ana-password-1");
+        var owner = await SignInAsync(NewHost(server: server, unlocked: false));
+        Assert.Null(await owner.SetUpVaultAsync(Passphrase, Passphrase));
+        var ana = await SignInAsync(NewHost(server: server, dir: Path.Combine(_dir, "ana"), unlocked: false), "ana", "ana-password-1");
+        Assert.Null(await ana.UnlockAsync(Passphrase));
+        Assert.False(ana.IsOwner);
+
+        const string next = "a new passphrase for everyone";
+        Assert.Equal(VaultCopy.OwnerOnly, await ana.ChangePassphraseAsync(Passphrase, next, next));
+        Assert.Equal("The current passphrase is wrong.", await owner.ChangePassphraseAsync("not the passphrase at all", next, next));
+        Assert.Equal(VaultCopy.Mismatch, await owner.ChangePassphraseAsync(Passphrase, next, next + "!"));
+        Assert.Null(await owner.ChangePassphraseAsync(Passphrase, next, next));
+
+        // The key stays the same: a new computer unlocks with the new passphrase only.
+        var fresh = await SignInAsync(NewHost(server: server, dir: Path.Combine(_dir, "fresh"), unlocked: false));
+        Assert.Equal(VaultCopy.WrongPassphrase, await fresh.UnlockAsync(Passphrase));
+        Assert.Null(await fresh.UnlockAsync(next));
+        Assert.Equal(VaultState.Unlocked, owner.VaultState);
+    }
+
+    [Fact]
+    public async Task Add_a_device_hands_the_key_over_once()
+    {
+        var host = await SignedInHostAsync();
+
+        var (created, qr) = await host.CreateHandoverAsync();
+
+        Assert.True(Handover.TryParseQr(qr, out var id, out var otk, out var keyId));
+        Assert.Equal(created.Id, id);
+        Assert.Equal(_vaultKey.KeyId, keyId);
+        var blob = (await (await _server.LoginAsync("Phone2")).GetFromJsonAsync<HandoverBlob>($"/api/vault/handovers/{id}",
+            ProtocolJson.Options))!;
+        using var key = Handover.Unwrap(otk, Convert.FromBase64String(blob.Blob), keyId);
+        Assert.Equal(_vaultKey.Export(), key.Export());
+    }
+
+    [Fact]
+    public async Task SignOut_DeletesVaultKey()
+    {
+        var host = await SignedInHostAsync();
+        Assert.True(File.Exists(VaultKeyPath));
+        Assert.Equal(VaultState.Unlocked, host.VaultState);
+        Assert.NotNull(host.Codec);
+
+        await host.SignOutAsync();
+
+        Assert.False(File.Exists(VaultKeyPath));
+        Assert.Null(host.Codec);
+        Assert.Equal(VaultState.Unknown, host.VaultState);
+    }
+
+    [Fact]
+    public async Task A_key_reset_message_wipes_history_queue_and_key_and_locks()
+    {
+        SwitchHandler? sw = null;
+        var host = NewHost(handler: () => sw = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey });
+        await SignInAsync(host);
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+        var phone = await _server.LoginAsync("Phone");
+        await _server.UploadTextAsync(phone, "history");
+        await WaitUntilAsync(() => host.Cache.Items.Any(i => i.Clip.Text == "history"));
+        sw!.Statuses.Enqueue(503);   // a live copy that has to wait in the queue
+        _clipboard.Current = new ClipboardContent.Text("waiting");
+        _clipboard.RaiseChanged();
+        await WaitUntilAsync(() => File.Exists(Path.Combine(_dir, "queue.dat")) && QueuedCount() == 1);
+        var states = new System.Collections.Concurrent.ConcurrentQueue<VaultState>();
+        host.VaultStateChanged += (_, s) => states.Enqueue(s);
+
+        using var newKey = VaultKey.Create();
+        (await phone.PostAsJsonAsync("/api/vault/reset", PrivatePasteFactory.RandomWrap(newKey.KeyId), ProtocolJson.Options))
+            .EnsureSuccessStatusCode();   // the server sends vault.reset
+
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked);
+        Assert.Equal([VaultState.Locked], states);
+        Assert.True(host.KeyWasReset);
+        Assert.Equal("Encryption was reset. Enter the new passphrase.", host.VaultMessage);
+        Assert.Empty(host.Cache.Items);
+        Assert.Equal(0, QueuedCount());
+        Assert.False(File.Exists(VaultKeyPath));
+        Assert.Null(host.Codec);
+        Assert.True(host.IsSignedIn);   // the sign-in stays
+    }
+
+    [Fact]
+    public async Task A_key_reset_raised_from_a_flush_does_not_deadlock()
+    {
+        var offline = false;
+        SwitchHandler? sw = null;
+        var host = NewHost(handler: () => sw = new SwitchHandler(_server.Server.CreateHandler()) { Key = _vaultKey },
+            wsOffline: () => Volatile.Read(ref offline));
+        await SignInAsync(host);
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+
+        // Offline: the link drops and a copy waits in the queue.
+        Volatile.Write(ref offline, true);
+        sw!.Offline = true;
+        host.OnNetworkOrPowerChanged("test");
+        await WaitUntilAsync(() => host.State == SyncState.Offline);
+        _clipboard.Current = new ClipboardContent.Text("copied offline");
+        _clipboard.RaiseChanged();
+        await WaitUntilAsync(() => QueuedCount() == 1);
+        using var newKey = VaultKey.Create();
+        var owner = await _server.LoginAsync("Web");
+        (await owner.PostAsJsonAsync("/api/vault/reset", PrivatePasteFactory.RandomWrap(newKey.KeyId), ProtocolJson.Options))
+            .EnsureSuccessStatusCode();   // this computer misses the message
+
+        // Back online: connect, catch up, flush; the flush's upload gets the 409 under the coordinator's gate.
+        sw.Offline = false;
+        Volatile.Write(ref offline, false);
+
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked);
+        Assert.Equal(0, QueuedCount());
+        Assert.Contains("copied offline", sw.Uploads);
+        Assert.Empty(host.Cache.Items);
+        Assert.False(File.Exists(VaultKeyPath));
+        // The host still works: signing out goes through.
+        await host.SignOutAsync().WaitAsync(WaitTimeout);
+    }
+
+    private int QueuedCount()
+    {
+        var key = Convert.FromBase64String(new SecretFile(Path.Combine(_dir, "cache.key"), new XorProtector()).Read()!);
+        return OutboundQueue.Load(Path.Combine(_dir, "queue.dat"), key).Count;
+    }
+
+    [Fact]
+    public async Task Update_required_from_the_engine_settles_the_state()
+    {
+        var old = false;
+        var host = NewHost(handler: () => new SwitchHandler(_server.Server.CreateHandler())
+        {
+            Respond = r => Volatile.Read(ref old) && r.RequestUri!.AbsolutePath == "/api/sync"
+                ? new HttpResponseMessage(HttpStatusCode.UpgradeRequired) : null,
+        });
+        await SignInAsync(host);
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+        Volatile.Write(ref old, true);
+
+        host.OnNetworkOrPowerChanged("test");   // reconnect: the catch-up gets the 426
+
+        await WaitUntilAsync(() => host.VaultState == VaultState.UpdateRequired);
+        Assert.Equal("Update PrivatePaste to keep syncing.", host.VaultMessage);
+    }
+
+    /// <summary>A server from before end-to-end encryption: no /api/server-info.</summary>
+    private sealed class OldServer(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            request.RequestUri!.AbsolutePath == "/api/server-info"
+                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))
+                : base.SendAsync(request, ct);
     }
 
     [Fact]

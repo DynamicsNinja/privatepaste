@@ -193,4 +193,55 @@ public class SettingsViewModelTests
         Assert.Equal("This system can't tell which app copied something, so apps can't be blocked here. "
             + "Copies that password managers mark as private are still ignored.", SettingsViewModel.CannotBlockAppsMessage);
     }
+
+    // ---- Encryption ----
+
+    private readonly List<(string Current, string Next, string Repeat)> _changes = [];
+    private string? _changeAnswer;
+    private int _addDevice;
+
+    private SettingsViewModel CreateEncryption(bool isOwner, bool unlocked = true) => new(
+        "https://paste.example.com", "PC-work", "Ctrl+Shift+V", true, "Start with Windows", _ => { }, _ => { },
+        () => Task.CompletedTask, isOwner: isOwner,
+        changePassphrase: (c, n, r) => { _changes.Add((c, n, r)); return Task.FromResult(_changeAnswer); },
+        addDevice: unlocked ? () => _addDevice++ : null);
+
+    [Fact]
+    public async Task Settings_ChangePassphraseOwnerOnly()
+    {
+        var member = CreateEncryption(isOwner: false);
+        Assert.False(member.CanChangePassphrase);
+        Assert.True(member.CanAddDevice);
+        Assert.True(member.ShowsEncryption);
+        Assert.False(CreateEncryption(isOwner: false, unlocked: false).ShowsEncryption);
+
+        var owner = CreateEncryption(isOwner: true);
+        Assert.True(owner.CanChangePassphrase);
+        owner.StartChangePassphraseCommand.Execute(null);
+        Assert.True(owner.IsChangingPassphrase);
+        owner.CurrentPassphrase = "the old passphrase";
+        owner.NewPassphrase = "short";
+        owner.RepeatPassphrase = "short";
+        await owner.ChangePassphraseCommand.ExecuteAsync(null);
+        Assert.Equal("Use at least 12 characters. A short sentence works well.", owner.PassphraseError);
+        Assert.Empty(_changes);
+
+        owner.NewPassphrase = "a new passphrase for everyone";
+        owner.RepeatPassphrase = "a new passphrase for everyone";
+        _changeAnswer = "The current passphrase is wrong.";
+        await owner.ChangePassphraseCommand.ExecuteAsync(null);
+        Assert.Equal("The current passphrase is wrong.", owner.PassphraseError);
+        Assert.True(owner.IsChangingPassphrase);
+
+        _changeAnswer = null;
+        await owner.ChangePassphraseCommand.ExecuteAsync(null);
+        Assert.Equal(("the old passphrase", "a new passphrase for everyone", "a new passphrase for everyone"), _changes[^1]);
+        Assert.False(owner.IsChangingPassphrase);
+        Assert.Null(owner.PassphraseError);
+        Assert.Equal("Passphrase changed.", owner.PassphraseNotice);
+        Assert.Equal("", owner.CurrentPassphrase);
+
+        owner.AddDeviceCommand.Execute(null);
+        Assert.Equal(1, _addDevice);
+    }
 }
