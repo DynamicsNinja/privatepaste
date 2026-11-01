@@ -59,6 +59,8 @@ public sealed class ConnectionHub : IClipBroadcaster
     public Task ClipDeletedAsync(Guid id, long seq) =>
         Broadcast(new WsMessage(WsTypes.ClipDeleted, Id: id, Seq: seq));
 
+    public Task VaultResetAsync() => Broadcast(new WsMessage(WsTypes.VaultReset));
+
     /// <summary>Registers the socket, serves it until it closes, and unregisters it.</summary>
     public async Task RunAsync(Guid deviceId, WebSocket socket, CancellationToken ct)
     {

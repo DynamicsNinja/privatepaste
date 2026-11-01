@@ -30,6 +30,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PrivatePasteDb>();
 builder.Services.AddSingleton<ClipRepository>();
 builder.Services.AddSingleton<SettingsRepository>();
+builder.Services.AddSingleton<VaultRepository>();
 builder.Services.AddSingleton<BlobStore>();
 builder.Services.AddSingleton<ImageProcessor>();
 builder.Services.AddSingleton<PasswordVerifier>();
@@ -163,6 +164,7 @@ app.MapServerInfoEndpoints();
 app.MapDeviceEndpoints();
 app.MapClipEndpoints();
 app.MapSettingsEndpoints();
+app.MapVaultEndpoints();
 app.MapWebSocketEndpoint();
 // The People page replaced Devices; old bookmarks still land somewhere.
 app.MapGet("/devices", () => Results.Redirect("/people", permanent: true));

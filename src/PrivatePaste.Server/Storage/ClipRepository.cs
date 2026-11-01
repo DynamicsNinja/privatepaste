@@ -247,6 +247,31 @@ public sealed class ClipRepository(PrivatePasteDb db)
     }
 
     /// <summary>
+    /// Deletes every clip, pinned ones included, and every tombstone, in one transaction (the encryption reset). The
+    /// seq counter keeps its value so no seq is ever reused. Returns the deleted clips so the caller can remove blobs.
+    /// </summary>
+    public async Task<IReadOnlyList<ClipDto>> DeleteAllAsync()
+    {
+        await _writeLock.WaitAsync();
+        try
+        {
+            await using var conn = db.Open();
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync();
+            List<ClipDto> doomed;
+            await using (var select = Command(conn, tx, $"SELECT {Columns} FROM {From}", []))
+                doomed = await ReadClipsAsync(select);
+            await ExecAsync(conn, tx, "DELETE FROM clips");
+            await ExecAsync(conn, tx, "DELETE FROM tombstones");
+            await tx.CommitAsync();
+            return doomed;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Gives each clip last copied by <paramref name="userId"/> (every clip when null) a new seq, in seq order and in
     /// one transaction, without touching <c>last_copied_at</c>. Returns them so the caller can broadcast them.
     /// </summary>
