@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Text;
 using PrivatePaste.Protocol;
+using PrivatePaste.Protocol.Crypto;
 
 namespace PrivatePaste.Tests.Protocol;
 
@@ -23,5 +25,44 @@ public class ProtocolJsonTests
         Assert.Equal(clip.Id, back.Clip!.Id);
         Assert.True(back.Live);
         Assert.Contains("\"type\":\"clip.created\"", json);
+    }
+
+    [Fact]
+    public void UnknownKind_ParsesAsUnknown()
+    {
+        var id = Guid.NewGuid();
+        var json = $$"""{"id":"{{id}}","seq":5,"kind":"rich","text":"hi","hash":"h","sizeBytes":2,"sourceDeviceName":"pc","lastCopiedAt":"1970-01-01T00:00:00+00:00"}""";
+        var clip = JsonSerializer.Deserialize<ClipDto>(json, ProtocolJson.Options)!;
+        Assert.Equal(ClipKind.Unknown, clip.Kind);
+        Assert.Equal(id, clip.Id);
+        Assert.Equal(5, clip.Seq);
+        Assert.Equal("hi", clip.Text);
+        Assert.Equal("pc", clip.SourceDeviceName);
+    }
+
+    [Fact]
+    public void ClipDto_NewFieldsRoundTrip()
+    {
+        var clip = new ClipDto(Guid.NewGuid(), 1, ClipKind.Image, null, "h", 3, 4, 9, null, "pc", DateTimeOffset.UnixEpoch)
+        { Payload = "AAEC", KeyId = "0011223344556677", HasThumb = true, BlobCount = 2 };
+        var json = JsonSerializer.Serialize(clip, ProtocolJson.Options);
+        Assert.Contains("\"payload\":\"AAEC\"", json);
+        var back = JsonSerializer.Deserialize<ClipDto>(json, ProtocolJson.Options)!;
+        Assert.Equal("AAEC", back.Payload);
+        Assert.Equal("0011223344556677", back.KeyId);
+        Assert.True(back.HasThumb);
+        Assert.Equal(2, back.BlobCount);
+    }
+
+    [Fact]
+    public void Payload_RoundTripsAndIgnoresUnknownFields()
+    {
+        using var key = VaultKey.Create();
+        var rt = ClipPayload.Open(key, ClipPayload.Seal(key, new ClipPayload { Text = "a", Width = 1, Height = 2 }));
+        Assert.Equal(("a", 1, 2), (rt.Text, rt.Width, rt.Height));
+
+        var raw = Encoding.UTF8.GetBytes("""{"text":"a","html":"<b>a</b>"}""");
+        var sealedB64 = Convert.ToBase64String(SealedBox.Seal(key, "payload", raw));
+        Assert.Equal("a", ClipPayload.Open(key, sealedB64).Text);
     }
 }

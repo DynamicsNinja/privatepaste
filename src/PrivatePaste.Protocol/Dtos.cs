@@ -2,7 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace PrivatePaste.Protocol;
 
-public enum ClipKind { Text, Link, Image }
+/// <summary>
+/// <see cref="Unknown"/> is what a reader makes of a kind it doesn't know (a newer client's); no client or server ever writes it.
+/// </summary>
+public enum ClipKind { Text, Link, Image, Unknown }
 
 public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, string Hash,
     int? Width, int? Height, long SizeBytes, Guid? SourceDeviceId, string SourceDeviceName,
@@ -23,6 +26,18 @@ public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, str
     /// names, and null when unknown.
     /// </summary>
     public string? SourceUserName { get; init; }
+
+    /// <summary>The clip's content sealed under the vault key (<see cref="ClipPayload"/>, standard base64), or null on a clip from before encryption.</summary>
+    public string? Payload { get; init; }
+
+    /// <summary>The id of the vault key that sealed <see cref="Payload"/>.</summary>
+    public string? KeyId { get; init; }
+
+    /// <summary>True when the clip has a sealed thumbnail.</summary>
+    public bool HasThumb { get; init; }
+
+    /// <summary>How many sealed blobs the clip has.</summary>
+    public int BlobCount { get; init; }
 }
 
 public sealed record LoginRequest(string Password, string DeviceName, string Platform)
@@ -53,4 +68,24 @@ public static class WsTypes
     public const string ClipDeleted = "clip.deleted";
     public const string Ping = "ping";
     public const string Pong = "pong";
+    public const string VaultReset = "vault.reset";
 }
+
+public sealed record ServerLimitsDto(int TextKb, int ImageMb);
+
+public sealed record ServerInfoDto(int Protocol, IReadOnlyList<string> Kinds, ServerLimitsDto Limits);
+
+public sealed record VaultKdfDto(string Alg, int MemoryKiB, int Iterations, int Parallelism, string Salt);
+
+public sealed record VaultWrapDto(string KeyId, VaultKdfDto Kdf, string Nonce, string WrappedKey);
+
+public sealed record HandoverCreateRequest(string Blob);
+
+public sealed record HandoverCreated(Guid Id, DateTimeOffset ExpiresAt);
+
+public sealed record HandoverBlob(string Blob);
+
+public sealed record MeDto(string Name, bool IsOwner);
+
+public sealed record ClipUploadMeta(string Kind, string KeyId, string Hash, string Payload, long SizeBytes,
+    DateTimeOffset? CopiedAt, bool Backfill);
