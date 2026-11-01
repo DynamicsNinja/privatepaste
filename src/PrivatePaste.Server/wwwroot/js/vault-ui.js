@@ -46,7 +46,9 @@ function setBusy(form, busy) {
 
 /**
  * Shows the panel that fits the server's vault and this tab's key, and calls `onUnlocked(vault)` once the history can
- * be read. `onLocked()` runs when Lock is pressed (site.js removes the key and sends "pp:locked").
+ * be read. `onLocked()` runs when Lock is pressed (site.js removes the key and sends "pp:locked") and on
+ * "pp:vault-reset", which history.js and site.js send when a clip or an answer shows that encryption was reset while
+ * this tab was open: the key is forgotten and the page asks for the new passphrase.
  */
 export async function startVault(e2e, api, { onUnlocked, onLocked }) {
   const panels = [$('unlock'), $('setup'), $('no-vault')];
@@ -166,13 +168,19 @@ export async function startVault(e2e, api, { onUnlocked, onLocked }) {
     }
   });
 
-  document.addEventListener('pp:locked', () => {
+  function relock(notice) {
     onLocked();
-    resolve().catch(e => {
+    resolve(notice).catch(e => {
       console.error(e);
       setError($('unlock-error'), FAILED);
       show($('unlock'));
     });
+  }
+
+  document.addEventListener('pp:locked', () => relock());
+  document.addEventListener('pp:vault-reset', () => {
+    forgetKey();
+    relock(RESET);
   });
 
   const me = await api('/api/me');

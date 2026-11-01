@@ -10,6 +10,13 @@ const historyModule = () => import(document.getElementById("history").dataset.hi
 const apiCall = (path, method) => fetch(path, {
     method,
     headers: { ...PROTOCOL, RequestVerificationToken: csrfToken() },
+}).then(async (response) => {
+    // Encryption was reset while this tab was open: js/vault-ui.js forgets the key and asks for the new passphrase.
+    if (response.status === 409) {
+        const problem = await response.clone().json().catch(() => null);
+        if (problem?.title === "Encryption was reset") document.dispatchEvent(new Event("pp:vault-reset"));
+    }
+    return response;
 });
 
 // Copy: POST restore (re-syncs the clip to the other devices), decrypt it, then put it on the browser clipboard.

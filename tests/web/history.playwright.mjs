@@ -1,5 +1,5 @@
 // Browser check of the web history page and Settings: setup, lock, unlock, rows decrypted and drawn safely, Copy, Pin,
-// Delete, search, change passphrase, add a device by QR, reset encryption and the strict CSP. Run by hand (not in CI) against a FRESH local server, never the live one:
+// Delete, search, a reset noticed by an open tab, change passphrase, add a device by QR, reset encryption and the strict CSP. Run by hand (not in CI) against a FRESH local server, never the live one:
 //
 //   PP_DB_KEY=0123456789abcdef0123 PP_PASSWORD=dev PP_DATA_DIR=<empty temp dir> \
 //     dotnet run --project src/PrivatePaste.Server --no-launch-profile --urls http://localhost:5303
@@ -300,6 +300,37 @@ try {
   assert.equal(await unknown.locator('button.copy').count(), 0);
   assert.equal(await unknown.locator('button.pin-toggle').count(), 1);
   await page.unroute('**/api/clips?*');
+
+  step('a loaded clip under another key means encryption was reset in another tab: the key goes');
+  await page.route('**/api/clips?*', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.items[0] = { ...body.items[0], keyId: '0123456789abcdef' };
+    await route.fulfill({ response, json: body });
+  });
+  await page.reload();
+  await page.waitForSelector('#unlock:not([hidden])', { timeout: 30000 });
+  assert.equal(await text('#unlock-error'), 'Encryption was reset. Enter the new passphrase.');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('pp.vault')), null);
+  assert.equal(await visible('#lock'), false);
+  assert.equal(await page.locator('.clip').count(), 0);
+  await page.unroute('**/api/clips?*');
+
+  step('an action answered 409 "Encryption was reset" does the same');
+  await page.fill('#unlock-passphrase', passphrase);
+  await page.click('#unlock-form button');
+  await row(xssId).waitFor({ timeout: 30000 });
+  await page.route('**/pin', route => route.fulfill({
+    status: 409,
+    contentType: 'application/problem+json',
+    body: JSON.stringify({ status: 409, title: 'Encryption was reset', detail: 'Encryption was reset. Enter the new passphrase.' }),
+  }));
+  await row(linkId).locator('button.pin-toggle').click();
+  await page.waitForSelector('#unlock:not([hidden])');
+  assert.equal(await text('#unlock-error'), 'Encryption was reset. Enter the new passphrase.');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('pp.vault')), null);
+  assert.equal(await page.locator('.clip').count(), 0);
+  await page.unroute('**/pin');
 
   step('a key from before a reset is dropped with a notice');
   await page.evaluate(() => sessionStorage.setItem('pp.vault', btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))));

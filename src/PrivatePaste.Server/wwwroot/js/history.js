@@ -37,6 +37,17 @@ let exhausted = false;
 // Bumped on Lock, so a page or thumbnail still in flight is dropped instead of drawn into the locked page.
 let generation = 0;
 
+/**
+ * True, after asking vault-ui.js to forget the key, when the server holds a clip sealed under another key: the owner
+ * reset encryption since this tab unlocked (the reset deletes every older clip, and uploads under an old key are
+ * refused).
+ */
+function wasReset(clip) {
+  if (!vault || !clip.keyId || clip.keyId === vault.keyId) return false;
+  document.dispatchEvent(new Event('pp:vault-reset'));
+  return true;
+}
+
 /** fetch with the protocol header, and the antiforgery token on anything but a GET. */
 export function api(path, init = {}) {
   const headers = new Headers(init.headers);
@@ -74,6 +85,7 @@ async function fetchBytes(path) {
 /** For Copy: the restored clip's content as a Blob, text/plain or image/png. */
 export async function clipContent(clip) {
   if (!vault) throw new Error('The history is locked.');
+  if (wasReset(clip)) throw new Error('Encryption was reset.');
   const content = await open(clip);
   if (content.kind === 'image') {
     const png = await e2e.decryptBlob(vault, await fetchBytes(`/api/clips/${encodeURIComponent(clip.id)}/blobs/0`));
@@ -228,7 +240,7 @@ async function loadPage() {
   if (!response.ok) throw new Error(`History fetch failed (${response.status})`);
   const page = await response.json();
   const contents = await Promise.all(page.items.map(open));
-  if (at !== generation) return;
+  if (at !== generation || page.items.some(wasReset)) return;
 
   cursor = page.nextCursor ?? null;
   exhausted = !cursor;
@@ -264,7 +276,7 @@ async function whileBusy(button, work) {
 /** After Pin or Unpin: the server's updated clip. */
 export function clipChanged(clip) {
   const entry = entries.find(e => e.clip.id === clip.id);
-  if (!entry) return;
+  if (!entry || wasReset(clip)) return;
   if (pinnedTab && !clip.pinnedAt) {
     clipRemoved(clip.id);
     return;
