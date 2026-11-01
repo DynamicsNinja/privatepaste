@@ -463,7 +463,7 @@ class SyncEngine(
                 thumbSlots.withPermit {
                     if (cache.items.value.none { it.hash == clip.hash }) return@withPermit   // gone meanwhile
                     if (thumbs.get(clip.hash) != null) return@withPermit
-                    thumbs.put(clip.hash, api.thumbnail(clip.id))
+                    thumbs.put(clip.hash, api.thumb(clip.id))
                 }
             } catch (e: CancellationException) {
                 throw e

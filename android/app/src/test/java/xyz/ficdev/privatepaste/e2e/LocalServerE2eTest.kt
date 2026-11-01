@@ -119,13 +119,13 @@ class LocalServerE2eTest {
             // 4. The phone sends text; the PC sees it in the history.
             val fromPhone = "e2e from phone ${UUID.randomUUID()}"
             assertEquals(SendResult.Sent, sender.sendText(fromPhone))
-            val phoneClip = pc.clips(null, null).items.first { it.text == fromPhone }
+            val phoneClip = pc.clips(null).items.first { it.text == fromPhone }
             assertEquals(phoneDeviceId, phoneClip.sourceDeviceId)
 
             // 5. A delete on the PC reaches the phone's cache.
             assertTrue(pc.delete(phoneClip.id))
             waitFor("delete reaches the phone") { cache.items.value.none { it.id == phoneClip.id } }
-            assertTrue(pc.clips(null, null).items.none { it.id == phoneClip.id })
+            assertTrue(pc.clips(null).items.none { it.id == phoneClip.id })
 
             // 6. Revoking the phone from the PC emits `revoked`.
             val revoke = Request.Builder().url(baseUrl.newBuilder().addPathSegments("api/devices/$phoneDeviceId").build())
@@ -135,7 +135,7 @@ class LocalServerE2eTest {
             assertEquals(SyncState.SIGNED_OUT, engine.state.value)
         } finally {
             // Best-effort cleanup of the pc device and its clips.
-            runCatching { pc.clips(null, null).items.filter { it.text?.startsWith("e2e from ") == true }.forEach { pc.delete(it.id) } }
+            runCatching { pc.clips(null).items.filter { it.text?.startsWith("e2e from ") == true }.forEach { pc.delete(it.id) } }
             runCatching { pc.logout() }
         }
     }

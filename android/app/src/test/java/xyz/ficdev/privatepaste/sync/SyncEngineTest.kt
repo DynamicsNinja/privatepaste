@@ -96,7 +96,7 @@ class SyncEngineTest {
             return pages.removeFirstOrNull() ?: SyncPage(emptyList(), emptyList(), afterSeq, false)
         }
 
-        override suspend fun thumbnail(id: String): ByteArray {
+        override suspend fun thumb(id: String): ByteArray {
             thumbCalls += id
             thumbGate?.await()
             thumbError?.let { throw it }

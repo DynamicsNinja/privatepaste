@@ -45,11 +45,11 @@ interface ClipRemote {
 
 fun PrivatePasteApi.asClipRemote(): ClipRemote = object : ClipRemote {
     override suspend fun clips(q: String?, cursor: String?, limit: Int, pinned: Boolean) =
-        this@asClipRemote.clips(q, cursor, limit, pinned)
+        this@asClipRemote.clips(cursor, limit, pinned)  // q: search is on-device from Task 17
     override suspend fun pin(id: String, pinned: Boolean) = this@asClipRemote.pin(id, pinned)
     override suspend fun restore(id: String) = this@asClipRemote.restore(id)
     override suspend fun delete(id: String) = this@asClipRemote.delete(id)
-    override suspend fun thumbnail(id: String) = this@asClipRemote.thumbnail(id)
+    override suspend fun thumbnail(id: String) = this@asClipRemote.thumb(id)
     override suspend fun image(id: String) = this@asClipRemote.image(id)
 }
 
@@ -233,6 +233,7 @@ class HistoryViewModel(
                         return@launch
                     }
                 }
+                ClipKind.UNKNOWN -> return@launch  // a kind from a newer client: nothing this build can copy
             }
             _messages.trySend(UiText.Res(R.string.copied))
             if (api != null) {

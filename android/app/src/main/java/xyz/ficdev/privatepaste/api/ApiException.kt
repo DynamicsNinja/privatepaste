@@ -6,7 +6,7 @@ sealed class ApiException(message: String, cause: Throwable? = null) : Exception
     class Unauthorized : ApiException("Unauthorized")
 
     /** Any other 4xx (400, 404, 413, ...): the server refused the request; retrying will not help. */
-    class Rejected(val status: Int, message: String, val title: String? = null) : ApiException(message)
+    open class Rejected(val status: Int, message: String, val title: String? = null) : ApiException(message)
 
     /** 429 on login. */
     class RateLimited : ApiException("Too many attempts")
@@ -14,3 +14,13 @@ sealed class ApiException(message: String, cause: Throwable? = null) : Exception
     /** IO errors, timeouts, 5xx, 408, 429 outside login and 2xx bodies that cannot be decoded: retry later. */
     class Transient(message: String, cause: Throwable? = null) : ApiException(message, cause)
 }
+
+/** 409 titled "Encryption was reset": the vault key this device holds is no longer the server's. */
+class KeyResetException(message: String) : ApiException.Rejected(409, message, TITLE) {
+    companion object {
+        const val TITLE = "Encryption was reset"
+    }
+}
+
+/** 426: the server needs a newer protocol than this build speaks. The message is the server's own text. */
+class UpdateRequiredException(message: String) : ApiException.Rejected(426, message)

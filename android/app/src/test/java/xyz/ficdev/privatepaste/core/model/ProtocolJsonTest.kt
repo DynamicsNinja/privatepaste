@@ -245,4 +245,35 @@ class ProtocolJsonTest {
         assertTrue("height" !in encoded)
         assertEquals("link", encoded["kind"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun unknownKindParsesAsUnknown() {
+        val clip = json.decodeFromString<ClipDto>(linkClipJson.replace("\"kind\":\"link\"", "\"kind\":\"rich\""))
+        assertEquals(ClipKind.UNKNOWN, clip.kind)
+    }
+
+    @Test
+    fun clipWithoutEncryptionFieldsGetsDefaults() {
+        val clip = json.decodeFromString<ClipDto>(linkClipJson)
+        assertNull(clip.payload)
+        assertNull(clip.keyId)
+        assertEquals(false, clip.hasThumb)
+        assertEquals(0, clip.blobCount)
+    }
+
+    @Test
+    fun encryptedClipFieldsParse() {
+        val clip = json.decodeFromString<ClipDto>(
+            linkClipJson.replace("\"kind\":\"link\"", "\"kind\":\"image\",\"payload\":\"UEFZ\",\"keyId\":\"k1\",\"hasThumb\":true,\"blobCount\":1"),
+        )
+        assertEquals("UEFZ", clip.payload)
+        assertEquals("k1", clip.keyId)
+        assertEquals(true, clip.hasThumb)
+        assertEquals(1, clip.blobCount)
+    }
+
+    @Test
+    fun knownKindsEncodeLowercase() {
+        assertEquals("\"image\"", json.encodeToString(ClipKind.serializer(), ClipKind.IMAGE))
+    }
 }
