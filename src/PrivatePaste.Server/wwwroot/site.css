@@ -246,6 +246,22 @@ button.danger:hover { border-color: var(--danger); }
 .password-form label { font-size: .85rem; color: var(--muted); font-weight: 400; margin-top: .3rem; }
 .password-form button { justify-self: start; margin-top: .6rem; }
 
+/* Dialogs (Add a device, Reset encryption): the same surface as a panel, over a dimmed page. */
+dialog {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem;
+    width: min(26rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); overflow-y: auto;
+}
+dialog::backdrop { background: rgba(10, 8, 24, .66); }
+dialog h2 { font-size: 1rem; font-weight: 600; margin: 0 0 .6rem; }
+dialog p { margin: 0 0 .75rem; }
+dialog .hint { margin: .15rem 0 .5rem; }
+.dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .6rem; margin-top: .9rem; }
+.password-form .dialog-actions { justify-content: flex-end; }
+.password-form .dialog-actions button { justify-self: auto; margin-top: 0; }
+/* Black modules on a white quiet zone in both themes, so phones can scan it. */
+.qr { display: block; width: 100%; max-width: 17rem; height: auto; margin: 0 auto .9rem; border-radius: 8px; }
+
 @media (max-width: 34rem) {
     .clip { flex-wrap: wrap; }
     .actions { width: 100%; justify-content: flex-end; }

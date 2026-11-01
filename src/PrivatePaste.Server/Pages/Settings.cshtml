@@ -1,7 +1,10 @@
 @page
 @model SettingsModel
+@inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersions
 @{
     ViewData["Title"] = "Settings";
+    // Modules are loaded by URL from js/settings-encryption.js, so they carry the same content hash as asp-append-version.
+    string Versioned(string path) => FileVersions.AddFileVersionToPath(Request.PathBase, path);
     var days = new (int? Value, string Label)[] { (null, "Off"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days") };
 }
 <h1>Settings</h1>
@@ -28,8 +31,33 @@
     </form>
 </section>
 
+@* The encryption panels are driven by js/settings-encryption.js: the server never sees a passphrase or a key. *@
+<section class="panel" id="add-device" data-e2e="@Versioned("/js/e2e.js")" data-vault-ui="@Versioned("/js/vault-ui.js")">
+    <h2>Add a device</h2>
+    <p class="muted hint">Show a code and scan it with PrivatePaste on your phone. It carries the key, so you don't type the passphrase there.</p>
+    <p class="muted hint" id="encryption-note" hidden></p>
+    <button type="button" id="add-device-open">Add a device</button>
+</section>
+
 @if (Model.IsOwner)
 {
+    <section class="panel" id="change-passphrase">
+        <h2>Change passphrase</h2>
+        <p class="muted hint">Your history stays as it is. Devices that are already unlocked keep working.</p>
+        <p class="saved" id="cp-status" role="status" hidden></p>
+        <p class="error" id="cp-error" role="alert" hidden></p>
+        <form id="cp-form" class="password-form">
+            <label for="cp-current">Current passphrase</label>
+            <input type="password" id="cp-current" autocomplete="current-password" required>
+            <label for="cp-new">New passphrase</label>
+            <input type="password" id="cp-new" autocomplete="new-password" required>
+            <label for="cp-repeat">Repeat new passphrase</label>
+            <input type="password" id="cp-repeat" autocomplete="new-password" required>
+            <p class="muted hint">Use at least 12 characters. A short sentence works well.</p>
+            <button type="submit" class="primary">Change passphrase</button>
+        </form>
+    </section>
+
     <section class="panel">
         <form method="post" asp-page-handler="AutoDelete" id="auto-delete-form">
             <label for="auto-delete">Auto-delete history</label>
@@ -54,4 +82,47 @@
             <button type="submit" class="danger">Clear history</button>
         </form>
     </section>
+
+    <section class="panel">
+        <h2>Reset encryption</h2>
+        <p class="muted hint">Use this if the passphrase is lost. It starts over with a new passphrase and an empty history.</p>
+        <button type="button" class="danger" id="reset-open">Reset encryption</button>
+    </section>
 }
+
+<dialog id="add-device-dialog" aria-labelledby="add-device-title">
+    <h2 id="add-device-title">Add a device</h2>
+    <p class="error" id="add-device-error" role="alert" hidden></p>
+    <div id="add-device-code" hidden>
+        <canvas id="qr-code" class="qr" role="img" aria-label="Code for adding a device"></canvas>
+        <p>Scan this with PrivatePaste on your phone. It works once, for 10 minutes.</p>
+        <p class="muted" id="add-device-time" role="timer"></p>
+    </div>
+    <div class="dialog-actions">
+        <button type="button" id="add-device-new" hidden>Show a new code</button>
+        <button type="button" id="add-device-close" class="primary">Done</button>
+    </div>
+</dialog>
+
+@if (Model.IsOwner)
+{
+    <dialog id="reset-dialog" aria-labelledby="reset-title">
+        <form id="reset-form" class="password-form">
+            <h2 id="reset-title">Reset encryption</h2>
+            <p>This deletes the whole history, pinned clips included, on every device. Devices need the new passphrase.</p>
+            <p class="error" id="reset-error" role="alert" hidden></p>
+            <label for="reset-new">New passphrase</label>
+            <input type="password" id="reset-new" autocomplete="new-password" required>
+            <label for="reset-repeat">Repeat new passphrase</label>
+            <input type="password" id="reset-repeat" autocomplete="new-password" required>
+            <p class="muted hint">Use at least 12 characters. A short sentence works well.</p>
+            <div class="dialog-actions">
+                <button type="button" id="reset-cancel">Cancel</button>
+                <button type="submit" class="danger">Delete history and reset</button>
+            </div>
+        </form>
+    </dialog>
+}
+
+<script src="/lib/qrcode-generator/qrcode.js?v=1.5.2"></script>
+<script type="module" src="/js/settings-encryption.js" asp-append-version="true"></script>

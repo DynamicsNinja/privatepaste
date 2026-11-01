@@ -7,13 +7,13 @@ const STORAGE_KEY = 'pp.vault';
 const WRONG_PASSPHRASE = "That passphrase doesn't unlock this server's history.";
 const UNSUPPORTED = "This server's encryption settings aren't supported. Update PrivatePaste.";
 const RESET = 'Encryption was reset. Enter the new passphrase.';
-const MISMATCH = "The passphrases don't match.";
+export const MISMATCH = "The passphrases don't match.";
 const SET_UP_ELSEWHERE = 'Encryption was already set up on another device. Enter its passphrase.';
 const FAILED = 'Something went wrong. Try again.';
 
 const $ = id => document.getElementById(id);
 
-function readKey() {
+export function readKey() {
   try {
     const text = sessionStorage.getItem(STORAGE_KEY);
     return text ? Uint8Array.from(atob(text), c => c.charCodeAt(0)) : null;
@@ -22,7 +22,7 @@ function readKey() {
   }
 }
 
-function storeKey(raw) {
+export function storeKey(raw) {
   try {
     sessionStorage.setItem(STORAGE_KEY, btoa(String.fromCharCode(...raw)));
   } catch {

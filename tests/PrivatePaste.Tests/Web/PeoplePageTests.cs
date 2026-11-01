@@ -250,6 +250,31 @@ public class PeoplePageTests
     }
 
     [Fact]
+    public async Task Settings_EncryptionSectionOwnerOnly()
+    {
+        using var f = new PrivatePasteFactory();
+        await f.AddPersonAsync("Ana");
+        var owner = await (await f.LoginWebAsync()).GetStringAsync("/settings");
+        var ana = await (await f.LoginWebAsync("Ana", AnaPassword)).GetStringAsync("/settings");
+
+        // Adding a device is for anyone who is unlocked; changing or resetting the passphrase is the owner's.
+        foreach (var html in new[] { owner, ana })
+        {
+            Assert.Contains("<h2>Add a device</h2>", html);
+            Assert.Contains("Scan this with PrivatePaste on your phone. It works once, for 10 minutes.", html);
+            Assert.Contains("/lib/qrcode-generator/qrcode.js?v=", html);
+        }
+        Assert.Contains("<h2>Change passphrase</h2>", owner);
+        Assert.Contains("<h2>Reset encryption</h2>", owner);
+        Assert.Contains("This deletes the whole history, pinned clips included, on every device. Devices need the new passphrase.", owner);
+        Assert.Contains(">Delete history and reset</button>", owner);
+        Assert.DoesNotContain("Change passphrase", ana);
+        Assert.DoesNotContain("Reset encryption", ana);
+        Assert.DoesNotContain("Delete history and reset", ana);
+        Assert.DoesNotContain("id=\"reset-dialog\"", ana);
+    }
+
+    [Fact]
     public async Task Settings_ChangePassword_ShowsPasswordChanged()
     {
         using var f = new PrivatePasteFactory();
