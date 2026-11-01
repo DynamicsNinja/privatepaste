@@ -153,11 +153,13 @@ app.UseCloudflareTunnel(app.Services.GetRequiredService<ServerOptions>());
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseStaticFiles();
 app.UseAuthentication();
+app.UseProtocolGate();
 app.UseAuthorization();
 app.UseRateLimiter();
 
 app.MapHealthChecks("/health");
 app.MapAuthEndpoints();
+app.MapServerInfoEndpoints();
 app.MapDeviceEndpoints();
 app.MapClipEndpoints();
 app.MapSettingsEndpoints();

@@ -44,6 +44,7 @@ public class PinEndpointsTests
         login.EnsureSuccessStatusCode();
         client.DefaultRequestHeaders.Authorization = new("Bearer",
             (await login.Content.ReadFromJsonAsync<LoginResponse>(ProtocolJson.Options))!.Token);
+        client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         return (app, client);
     }
 

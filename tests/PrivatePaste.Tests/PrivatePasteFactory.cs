@@ -54,14 +54,17 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
         });
     }
 
-    /// <summary>Logs in as a new device and returns a client that sends its bearer token.</summary>
+    /// <summary>
+    /// Logs in as a new device and returns a client that sends its bearer token and the protocol header
+    /// (<paramref name="legacy"/> omits the header, like a client from before protocol 2).
+    /// </summary>
     public async Task<HttpClient> LoginAsync(string deviceName = "PC-test", string platform = "windows",
-        string username = OwnerName, string password = Password) =>
-        (await LoginDeviceAsync(deviceName, platform, username, password)).Client;
+        string username = OwnerName, string password = Password, bool legacy = false) =>
+        (await LoginDeviceAsync(deviceName, platform, username, password, legacy)).Client;
 
     /// <summary>Logs in as a new device and returns its client, id and raw bearer token.</summary>
     public async Task<(HttpClient Client, Guid DeviceId, string Token)> LoginDeviceAsync(string deviceName = "PC-test",
-        string platform = "windows", string username = OwnerName, string password = Password)
+        string platform = "windows", string username = OwnerName, string password = Password, bool legacy = false)
     {
         var client = CreateClient();
         var response = await client.PostAsJsonAsync("/api/auth/login",
@@ -69,6 +72,8 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
         response.EnsureSuccessStatusCode();
         var login = (await response.Content.ReadFromJsonAsync<LoginResponse>(ProtocolJson.Options))!;
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.Token);
+        if (!legacy)
+            client.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         return (client, login.DeviceId, login.Token);
     }
 

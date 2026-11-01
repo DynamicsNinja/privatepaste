@@ -163,6 +163,7 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
     {
         var req = new HttpRequestMessage(method, url);
         if (Token is { Length: > 0 } t) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", t);
+        req.Headers.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         return req;
     }
 

@@ -81,7 +81,11 @@ public class SyncEngineTests : IAsyncLifetime
         if (_connectFailure?.Invoke(n) is { } failure) throw failure;
         if (_connectHangs?.Invoke(n) == true) return await new TaskCompletionSource<WebSocket>().Task;
         var client = _server.Server.CreateWebSocketClient();
-        client.ConfigureRequest = r => r.Headers.Authorization = "Bearer " + _tokenA;
+        client.ConfigureRequest = r =>
+        {
+            r.Headers.Authorization = "Bearer " + _tokenA;
+            r.Headers[ProtocolHeaders.Name] = ProtocolHeaders.Version;
+        };
         var socket = await client.ConnectAsync(new Uri(_server.Server.BaseAddress, "ws"), ct);
         if (_wrapSocket is { } wrap) socket = wrap(socket);
         _sockets.Enqueue(socket);
@@ -894,6 +898,7 @@ internal static class FactoryClientExtensions
     {
         var c = factory.CreateClient();
         c.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        c.DefaultRequestHeaders.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
         return c;
     }
 }
