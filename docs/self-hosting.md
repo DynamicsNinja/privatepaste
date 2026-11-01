@@ -25,6 +25,27 @@ Use the output for `PP_DB_KEY` (and a strong, separate value for `PP_PASSWORD`).
 
 **Back up `PP_DB_KEY`. Without it the data is unrecoverable.**
 
+## End-to-end encryption
+
+Clips are encrypted on the devices before they reach the server, with a vault key that is shared by everyone on the server and unlocked with a passphrase. The server stores the vault key only wrapped with that passphrase (Argon2id), so neither the server nor someone who steals it, its backups and its configuration can read a clip. Details of the formats are in the [API reference](api.md#end-to-end-encryption).
+
+- **Setting it up**: on a new or upgraded server, the owner's first app or web session that opens the history asks to **Set up encryption**. Choose a passphrase twice: at least 12 characters, not a common one ("Use at least 12 characters. A short sentence works well."). It is separate from the login password. Other people's devices show "Ask the owner to set up encryption." until then, and don't sync.
+- **Unlocking a device**: each device asks for the passphrase once after signing in. Android can instead scan a code from **Add a device** (in the Settings of the desktop app, the Android app or the web UI, on a device that is already unlocked); the code works once, for 10 minutes. The web UI keeps the key only for the browser tab and has a **Lock** button next to Sign out.
+- **Changing the passphrase**: the owner, in Settings on any unlocked device or in the web UI. The history stays and unlocked devices keep working; only devices that unlock later need the new one.
+- **What the server still sees**: who copied each clip, from which device and platform, and when; its kind, exact size and pin state. Never the content or thumbnails.
+- **Search** runs on the devices, which hold the key. The history screens search the clips each device keeps and offer **Search older clips** for the rest.
+- **The web UI** decrypts in the browser with code your server sends. Someone who steals the server and keeps it running could serve altered page code to any browser that is unlocked, or unlocks, while it runs. An unlocked tab is exposed as soon as it loads another page, so use **Lock** (or close the tab) when you're done. The apps don't have this risk.
+
+### Why `PP_DB_KEY` still matters
+
+`PP_DB_KEY` encrypts the database and stored files at rest, as before. The clip contents are already unreadable without the passphrase, but the metadata above (people, devices, times, kinds, sizes, pins) is only hidden by `PP_DB_KEY`, from someone who gets the disk or a backup without the server's configuration. Keep it, and keep backing it up apart from the data.
+
+### Reset encryption
+
+**A lost passphrase can't be recovered**, by you or anyone else: the history is encrypted with a key only it unlocks. The way out is **Settings > Reset encryption** in the web UI (owner only). After a confirmation, it deletes the whole history, pinned clips included, on every device, and sets up encryption again with a new passphrase you choose there.
+
+Every device then shows "Encryption was reset. Enter the new passphrase.", clears its local copy of the history and its queue of unsent clips, and unlocks with the new passphrase.
+
 ## People
 
 A server has people, who share one history. Each signs in with a name and a password. The owner is the person created on first start, named `owner` (rename it from the **People** page), with `PP_PASSWORD` as the password. There is exactly one owner.
@@ -46,6 +67,14 @@ Anyone changes their own password under **Settings > Change password** (it signs
 - **Another person's password**: the owner resets it on the People page.
 - If a password leaked, reset it: the person's devices are signed out. Passwords are hashed with Argon2id.
 
+## Upgrading to end-to-end encryption
+
+**Upgrading a server from a version without end-to-end encryption deletes the whole history, pinned clips included.** The server can't encrypt clips it used to store readable, so its first start drops every clip, thumbnail and image and starts empty. **Back up `/data` first** (see [Backups](#backups)) if you want to keep a copy. People, devices, passwords and settings stay.
+
+- Update the server and the apps together. Apps from before this version stop syncing: the server answers them with "Update PrivatePaste to keep syncing." until they are updated. New apps on a server that isn't updated yet show "Update your PrivatePaste server to keep syncing."
+- After the upgrade, set up encryption from an owner device or the web UI (see [End-to-end encryption](#end-to-end-encryption)). Devices stay signed in; each one asks for the passphrase once.
+- When an updated app first meets the upgraded server, it deletes its local history cache, thumbnails and unsent clips, so no readable copy from before is left on the device either.
+
 ## Upgrading to multiple people
 
 **Back up `/data` before upgrading**: the first start migrates the database.
@@ -59,7 +88,8 @@ Anyone changes their own password under **Settings > Change password** (it signs
 ## Backups
 
 1. Get a consistent copy of `/data` (the `privatepaste-data` volume): either stop the container first (`docker compose stop`, copy, `docker compose start`), or take a snapshot of the volume. Copying the files of a running server can catch the database mid-write.
-2. Store `PP_DB_KEY` separately and safely (for example in a password manager), not next to the backup. The backup is encrypted with it: **without `PP_DB_KEY` a backup is useless**, and anyone who has both the backup and the key can read everything.
+2. Store `PP_DB_KEY` separately and safely (for example in a password manager), not next to the backup. The backup is encrypted with it: **without `PP_DB_KEY` a backup is useless**, and anyone who has both the backup and the key can read the metadata (people, devices, times, sizes).
+3. The clips in a backup are also end-to-end encrypted: after a restore, devices unlock them with the passphrase that was in use when the backup was taken.
 
 ## Clearing history and auto-delete
 
@@ -80,6 +110,6 @@ Sign-in (and Change password in Settings) is rate-limited to 5 attempts per minu
 PP_DB_KEY=0123456789abcdef0123 PP_PASSWORD=dev PP_DATA_DIR=./data dotnet run --project src/PrivatePaste.Server
 ```
 
-Sign in as `owner` with the password `dev`.
+Sign in as `owner` with the password `dev`, then set up encryption with any passphrase of 12 characters or more. To start over, stop the server and delete the data directory.
 
 Run the tests with `dotnet test`.

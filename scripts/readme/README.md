@@ -24,12 +24,16 @@ It needs the .NET SDK, Node.js and a JDK 21 (`JAVA_HOME`, or Android Studio's / 
 2. Renders the desktop popup from `demo.json` with the real Avalonia theme: the test `DesktopRenderTests.Readme_popup` writes `out/readme-popup-{dark,light}.png` at 2x (840×960), so it stays sharp where it is shown larger.
 3. Renders the Android history from `demo.json` with Robolectric: `ReadmeScreenshotTest` writes `out/readme-history-{dark,light}.png`. Image clips are left out there, because the test has no thumbnail to load.
 4. Runs `capture.mjs` (Playwright, using the installed Edge or Playwright's Chromium):
-   - renders `photo.html` to `out/photo.png`, the picture used for the image clip;
+   - renders `photo.html` to `out/photo.png`, the picture used for the image clip, and lets the browser work out what a client uploads with it: the content hash of its pixels and a PNG thumbnail that fits 256×256;
    - signs in to the web UI as `owner`, renames the owner to the first `user` in `demo.json` and adds the other people on the People page (one sign-in);
-   - signs in once per demo device (Work laptop/Windows, Pixel 9/Android, MacBook Air/macOS, ThinkPad/Linux), each as its person, and uploads the clips oldest first as backfilled clips, so each keeps its age ("12 min ago", "yesterday");
-   - saves `out/web-{dark,light}.png` from that web session (880×860 at 2×);
+   - signs in once per demo device (Work laptop/Windows, Pixel 9/Android, MacBook Air/macOS, ThinkPad/Linux), each as its person;
+   - sets up encryption from one of the owner's devices with a fixed demo passphrase (`DEMO_PASSPHRASE` in `capture.mjs`), using the web UI's own crypto module `src/PrivatePaste.Server/wwwroot/js/e2e.js` in Node;
+   - encrypts the clips with that module and uploads them (`POST /api/clips`, with the protocol header) oldest first as backfilled clips, so each keeps its age ("12 min ago", "yesterday");
+   - unlocks the web history with the demo passphrase, waits for every row, the decrypted thumbnail and the **Lock** button in the top bar, and saves `out/web-{dark,light}.png` from that web session (880×860 at 2×);
    - composes `hero.html` (browser frame with the web shot, the popup over its lower left, the phone on the right, on a Night vault background with rounded transparent corners) and saves `docs/images/hero-{dark,light}.png` at 1.5×.
 5. Stops the server. `out/` is git-ignored and recreated on every run.
+
+To check only the web shots, run `capture.mjs` alone with `--web-only` against a fresh local server (an empty data directory, `PP_PASSWORD=dev`): it stops after `out/web-*.png` and leaves `docs/images` alone. It needs a fresh server because it sets up the vault.
 
 Then look at both PNGs and commit them. The README shows the dark one in dark mode and the light one otherwise, through `<picture>`.
 
@@ -80,5 +84,5 @@ The README states these facts; check them when the apps change:
 - The feature list under "Why PrivatePaste": multiple people with one shared history, the hotkey (Ctrl+Shift+V), the Quick Settings tile and Share target, the clip-arrival notification, "kept until you delete it".
 - The Apps table: release file names (`.msi`, `.zip`, `osx-arm64`/`osx-x64`, `linux-x64.tar.gz`, `.apk`), Android 10 minimum, signing/notarization status.
 - Quick start: the environment variables (`PP_PASSWORD` is the owner's password, the owner signs in as `owner`), the upgrade note for servers several people already share, port 8080, service name `privatepaste`, the prebuilt image name.
-- Security: Argon2id, the sign-in rate limit, what removing a person or resetting a password signs out, owner-only actions, HTTPS-only clients, and that this is encryption at rest, not end-to-end.
+- Security: Argon2id, the sign-in rate limit, what removing a person or resetting a password signs out, owner-only actions, HTTPS-only clients, end-to-end encryption (what the server can and can't see, why `PP_DB_KEY` still matters, the web UI caveat, and that a lost passphrase means Reset encryption and an empty history), and the upgrade warning that the first end-to-end version deletes the history.
 - Badges: the `desktop-v*` and `android-v*` tag filters. Release badges need the repository to be public.
