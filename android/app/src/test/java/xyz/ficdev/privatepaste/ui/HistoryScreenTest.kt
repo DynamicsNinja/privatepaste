@@ -194,4 +194,34 @@ class HistoryScreenTest {
         assertEquals(listOf("a"), deleted)
         assertEquals(emptyList<String>(), copied)
     }
+
+    @Test
+    fun unknownRowIsInert() {
+        val unknown = clip.copy(id = "u", kind = ClipKind.UNKNOWN, text = null)
+        show(HistoryState(items = listOf(unknown), syncState = SyncState.CONNECTED))
+
+        compose.onNodeWithText("Update PrivatePaste to see this clip").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Update PrivatePaste to see this clip").performTouchInput { longClick() }
+        compose.waitForIdle()
+        assertEquals(emptyList<String>(), copied)
+        compose.onNodeWithText("Pin").assertDoesNotExist()
+        compose.onNodeWithText("Delete").assertDoesNotExist()
+    }
+
+    @Test
+    fun searchOlderShowsOnlyWhenNothingHereMatches() {
+        var asked = 0
+        compose.setContent {
+            PrivatePasteTheme {
+                HistoryContent(
+                    state = HistoryState(query = "invoice", canSearchOlder = true, syncState = SyncState.CONNECTED),
+                    relativeTime = time, onQueryChange = {}, onCopy = {}, onDelete = {}, onNearEnd = {}, onOpenSettings = {},
+                    onSearchOlder = { asked++ },
+                )
+            }
+        }
+        compose.onNodeWithText("No matches.").assertIsDisplayed()
+        compose.onNodeWithText("Search older clips").assertIsDisplayed().performClick()
+        assertEquals(1, asked)
+    }
 }

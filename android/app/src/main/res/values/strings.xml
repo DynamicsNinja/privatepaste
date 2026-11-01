@@ -20,6 +20,39 @@
     <string name="signin_rate_limited">Too many attempts. Wait a minute and try again.</string>
     <string name="signin_unreachable">Can\'t reach the server. Check the address and your connection.</string>
 
+    <!-- Encryption: unlock, setup and the states before them (same copy as the desktop and the web) -->
+    <string name="vault_unlock_title">Unlock your history</string>
+    <string name="vault_setup_title">Set up encryption</string>
+    <string name="vault_passphrase">Passphrase</string>
+    <string name="vault_repeat_passphrase">Repeat passphrase</string>
+    <string name="vault_rule">Use at least 12 characters. A short sentence works well.</string>
+    <string name="vault_unlock">Unlock</string>
+    <string name="vault_set_up">Set up</string>
+    <string name="vault_or">or</string>
+    <string name="vault_scan">Scan a code</string>
+    <string name="vault_scan_prompt">Point the camera at the code from Add a device.</string>
+    <string name="vault_camera_denied">Allow the camera to scan a code.</string>
+    <string name="vault_camera_blocked">Allow the camera in Settings to scan a code.</string>
+    <string name="vault_unlock_failed">Couldn\'t unlock. Try again.</string>
+    <string name="vault_setup_failed">Couldn\'t set up encryption. Try again.</string>
+    <string name="vault_set_up_elsewhere">Encryption was already set up on another device. Enter its passphrase.</string>
+    <string name="vault_try_again">Try again</string>
+    <string name="vault_sign_out">Sign out</string>
+    <string name="vault_show_passphrase">Show passphrase</string>
+    <string name="vault_hide_passphrase">Hide passphrase</string>
+    <string name="vault_wrong_passphrase">That passphrase doesn\'t unlock this server\'s history.</string>
+    <string name="vault_unsupported">This server\'s encryption settings aren\'t supported. Update PrivatePaste.</string>
+    <string name="vault_not_a_code">That code isn\'t a PrivatePaste code.</string>
+    <string name="vault_code_expired">That code has expired. Show a new one.</string>
+    <string name="vault_mismatch">The passphrases don\'t match.</string>
+    <string name="vault_server_too_old">Update your PrivatePaste server to keep syncing.</string>
+    <string name="vault_update_required">Update PrivatePaste to keep syncing.</string>
+    <string name="vault_waiting_for_owner">Ask the owner to set up encryption.</string>
+    <string name="vault_was_reset">Encryption was reset. Enter the new passphrase.</string>
+    <string name="vault_owner_only">Only the owner can change the passphrase.</string>
+    <string name="vault_change_failed">Couldn\'t change the passphrase. Try again.</string>
+    <string name="vault_save_failed">Couldn\'t save the key on this phone. Try again.</string>
+
     <!-- Onboarding -->
     <string name="onboarding_notifications_title">Notifications</string>
     <string name="onboarding_notifications_body">PrivatePaste shows a quiet notification while it\'s connected</string>
@@ -56,6 +89,9 @@
     <string name="history_kind_text">Text</string>
     <string name="history_kind_link">Link</string>
     <string name="history_kind_image">Image</string>
+    <string name="history_kind_unknown">Unknown clip</string>
+    <string name="history_unknown_clip">Update PrivatePaste to see this clip</string>
+    <string name="history_search_older">Search older clips</string>
     <string name="platform_windows">Windows</string>
     <string name="platform_macos">macOS</string>
     <string name="platform_linux">Linux</string>
@@ -84,4 +120,16 @@
     <string name="settings_sign_out_confirm">Sign out of this phone? Local history is removed.</string>
     <string name="settings_cancel">Cancel</string>
     <string name="settings_version">Version %1$s</string>
+    <string name="settings_encryption">Encryption</string>
+    <string name="settings_change_passphrase">Change passphrase</string>
+    <string name="settings_current_passphrase">Current passphrase</string>
+    <string name="settings_new_passphrase">New passphrase</string>
+    <string name="settings_change">Change</string>
+    <string name="settings_passphrase_changed">Passphrase changed.</string>
+    <string name="settings_add_device">Add a device</string>
+    <string name="add_device_body">Scan this with PrivatePaste on your phone. It works once, for 10 minutes.</string>
+    <string name="add_device_left">%1$s left</string>
+    <string name="add_device_failed">Couldn\'t make a code. Check your connection.</string>
+    <string name="add_device_new">Show a new code</string>
+    <string name="add_device_qr">QR code for adding a device</string>
 </resources>

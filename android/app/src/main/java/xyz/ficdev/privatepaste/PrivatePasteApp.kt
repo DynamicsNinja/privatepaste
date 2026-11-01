@@ -5,12 +5,15 @@ import android.app.Application
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
+import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
 import xyz.ficdev.privatepaste.send.ClipSender
 import xyz.ficdev.privatepaste.send.SenderProvider
 import xyz.ficdev.privatepaste.service.Notifications
@@ -19,6 +22,7 @@ import xyz.ficdev.privatepaste.storage.KeyProvider
 import xyz.ficdev.privatepaste.storage.KeystoreKeyProvider
 import xyz.ficdev.privatepaste.ui.UiDeps
 import xyz.ficdev.privatepaste.ui.UiDepsProvider
+import java.io.IOException
 
 /**
  * The Application: owns the [AppGraph] (built on first use, so components that never need it stay cheap) and the
@@ -46,6 +50,7 @@ open class PrivatePasteApp : Application(), UiDepsProvider, SenderProvider {
 
     override fun onCreate() {
         super.onCreate()
+        loadCommonPassphrases()
         Notifications.createChannels(this)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
@@ -79,5 +84,21 @@ open class PrivatePasteApp : Application(), UiDepsProvider, SenderProvider {
                 Notifications.postAlert(this, message)
             }
         }
+    }
+
+    /** The passphrase rule's list of common passphrases (the same file on every platform); read off the main thread. */
+    private fun loadCommonPassphrases() {
+        appScope.launch(Dispatchers.IO) {
+            try {
+                assets.open(COMMON_PASSPHRASES).use(PassphraseWrap::useCommonList)
+            } catch (e: IOException) {
+                Log.w(TAG, "Cannot read the common passphrase list (${e.javaClass.simpleName})")
+            }
+        }
+    }
+
+    private companion object {
+        const val TAG = "PrivatePasteApp"
+        const val COMMON_PASSPHRASES = "common-passphrases.txt"
     }
 }

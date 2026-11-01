@@ -35,6 +35,15 @@ import kotlinx.coroutines.launch
 import xyz.ficdev.privatepaste.core.crypto.WrongPassphraseException
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.RecordedRequest
+import xyz.ficdev.privatepaste.R
+import xyz.ficdev.privatepaste.core.model.ProtocolJson
+import xyz.ficdev.privatepaste.core.model.VaultKdf
+import xyz.ficdev.privatepaste.core.model.VaultWrap
+import xyz.ficdev.privatepaste.ui.UiText
+import java.util.Base64
 import java.io.File
 import java.net.InetAddress
 import java.time.Instant
@@ -76,7 +85,11 @@ class SessionManagerTest {
         apiFactory = { baseUrl, token -> PrivatePasteApi(baseUrl, token, client) },
         hints = hints,
         vaultKeys = vault,
+        onLocalDataCleared = { cleared++ },
     )
+
+    /** How often the manager told the host to clear its own copies. */
+    private var cleared = 0
 
     private fun json(body: String, code: Int = 200) =
         MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(body)
@@ -310,5 +323,228 @@ class SessionManagerTest {
         assertThrows("the abandoned key is wiped", VaultKeyClosedException::class.java) { key.export() }
         assertNull(m.vaultKey.value)
         assertNull(vault.load())
+    }
+
+    // The vault state machine. The wrap's contents don't matter to the check, only its key id.
+
+    private fun wrapFor(keyId: String) = VaultWrap(
+        keyId = keyId,
+        kdf = VaultKdf("argon2id", 65536, 3, 1, Base64.getEncoder().encodeToString(ByteArray(16))),
+        nonce = Base64.getEncoder().encodeToString(ByteArray(12)),
+        wrappedKey = Base64.getEncoder().encodeToString(ByteArray(48)),
+    )
+
+    /** Answers the check's three calls; anything else (a sync, an upload) fails the test through [unexpected]. */
+    private val unexpected = mutableListOf<String>()
+
+    private fun vaultServer(wrap: VaultWrap?, owner: Boolean = false, serverInfo: Boolean = true) {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl?.encodedPath) {
+                "/api/server-info" -> if (serverInfo) {
+                    json("""{"protocol":2,"kinds":["text","link","image"],"limits":{"textKb":1024,"imageMb":20}}""")
+                } else {
+                    MockResponse().setResponseCode(404)
+                }
+                "/api/vault" -> if (wrap == null) {
+                    MockResponse().setResponseCode(404)
+                } else {
+                    json(ProtocolJson.json.encodeToString(VaultWrap.serializer(), wrap))
+                }
+                "/api/me" -> json("""{"name":"Ana","isOwner":$owner}""")
+                else -> MockResponse().setResponseCode(500).also { unexpected += request.path.orEmpty() }
+            }
+        }
+    }
+
+    private fun signedIn(): SessionManager {
+        store.save(StoredSession(url, "dev-1", "Pixel 9", "tok-1"))
+        return manager()
+    }
+
+    @Test
+    fun preE2eCacheWipedBeforeFirstSync(): Unit = runBlocking {
+        seedLocalData()   // the way the app before encryption left it: no key id on the cache
+        vault.delete()
+        assertNull(cache.keyId)
+        val m = signedIn()
+        assertEquals(VaultState.UNKNOWN, m.vaultState.value)
+        assertFalse("nothing syncs before the check", m.vaultChecked.value)
+        vaultServer(wrapFor("0123456789abcdef"))
+
+        assertTrue(m.checkVault())
+
+        assertLocalDataCleared()
+        assertEquals(VaultState.LOCKED, m.vaultState.value)
+        assertTrue(m.vaultChecked.value)
+        assertEquals("the empty cache now belongs to the server's key", "0123456789abcdef", cache.keyId)
+        assertEquals(emptyList<String>(), unexpected)
+        assertEquals("the host clears its plaintext copies with it", 1, cleared)
+    }
+
+    @Test
+    fun setUpOnAServerSetUpMeanwhileSaysSoNeverTheServersText(): Unit = runBlocking {
+        val m = signedIn()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl?.encodedPath) {
+                "/api/server-info" -> json("""{"protocol":2,"kinds":["text"],"limits":{"textKb":1024,"imageMb":20}}""")
+                "/api/me" -> json("""{"name":"Ana","isOwner":true}""")
+                "/api/vault" -> if (request.method == "PUT") {
+                    json("""{"title":"Conflict","detail":"internal: row 7 locked"}""", code = 409)
+                } else {
+                    json(ProtocolJson.json.encodeToString(VaultWrap.serializer(), wrapFor("0123456789abcdef")))
+                }
+                else -> MockResponse().setResponseCode(500)
+            }
+        }
+        assertEquals(
+            UiText.Res(R.string.vault_set_up_elsewhere),
+            m.setUp("a long enough passphrase", "a long enough passphrase"),
+        )
+        assertEquals("re-checked: there is a vault now", VaultState.LOCKED, m.vaultState.value)
+        assertNull(m.vaultKey.value)
+    }
+
+    @Test
+    fun anotherRefusalShowsTheActionsGenericLine(): Unit = runBlocking {
+        val key = VaultKey.create()
+        val wrap = PassphraseWrap.wrap(key, "the old passphrase")
+        val m = signedIn()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.method) {
+                "GET" -> json(ProtocolJson.json.encodeToString(VaultWrap.serializer(), wrap))
+                else -> json("""{"title":"Bad request","detail":"kdf.salt: stack trace here"}""", code = 400)
+            }
+        }
+        assertEquals(
+            UiText.Res(R.string.vault_change_failed),
+            m.changePassphrase("the old passphrase", "the new passphrase", "the new passphrase"),
+        )
+    }
+
+    @Test
+    fun aPhoneOfflineAcrossAResetForgetsTheOldKeyAndHistory(): Unit = runBlocking {
+        seedLocalData()
+        val old = VaultKey.create()
+        vault.save(old)
+        cache.keyId = old.keyId
+        cache.save()
+        val m = signedIn()
+        assertEquals("the history shows offline with the key it belongs to", VaultState.UNLOCKED, m.vaultState.value)
+        assertFalse(m.vaultChecked.value)
+        val held = m.vaultKey.value!!
+        vaultServer(wrapFor("fedcba9876543210"))   // the owner reset encryption while this phone was away
+
+        assertTrue(m.checkVault())
+
+        assertLocalDataCleared()
+        assertNull(m.vaultKey.value)
+        assertEquals(VaultState.LOCKED, m.vaultState.value)
+        assertThrows("the old key is wiped in memory too", VaultKeyClosedException::class.java) { held.export() }
+    }
+
+    @Test
+    fun theKeyItsHistoryBelongsToUnlocksAndKeepsIt(): Unit = runBlocking {
+        seedLocalData()
+        val key = VaultKey.create()
+        vault.save(key)
+        cache.keyId = key.keyId
+        cache.save()
+        val m = signedIn()
+        vaultServer(wrapFor(key.keyId))
+
+        assertTrue(m.checkVault())
+
+        assertEquals(VaultState.UNLOCKED, m.vaultState.value)
+        assertTrue(m.vaultChecked.value)
+        assertEquals(1, cache.items.value.size)
+        assertFalse(queue.isEmpty)
+        assertEquals(key.keyId, m.vaultKey.value!!.keyId)
+    }
+
+    @Test
+    fun noVaultIsSetupForTheOwnerAndWaitingForOthers(): Unit = runBlocking {
+        val m = signedIn()
+        vaultServer(wrap = null, owner = true)
+        assertTrue(m.checkVault())
+        assertEquals(VaultState.NEEDS_OWNER_SETUP, m.vaultState.value)
+        assertTrue(m.isOwner.value)
+
+        vaultServer(wrap = null, owner = false)
+        assertTrue(m.checkVault())
+        assertEquals(VaultState.WAITING_FOR_OWNER, m.vaultState.value)
+        assertFalse(m.isOwner.value)
+    }
+
+    @Test
+    fun oldServerIsServerTooOld(): Unit = runBlocking {
+        val m = signedIn()
+        vaultServer(wrap = null, serverInfo = false)
+        assertTrue(m.checkVault())
+        assertEquals(VaultState.SERVER_TOO_OLD, m.vaultState.value)
+    }
+
+    @Test
+    fun anUnreachableServerLeavesTheStateAlone(): Unit = runBlocking {
+        val m = signedIn()
+        server.shutdown()
+        assertFalse(m.checkVault())
+        assertEquals(VaultState.UNKNOWN, m.vaultState.value)
+        assertFalse(m.vaultChecked.value)
+    }
+
+    @Test
+    fun aKeyResetLocksWithTheResetNotice(): Unit = runBlocking {
+        val m = signedIn()
+        m.useVaultKey(VaultKey.create())
+        m.onKeyReset()
+        assertEquals(VaultState.LOCKED, m.vaultState.value)
+        assertTrue(m.keyWasReset.value)
+    }
+
+    @Test
+    fun setUpKeepsTheNewKeyAndUnlocks(): Unit = runBlocking {
+        val m = signedIn()
+        var put: String? = null
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                put = request.body.readUtf8()
+                return MockResponse().setResponseCode(201)
+            }
+        }
+        assertNull(m.setUp("a long enough passphrase", "a long enough passphrase"))
+        assertEquals(VaultState.UNLOCKED, m.vaultState.value)
+        val key = m.vaultKey.value!!
+        assertEquals(key.keyId, vault.load()!!.keyId)
+        assertEquals(key.keyId, cache.keyId)
+        assertTrue(put!!.contains("\"keyId\":\"${key.keyId}\""))
+        // The wrap on the server opens with the passphrase.
+        val wrap = ProtocolJson.json.decodeFromString(VaultWrap.serializer(), put)
+        assertEquals(key.keyId, PassphraseWrap.unwrap(wrap, "a long enough passphrase").keyId)
+    }
+
+    @Test
+    fun changePassphraseRewrapsTheSameKey(): Unit = runBlocking {
+        val key = VaultKey.create()
+        val wrap = PassphraseWrap.wrap(key, "the old passphrase")
+        val m = signedIn()
+        var put: String? = null
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.method) {
+                "GET" -> json(ProtocolJson.json.encodeToString(VaultWrap.serializer(), wrap))
+                else -> MockResponse().setResponseCode(200).also { put = request.body.readUtf8() }
+            }
+        }
+        assertEquals(
+            UiText.Res(R.string.vault_wrong_passphrase),
+            m.changePassphrase("not the old one", "the new passphrase", "the new passphrase"),
+        )
+        assertNull(put)
+        assertEquals(UiText.Res(R.string.vault_mismatch), m.changePassphrase("the old passphrase", "the new passphrase", "the new passphrasf"))
+        assertEquals(UiText.Raw(PassphraseWrap.RULE_MESSAGE), m.changePassphrase("the old passphrase", "short", "short"))
+
+        assertNull(m.changePassphrase("the old passphrase", "the new passphrase", "the new passphrase"))
+        val rewrapped = ProtocolJson.json.decodeFromString(VaultWrap.serializer(), put!!)
+        assertEquals(key.keyId, rewrapped.keyId)
+        assertEquals(key.keyId, PassphraseWrap.unwrap(rewrapped, "the new passphrase").keyId)
     }
 }

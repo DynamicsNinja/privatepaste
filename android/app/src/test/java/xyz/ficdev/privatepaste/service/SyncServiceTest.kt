@@ -23,7 +23,10 @@ import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
 import xyz.ficdev.privatepaste.MainActivity
 import xyz.ficdev.privatepaste.R
+import xyz.ficdev.privatepaste.core.crypto.VaultKey
+import xyz.ficdev.privatepaste.sync.SignInResult
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.sync.VaultState
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = TestPrivatePasteApp::class)
@@ -230,5 +233,34 @@ class SyncServiceTest {
         assertEquals(Service.START_NOT_STICKY, service.onStartCommand(Intent(app, SyncService::class.java), 0, 2))
         assertEquals(Notifications.ID_CONNECTION, shadow.lastForegroundNotificationId)
         assertEquals(2, shadow.stopSelfId)
+    }
+
+    @Test
+    fun noSyncBeforeTheVaultCheckOrWhileLockedAndTheNotificationSaysSo() {
+        val paths = java.util.Collections.synchronizedList(ArrayList<String>())
+        val checkMayAnswer = java.util.concurrent.CountDownLatch(1)
+        server.other = { req ->
+            paths += req.path.orEmpty().substringBefore('?')
+            if (req.path == "/api/server-info") checkMayAnswer.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            null
+        }
+        assertEquals(SignInResult.Ok, kotlinx.coroutines.runBlocking { app.uiDeps.signIn(server.url, "owner", "dev", "Pixel Test") })
+        startService()
+
+        idleFor(500)   // the check is held at /api/server-info: nothing may sync yet
+        assertEquals(VaultState.UNKNOWN, app.graph.sessions.vaultState.value)
+        assertTrue(paths.toString(), paths.none { it == "/ws" || it == "/api/sync" })
+
+        checkMayAnswer.countDown()   // the server has a vault this phone has no key for
+        awaitUntil("locked") { app.graph.sessions.vaultState.value == VaultState.LOCKED }
+        awaitUntil("the notification asks to unlock") { connectionNotification()?.title() == "Open PrivatePaste to unlock" }
+        idleFor(500)
+        assertTrue(paths.toString(), paths.none { it == "/ws" || it == "/api/sync" })
+
+        // Unlocking opens the gate.
+        kotlinx.coroutines.runBlocking { app.graph.sessions.useVaultKey(VaultKey.fromBytes(server.vaultKey.export())) }
+        app.uiDeps.recheckVault()
+        awaitUntil("connected") { connectionNotification()?.title() == "PrivatePaste connected" }
+        assertTrue(paths.contains("/ws"))
     }
 }

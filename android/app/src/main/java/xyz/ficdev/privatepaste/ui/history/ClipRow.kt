@@ -72,11 +72,18 @@ fun ClipRow(
                 .clip(RowShape)
                 .background(colors.surface)
                 .border(1.dp, if (isNewest) colors.primary else colors.outline, RowShape)
-                .combinedClickable(
-                    onClickLabel = stringResource(R.string.history_copy_action),
-                    onLongClickLabel = stringResource(R.string.history_menu_action),
-                    onLongClick = onLongClick,
-                    onClick = onClick,
+                .then(
+                    // A kind from a newer app: nothing this build can copy, so the row is inert.
+                    if (clip.kind == ClipKind.UNKNOWN) {
+                        Modifier
+                    } else {
+                        Modifier.combinedClickable(
+                            onClickLabel = stringResource(R.string.history_copy_action),
+                            onLongClickLabel = stringResource(R.string.history_menu_action),
+                            onLongClick = onLongClick,
+                            onClick = onClick,
+                        )
+                    },
                 )
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -86,6 +93,14 @@ fun ClipRow(
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 if (clip.kind == ClipKind.IMAGE) {
                     Thumbnail(clip, thumbnails)
+                } else if (clip.kind == ClipKind.UNKNOWN) {
+                    Text(
+                        text = stringResource(R.string.history_unknown_clip),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 } else {
                     Text(
                         text = preview(clip.text),
@@ -138,7 +153,7 @@ private fun KindTile(kind: ClipKind) {
         ClipKind.TEXT -> R.drawable.ic_kind_text to R.string.history_kind_text
         ClipKind.LINK -> R.drawable.ic_kind_link to R.string.history_kind_link
         ClipKind.IMAGE -> R.drawable.ic_kind_image to R.string.history_kind_image
-        ClipKind.UNKNOWN -> R.drawable.ic_kind_text to R.string.history_kind_text
+        ClipKind.UNKNOWN -> R.drawable.ic_kind_text to R.string.history_kind_unknown
     }
     Box(
         modifier = Modifier
@@ -150,7 +165,7 @@ private fun KindTile(kind: ClipKind) {
         Icon(
             painter = painterResource(icon),
             contentDescription = stringResource(label),
-            tint = MaterialTheme.colorScheme.primary,
+            tint = if (kind == ClipKind.UNKNOWN) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(18.dp),
         )
     }

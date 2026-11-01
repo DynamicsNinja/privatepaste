@@ -31,6 +31,9 @@ class ThumbnailStore(private val dir: File, private val keys: KeyProvider) {
         }
     }
 
+    /** True when no thumbnail is stored. */
+    fun isEmpty(): Boolean = synchronized(lock) { dir.listFiles()?.none { it.name.endsWith(SUFFIX) } ?: true }
+
     fun clear() = synchronized(lock) {
         dir.listFiles()?.forEach { it.delete() }
     }

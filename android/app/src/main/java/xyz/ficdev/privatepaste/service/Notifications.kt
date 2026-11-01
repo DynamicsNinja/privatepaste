@@ -68,6 +68,7 @@ object Notifications {
         SyncState.CONNECTING -> "Connecting…"
         SyncState.OFFLINE -> "Offline, retrying"
         SyncState.SIGNED_OUT -> "Signed out"
+        SyncState.LOCKED -> "Open PrivatePaste to unlock"
     }
 
     /** The foreground service's ongoing notification; tapping it opens the history. */

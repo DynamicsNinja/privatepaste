@@ -1,16 +1,19 @@
 package xyz.ficdev.privatepaste.ui
 
 import android.content.Intent
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
+import xyz.ficdev.privatepaste.core.model.HandoverCreated
 import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.SettingsStore
 import xyz.ficdev.privatepaste.storage.StoredSession
 import xyz.ficdev.privatepaste.storage.ThumbnailStore
 import xyz.ficdev.privatepaste.sync.SignInResult
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.sync.VaultState
 
 /**
  * Everything the screens need from the rest of the app. Task 6's Application builds it from the session manager,
@@ -69,7 +72,32 @@ interface UiDeps {
 
     /** A UI call got 401 (this device was revoked): the same sign-out path as the engine's revoke. */
     fun onUnauthorized() = Unit
+
+    /** Where this phone stands with the server's encryption; anything but UNLOCKED shows the unlock screen. */
+    val vaultState: StateFlow<VaultState> get() = UNLOCKED
+
+    /** The owner reset encryption: the unlock screen asks for the new passphrase. */
+    val keyWasReset: StateFlow<Boolean> get() = NOT_SET
+
+    /** Whether this account is the server's owner (setup, Change passphrase). */
+    val isOwner: StateFlow<Boolean> get() = NOT_SET
+
+    /** Each returns null when done, otherwise the copy to show (see `SessionManager`). */
+    suspend fun unlock(passphrase: String): UiText? = null
+    suspend fun unlockWithQr(text: String): UiText? = null
+    suspend fun setUp(passphrase: String, repeat: String): UiText? = null
+    suspend fun changePassphrase(current: String, next: String, repeat: String): UiText? = null
+
+    /** A one-time handover of the vault key for `Add a device`, and its QR text. Throws when it can't be made. */
+    suspend fun createHandover(): Pair<HandoverCreated, String> = throw IllegalStateException("No vault key")
+
+    /** Asks the server about the vault again (Try again). */
+    fun recheckVault() = Unit
 }
+
+// Defaults for hosts without encryption (test fakes): always unlocked.
+private val UNLOCKED: StateFlow<VaultState> = MutableStateFlow(VaultState.UNLOCKED)
+private val NOT_SET: StateFlow<Boolean> = MutableStateFlow(false)
 
 /** Implemented by the Application class. `MainActivity` reads `(application as UiDepsProvider).uiDeps`. */
 interface UiDepsProvider {
