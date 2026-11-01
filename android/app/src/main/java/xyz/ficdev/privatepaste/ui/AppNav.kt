@@ -14,6 +14,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import xyz.ficdev.privatepaste.storage.StoredSession
+import xyz.ficdev.privatepaste.sync.VaultState
 import xyz.ficdev.privatepaste.ui.history.HistoryScreen
 import xyz.ficdev.privatepaste.ui.history.HistoryViewModel
 import xyz.ficdev.privatepaste.ui.history.ThumbnailLoader
@@ -24,14 +25,18 @@ import xyz.ficdev.privatepaste.ui.settings.SettingsScreen
 import xyz.ficdev.privatepaste.ui.settings.SettingsViewModel
 import xyz.ficdev.privatepaste.ui.signin.SignInScreen
 import xyz.ficdev.privatepaste.ui.signin.SignInViewModel
+import xyz.ficdev.privatepaste.ui.unlock.UnlockScreen
+import xyz.ficdev.privatepaste.ui.unlock.UnlockViewModel
 
 /**
- * State-driven navigation: signed out shows sign-in; signed in before onboarding shows the permissions step;
- * otherwise history, with settings on top of it.
+ * State-driven navigation: signed out shows sign-in; signed in but not unlocked shows the unlock screen (or setup,
+ * or what stands in the way); unlocked before onboarding shows the permissions step; otherwise history, with
+ * settings on top of it.
  */
 @Composable
 fun AppNav(deps: UiDeps, relativeTime: RelativeTime = remember { RelativeTime() }) {
     val session by deps.session.collectAsStateWithLifecycle()
+    val vault by deps.vaultState.collectAsStateWithLifecycle()
     var onboardingDone by remember { mutableStateOf(deps.settings.onboardingDone) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
 
@@ -41,6 +46,7 @@ fun AppNav(deps: UiDeps, relativeTime: RelativeTime = remember { RelativeTime() 
     }
     when {
         current == null -> SignInRoute(deps)
+        vault != VaultState.UNLOCKED -> UnlockRoute(deps, current)
         !onboardingDone -> PermissionsStep(
             isBatteryExempt = deps.isBatteryExempt,
             requestBatteryExemption = deps.requestBatteryExemption,
@@ -72,6 +78,27 @@ private fun SignInRoute(deps: UiDeps) {
         },
     )
     SignInScreen(vm)
+}
+
+@Composable
+private fun UnlockRoute(deps: UiDeps, session: StoredSession) {
+    val vm: UnlockViewModel = viewModel(
+        key = "unlock/${session.key()}",
+        factory = viewModelFactory {
+            initializer {
+                UnlockViewModel(
+                    vaultState = deps.vaultState,
+                    keyWasReset = deps.keyWasReset,
+                    unlock = deps::unlock,
+                    unlockWithQr = deps::unlockWithQr,
+                    setUp = deps::setUp,
+                    recheck = deps::recheckVault,
+                    performSignOut = deps::signOut,
+                )
+            }
+        },
+    )
+    UnlockScreen(vm)
 }
 
 /** The server, opened with the vault key; null while signed out or locked. */
@@ -119,6 +146,9 @@ private fun SettingsRoute(deps: UiDeps, session: StoredSession, onBack: () -> Un
                     performSignOut = deps::signOut,
                     appVersion = deps.appVersion,
                     areNotificationsEnabled = deps.areNotificationsEnabled,
+                    isOwner = deps.isOwner,
+                    performChangePassphrase = deps::changePassphrase,
+                    createHandover = deps::createHandover,
                 )
             }
         },

@@ -31,6 +31,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -102,6 +103,7 @@ fun HistoryScreen(
         onOpenSettings = onOpenSettings,
         thumbnails = thumbnails,
         minuteTick = minuteTick,
+        onSearchOlder = vm::searchOlder,
     )
 }
 
@@ -118,6 +120,7 @@ fun HistoryContent(
     minuteTick: Int = 0,
     onTab: (HistoryTab) -> Unit = {},
     onTogglePin: (ClipDto) -> Unit = {},
+    onSearchOlder: () -> Unit = {},
 ) {
     var pendingDelete by remember { mutableStateOf<ClipDto?>(null) }
     // The clip whose long-press menu is open, by id so the menu survives list updates.
@@ -171,22 +174,37 @@ fun HistoryContent(
                         .padding(32.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (state.loadingMore) {
+                    if (state.loadingMore || state.searchingOlder) {
                         CircularProgressIndicator()
                     } else {
-                        Text(
-                            text = stringResource(
-                                when {
-                                    state.query.isNotBlank() -> R.string.history_no_matches
-                                    state.tab == HistoryTab.PINNED -> R.string.history_pinned_empty
-                                    else -> R.string.history_empty
-                                },
-                            ),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    when {
+                                        state.query.isNotBlank() -> R.string.history_no_matches
+                                        state.tab == HistoryTab.PINNED -> R.string.history_pinned_empty
+                                        else -> R.string.history_empty
+                                    },
+                                ),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            )
+                            if (state.canSearchOlder) {
+                                // The server holds only ciphertext: older clips are searched by opening them here.
+                                OutlinedButton(
+                                    onClick = onSearchOlder,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text(stringResource(R.string.history_search_older))
+                                }
+                            }
+                        }
                     }
                 }
             } else {

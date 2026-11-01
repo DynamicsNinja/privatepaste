@@ -13,12 +13,14 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -28,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -36,6 +39,7 @@ import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.model.ClipKind
+import xyz.ficdev.privatepaste.core.model.HandoverCreated
 import xyz.ficdev.privatepaste.core.model.ServerLimits
 import xyz.ficdev.privatepaste.send.ClipSender
 import xyz.ficdev.privatepaste.service.BatteryOptimization
@@ -60,7 +64,9 @@ import xyz.ficdev.privatepaste.sync.SessionManager
 import xyz.ficdev.privatepaste.sync.SignInResult
 import xyz.ficdev.privatepaste.sync.SyncEngine
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.sync.VaultState
 import xyz.ficdev.privatepaste.ui.UiDeps
+import xyz.ficdev.privatepaste.ui.UiText
 import java.io.File
 import java.io.IOException
 import java.security.GeneralSecurityException
@@ -72,7 +78,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * plus a [SessionGraph] (API client, sender, engine) built per session and torn down on sign-out or revoke.
  *
  * Engine lifecycle: [SyncService] alone starts ([startEngine]) and stops ([stopEngine]) the current session's
- * engine. Sign-in, sign-out and revoke are serialized by [lifecycle].
+ * engine, and the engine runs only once the session's vault check settled on unlocked ([SessionManager.vaultChecked]),
+ * so stale local data is wiped before the first sync. Sign-in, sign-out and revoke are serialized by [lifecycle].
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val appScope: CoroutineScope) {
@@ -99,6 +106,17 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     )
 
     private val lifecycle = Mutex()
+
+    /** Between [startEngine] and [stopEngine]: the service wants the engine running once the vault allows it. */
+    @Volatile private var serviceWantsSync = false
+
+    /** The engine may run: the vault is unlocked and the server confirmed it this session. */
+    private val syncAllowed: Flow<Boolean> =
+        combine(sessions.vaultState, sessions.vaultChecked) { state, checked -> state == VaultState.UNLOCKED && checked }
+            .distinctUntilChanged()
+
+    private fun syncAllowedNow() = sessions.vaultState.value == VaultState.UNLOCKED && sessions.vaultChecked.value
+
     private val signedOutAlertCount = AtomicInteger()
 
     /** How many times a revoke was handled (and its alert posted). Test hook for "exactly once". */
@@ -199,6 +217,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
 
         private fun display(s: SyncState, tried: Boolean) = if (s == SyncState.OFFLINE && !tried) SyncState.CONNECTING else s
 
+        /** Wakes [checkVaultLoop]; declared before [init], which starts the loop. */
+        private val vaultWake = Channel<Unit>(Channel.CONFLATED)
+
         init {
             scope.launch {
                 engine.state.first { it != SyncState.OFFLINE }
@@ -209,8 +230,43 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                 appScope.launch { onRevoked(this@SessionGraph) }   // not in [scope]: the teardown cancels it
             }
             scope.launch { engine.keyReset.collect { keyWasReset(it) } }
-            // Task 18 shows this; until then the engine just stays stopped.
-            scope.launch { engine.updateRequired.collect { Log.i(TAG, "The server needs a newer app") } }
+            scope.launch {
+                engine.updateRequired.collect {
+                    Log.i(TAG, "The server needs a newer app")
+                    sessions.onUpdateRequired()
+                }
+            }
+            scope.launch { checkVaultLoop() }
+            scope.launch {
+                syncAllowed.collect { allowed -> if (allowed && serviceWantsSync && !ending) engine.start() }
+            }
+        }
+
+        /** Asks the server about the vault again now (Try again, a network change), unless this session syncs already. */
+        fun recheckVault() {
+            vaultWake.trySend(Unit)
+        }
+
+        /**
+         * Settles the vault state with the server, retrying with backoff while it can't be reached, then waits for
+         * [recheckVault]. A revoke found here takes the engine's path.
+         */
+        private suspend fun checkVaultLoop() {
+            val backoff = Backoff()
+            while (true) {
+                val reached = try {
+                    syncAllowedNow() || sessions.checkVault()
+                } catch (e: ApiException.Unauthorized) {
+                    appScope.launch { onRevoked(this@SessionGraph) }
+                    return
+                }
+                if (reached) {
+                    backoff.reset()
+                    vaultWake.receive()
+                } else {
+                    withTimeoutOrNull(backoff.next()) { vaultWake.receive() }
+                }
+            }
         }
 
         fun close() = scope.cancel()
@@ -220,7 +276,8 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     fun startEngine(): Boolean {
         val g = _current.value ?: return false
         if (g.ending) return false
-        g.engine.start()
+        serviceWantsSync = true
+        if (syncAllowedNow()) g.engine.start()   // else the session graph starts it once the vault check allows
         return true
     }
 
@@ -229,6 +286,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
      * start that follows right after waits for this stop instead of being cancelled by it.
      */
     fun stopEngine() {
+        serviceWantsSync = false
         val g = _current.value ?: return
         appScope.launch(start = CoroutineStart.UNDISPATCHED) { g.engine.stop() }
     }
@@ -364,6 +422,31 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override val appVersion: String = versionName()
         override val cachedImage: (String) -> ByteArray? = ::cachedImage
         override fun onUnauthorized() = unauthorized(_current.value)
+        override val vaultState: StateFlow<VaultState> = sessions.vaultState
+        override val keyWasReset: StateFlow<Boolean> = sessions.keyWasReset
+        override val isOwner: StateFlow<Boolean> = sessions.isOwner
+        override suspend fun unlock(passphrase: String) = vaultCall { sessions.unlock(passphrase) }
+        override suspend fun unlockWithQr(text: String) = vaultCall { sessions.unlockWithQr(text) }
+        override suspend fun setUp(passphrase: String, repeat: String) = vaultCall { sessions.setUp(passphrase, repeat) }
+        override suspend fun changePassphrase(current: String, next: String, repeat: String) =
+            vaultCall { sessions.changePassphrase(current, next, repeat) }
+        override suspend fun createHandover(): Pair<HandoverCreated, String> = try {
+            sessions.createHandover()
+        } catch (e: ApiException.Unauthorized) {
+            unauthorized(_current.value)
+            throw e
+        }
+        override fun recheckVault() {
+            _current.value?.recheckVault()
+        }
+    }
+
+    /** A vault action from the UI; a 401 takes the revoke path and shows nothing. */
+    private suspend fun vaultCall(block: suspend () -> UiText?): UiText? = try {
+        block()
+    } catch (e: ApiException.Unauthorized) {
+        unauthorized(_current.value)
+        null
     }
 
     private fun versionName(): String = try {

@@ -69,7 +69,12 @@ open class SyncService : Service() {
                 if (session == null) stopSelfResult(lastStartId) else graph.startEngine()   // a new session runs here too
             }
         }
-        watcher = NetworkWatcher(this, s) { graph.current.value?.engine?.nudge() }.also { it.start() }
+        watcher = NetworkWatcher(this, s) {
+            graph.current.value?.let {
+                it.engine.nudge()
+                it.recheckVault()   // a vault check that couldn't reach the server tries again now
+            }
+        }.also { it.start() }
         // Screen on / unlock: delays did not run in deep sleep. Check a live link now, or skip the backoff wait.
         wakeWatcher = WakeWatcher(this) {
             val engine = graph.current.value?.engine ?: return@WakeWatcher

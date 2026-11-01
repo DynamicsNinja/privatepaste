@@ -225,6 +225,48 @@ class HistoryViewModelTest {
     }
 
     @Test
+    fun searchOlderAppendsMatches() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 30, "Hello"), clip("b", 20, "other"))
+        remote.pages["|"] = ClipPage(listOf(clip("a", 30, "Hello"), clip("x", 5, "the INVOICE for May"), clip("y", 4, "nope")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("z", 3, "old invoice"), clip("w", 2, "nothing")), null)
+        val vm = collecting(vm())
+        vm.onQueryChange("invoice")
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), vm.ids())
+        assertTrue("nothing here matches: offer the older clips", vm.state.value.canSearchOlder)
+        assertEquals(emptyList<String>(), events)
+
+        vm.searchOlder()
+        advanceUntilIdle()
+        assertEquals(listOf("x", "z"), vm.ids())   // every page, opened and filtered here, case-insensitive
+        assertEquals(listOf("clips:|", "clips:|c1"), events)
+        assertEquals(listOf(200, 200), remote.limits)
+        assertEquals(false, vm.state.value.canSearchOlder)
+        assertEquals(false, vm.state.value.searchingOlder)
+
+        vm.onQueryChange("invoice for")   // a new query forgets the older results
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), vm.ids())
+        assertTrue(vm.state.value.canSearchOlder)
+    }
+
+    @Test
+    fun searchOlderThatFindsNothingStopsOffering() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 30, "Hello"))
+        remote.pages["|"] = ClipPage(listOf(clip("y", 4, "nope")), null)
+        val vm = collecting(vm())
+        vm.onQueryChange("zebra")
+        vm.searchOlder()
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), vm.ids())
+        assertEquals("the whole history was searched", false, vm.state.value.canSearchOlder)
+
+        vm.onQueryChange("")
+        advanceUntilIdle()
+        assertEquals("no query, no button", false, vm.state.value.canSearchOlder)
+    }
+
+    @Test
     fun searchSkipsClipsWithoutText() = runTest(dispatcher) {
         cache.value = listOf(
             clip("img", 3, text = null, kind = ClipKind.IMAGE),
@@ -458,9 +500,12 @@ class HistoryViewModelTest {
             return held.copy(seq = held.seq + 100, pinnedAt = if (pinned) base.plusSeconds(3600).toString() else null)
         }
 
+        val limits = mutableListOf<Int>()
+
         override suspend fun clips(cursor: String?, limit: Int, pinned: Boolean): ClipPage {
             val key = (if (pinned) "P:" else "") + "|${cursor.orEmpty()}"
             events += "clips:$key"
+            limits += limit
             gates[key]?.await()
             return pages[key] ?: ClipPage(emptyList(), null)
         }

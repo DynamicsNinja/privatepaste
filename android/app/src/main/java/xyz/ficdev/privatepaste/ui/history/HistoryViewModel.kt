@@ -82,6 +82,9 @@ data class HistoryState(
     val liveClipId: String? = null,
     val syncState: SyncState = SyncState.CONNECTING,
     val loadingMore: Boolean = false,
+    /** A search with no hits here: offer to search the rest of the history on the server. */
+    val canSearchOlder: Boolean = false,
+    val searchingOlder: Boolean = false,
 )
 
 /**
@@ -89,7 +92,9 @@ data class HistoryState(
  * once, and older server pages follow it, deduped by id, loading with `nextCursor` when the list nears its end (the
  * Pinned tab loads its first page at once: pins can be older than the cache). The server holds only ciphertext, so
  * search runs on this phone: a query filters the cached and loaded clips by their text, ignoring case, and never
- * asks the server. Taps copy locally first, then bump the clip on the server in the background.
+ * asks the server by itself. When nothing here matches, "Search older clips" ([searchOlder]) pages through the rest
+ * of the tab's history, opening each page, and appends the matches. Taps copy locally first, then bump the clip on
+ * the server in the background.
  */
 class HistoryViewModel(
     cached: StateFlow<List<ClipDto>>,
@@ -113,13 +118,24 @@ class HistoryViewModel(
         val loading: Boolean = false,
     )
 
+    /** Matches for [query] from paging through the whole tab on the server; [done] once the last page was read. */
+    private data class Older(
+        val query: String = "",
+        val pinned: Boolean = false,
+        val items: List<ClipDto> = emptyList(),
+        val searching: Boolean = false,
+        val done: Boolean = false,
+    )
+
     /** This phone's own changes, shown before the sync broadcast (or a search page) catches up. */
     private data class Local(val deleted: Set<String> = emptySet(), val updated: Map<String, ClipDto> = emptyMap())
 
     private val query = MutableStateFlow("")
     private val remotePages = MutableStateFlow(Remote())
     private val local = MutableStateFlow(Local())
+    private val older = MutableStateFlow(Older())
     private var pageJob: Job? = null
+    private var olderJob: Job? = null
 
     private val _messages = Channel<UiText>(Channel.BUFFERED)
 
@@ -127,13 +143,14 @@ class HistoryViewModel(
     val messages: Flow<UiText> = _messages.receiveAsFlow()
 
     val state: StateFlow<HistoryState> =
-        combine(cached, query, remotePages, local, syncState) { cache, q, page, changes, sync ->
+        combine(cached, query, combine(remotePages, older, ::Pair), local, syncState) { cache, q, (page, old), changes, sync ->
             val needle = q.trim()
             val pinnedTab = page.pinned
+            val search = old.takeIf { needle.isNotEmpty() && it.query == needle && it.pinned == pinnedTab }
             // A change this phone made counts until the cache or a server page holds the same or a newer version.
             fun ClipDto.fresh() = changes.updated[id]?.takeIf { it.seq >= seq } ?: this
             val base = cache.map { it.fresh() }
-            val fromServer = page.items.map { it.fresh() }
+            val fromServer = (page.items + search?.items.orEmpty()).map { it.fresh() }
             val ids = base.mapTo(HashSet()) { it.id }
             val merged = (base + fromServer.filter { ids.add(it.id) })
                 .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) && it.matches(needle) }
@@ -146,17 +163,60 @@ class HistoryViewModel(
                 liveClipId = newest?.takeIf { it.id !in changes.deleted && it.hash == lastAppliedHash() }?.id,
                 syncState = sync,
                 loadingMore = page.loading,
+                canSearchOlder = needle.isNotEmpty() && items.isEmpty() && search?.searching != true && search?.done != true,
+                searchingOlder = search?.searching == true,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryState(syncState = syncState.value))
 
     fun onQueryChange(value: String) {
         query.value = value
+        if (older.value.query != value.trim()) forgetOlder()
+    }
+
+    /** Pages through the tab's whole history on the server, opening each page, and appends what matches the query. */
+    fun searchOlder() {
+        val needle = query.value.trim()
+        if (needle.isEmpty() || older.value.let { it.query == needle && it.searching }) return
+        val api = remote()
+        if (api == null) {
+            _messages.trySend(UiText.Res(R.string.signin_unreachable))
+            return
+        }
+        val tabPinned = remotePages.value.pinned
+        olderJob?.cancel()
+        older.value = Older(needle, tabPinned, searching = true)
+        fun Older.mine() = this.query == needle && this.pinned == tabPinned
+        olderJob = viewModelScope.launch {
+            try {
+                var cursor: String? = null
+                do {
+                    val page = withContext(io) { api.clips(cursor, OLDER_PAGE_SIZE, tabPinned) }
+                    val hits = page.items.filter { it.matches(needle) }
+                    if (hits.isNotEmpty()) older.update { if (it.mine()) it.copy(items = it.items + hits) else it }
+                    cursor = page.nextCursor
+                } while (cursor != null)
+                older.update { if (it.mine()) it.copy(searching = false, done = true) else it }
+            } catch (e: CancellationException) {
+                older.update { if (it.mine()) it.copy(searching = false) else it }
+                throw e
+            } catch (e: Exception) {
+                // Offline or a server error: what was found stays, and the button comes back to retry.
+                older.update { if (it.mine()) it.copy(searching = false) else it }
+                if (e is ApiException.Unauthorized) onUnauthorized() else _messages.trySend(UiText.Res(R.string.signin_unreachable))
+            }
+        }
+    }
+
+    private fun forgetOlder() {
+        olderJob?.cancel()
+        older.value = Older()
     }
 
     fun onTab(tab: HistoryTab) {
         val pinned = tab == HistoryTab.PINNED
         if (remotePages.value.pinned == pinned) return
         pageJob?.cancel()
+        forgetOlder()
         remotePages.value = Remote(pinned)
         if (pinned) pageJob = viewModelScope.launch { load(null) }
     }
@@ -301,6 +361,7 @@ class HistoryViewModel(
 
     private companion object {
         const val PAGE_SIZE = 50
+        const val OLDER_PAGE_SIZE = 200
         const val NOT_FOUND = 404
     }
 }

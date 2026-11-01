@@ -22,6 +22,7 @@ import xyz.ficdev.privatepaste.core.crypto.VaultKey
 import xyz.ficdev.privatepaste.storage.InMemoryKeyProvider
 import xyz.ficdev.privatepaste.storage.KeyProvider
 import xyz.ficdev.privatepaste.sync.SignInResult
+import xyz.ficdev.privatepaste.sync.VaultState
 import java.io.File
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
@@ -47,11 +48,21 @@ class TestPrivatePasteApp : PrivatePasteApp() {
     }
 }
 
-/** A local PrivatePaste server: login, logout, an empty sync, and a `/ws` that answers pings. */
+/**
+ * A local PrivatePaste server: login, logout, the vault check (server info, a vault under [vaultKey], the owner), an
+ * empty sync, and a `/ws` that answers pings.
+ */
 class FakeServer {
     val server = MockWebServer().also { it.start(InetAddress.getByName("127.0.0.1"), 0) }
     val url: String get() = "http://127.0.0.1:${server.port}/"
     val wsRequests = AtomicInteger()
+
+    /** The server's vault key; the phone gets a copy in [signInTo]. Only its id is on the wire here. */
+    val vaultKey: VaultKey = VaultKey.create()
+
+    private val vaultJson = """{"keyId":"${vaultKey.keyId}","kdf":{"alg":"argon2id","memoryKiB":65536,"iterations":3,""" +
+        """"parallelism":1,"salt":"AAAAAAAAAAAAAAAAAAAAAA=="},"nonce":"AAAAAAAAAAAAAAAA",""" +
+        """"wrappedKey":"${java.util.Base64.getEncoder().encodeToString(ByteArray(48))}"}"""
 
     /** Answers any other request first when it returns non-null (e.g. an image endpoint). */
     @Volatile var other: (RecordedRequest) -> MockResponse? = { null }
@@ -67,6 +78,9 @@ class FakeServer {
             override fun dispatch(request: RecordedRequest): MockResponse = other(request) ?: when (request.path?.substringBefore('?')) {
                 "/api/auth/login" -> json("""{"deviceId":"dev-phone","token":"tok-1"}""")
                 "/api/auth/logout" -> MockResponse().setResponseCode(204)
+                "/api/server-info" -> json("""{"protocol":2,"kinds":["text","link","image"],"limits":{"textKb":1024,"imageMb":20}}""")
+                "/api/vault" -> json(vaultJson)
+                "/api/me" -> json("""{"name":"owner","isOwner":true}""")
                 "/api/sync" -> json("""{"clips":[],"deletedIds":[],"latestSeq":0,"hasMore":false}""")
                 "/ws" -> {
                     wsRequests.incrementAndGet()
@@ -110,13 +124,17 @@ class FakeServer {
 }
 
 /**
- * Signs in through the app's session manager (the UiDeps path the sign-in screen uses), then gives the phone a vault
- * key, as unlocking does: without one the engine has nothing to open clips with and does not connect.
+ * Signs in through the app's session manager (the UiDeps path the sign-in screen uses), then gives the phone the
+ * server's vault key and settles the vault check, as unlocking does: until then the engine does not connect.
  */
 fun PrivatePasteApp.signInTo(server: FakeServer) {
     val result = runBlocking { uiDeps.signIn(server.url, "owner", "dev", "Pixel Test") }
     assertEquals(SignInResult.Ok, result)
-    runBlocking { graph.sessions.useVaultKey(VaultKey.create()) }
+    runBlocking {
+        graph.sessions.useVaultKey(VaultKey.fromBytes(server.vaultKey.export()))
+        assertEquals(true, graph.sessions.checkVault())
+    }
+    assertEquals(VaultState.UNLOCKED, graph.sessions.vaultState.value)
 }
 
 /** Stops everything the app started, so no engine of this test keeps running into the next one. */

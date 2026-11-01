@@ -87,6 +87,9 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.bouncycastle)
     implementation(libs.androidx.exifinterface)
+    // QR codes: scanning a handover (its own camera screen, no Play services) and drawing one for Add a device.
+    implementation(libs.zxing.android.embedded)
+    implementation(libs.zxing.core)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)

@@ -334,6 +334,8 @@ class VaultCryptoTest {
     @Test
     fun closeRacingSealsNeverUsesZeroedBytes() {
         val zeroKey = VaultKey.fromBytes(ByteArray(32))   // what a wiped vk would derive to
+        var sealedTotal = 0
+        val closedTotal = java.util.concurrent.atomic.AtomicInteger()
         repeat(200) { round ->
             val key = VaultKey.create()
             val real = VaultKey.fromBytes(key.export())
@@ -341,22 +343,28 @@ class VaultCryptoTest {
             val opened = java.util.concurrent.atomic.AtomicInteger()
             val good = SealedBox.seal(real, "payload", "x".toByteArray())
             val start = java.util.concurrent.CountDownLatch(1)
+            val firstSeal = java.util.concurrent.CountDownLatch(1)
             val workers = List(4) {
                 Thread {
                     start.await()
                     repeat(50) {
                         try {
                             sealed += SealedBox.seal(key, "payload", "secret $round".toByteArray())
+                            firstSeal.countDown()
                             SealedBox.open(key, "payload", good)   // never fails as tampered: it opens, or the key is closed
                             opened.incrementAndGet()
                         } catch (_: VaultKeyClosedException) {
+                            closedTotal.incrementAndGet()
                         }
                     }
                 }.apply { start() }
             }
             start.countDown()
+            // Close while the workers are mid-run: after one seal went through, so the race has both sides.
+            firstSeal.await(5, java.util.concurrent.TimeUnit.SECONDS)
             key.close()
             workers.forEach { it.join() }
+            sealedTotal += sealed.size
             for (box in sealed) {
                 // Everything sealed opens under the real key, never under the wiped one.
                 assertArrayEquals("secret $round".toByteArray(), SealedBox.open(real, "payload", box))
@@ -367,5 +375,8 @@ class VaultCryptoTest {
                 }
             }
         }
+        // Not vacuous: across the rounds, seals both ran before the close and were refused after it.
+        assertTrue("some seals ran before the close", sealedTotal > 0)
+        assertTrue("some seals hit the closed key", closedTotal.get() > 0)
     }
 }

@@ -27,6 +27,13 @@ import xyz.ficdev.privatepaste.ui.settings.SettingsState
 import xyz.ficdev.privatepaste.ui.signin.SignInContent
 import xyz.ficdev.privatepaste.ui.signin.SignInViewModel
 import xyz.ficdev.privatepaste.ui.theme.PrivatePasteTheme
+import xyz.ficdev.privatepaste.R
+import xyz.ficdev.privatepaste.sync.VaultState
+import xyz.ficdev.privatepaste.ui.settings.AddDeviceContent
+import xyz.ficdev.privatepaste.ui.settings.AddDeviceState
+import xyz.ficdev.privatepaste.ui.unlock.UnlockContent
+import xyz.ficdev.privatepaste.ui.unlock.UnlockState
+import java.time.Duration
 import java.io.File
 import java.time.Clock
 import java.time.Instant
@@ -34,7 +41,7 @@ import java.time.ZoneId
 import java.util.Locale
 
 /**
- * Saves PNGs of the three screens (plus a close-up of the history top bar), dark and light, into the directory named by PP_SCREENSHOT_DIR
+ * Saves PNGs of the screens (plus a close-up of the history top bar), dark and light, into the directory named by PP_SCREENSHOT_DIR
  * (e.g. `android/app/build/screenshots`). Skipped when the variable is not set.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -95,6 +102,22 @@ class ScreenshotTest {
     @Test fun historyHeaderLight() = shootOne("history-header", dark = false, tag = HISTORY_TOP_BAR_TAG) { HistorySample() }
     @Test fun settingsDark() = shootOne("settings", dark = true) { SettingsSample() }
     @Test fun settingsLight() = shootOne("settings", dark = false) { SettingsSample() }
+    @Test fun unlockDark() = shootOne("unlock", dark = true) { UnlockSample(UnlockState(vault = VaultState.LOCKED, passphrase = "correct horse")) }
+    @Test fun unlockLight() = shootOne("unlock", dark = false) { UnlockSample(UnlockState(vault = VaultState.LOCKED, passphrase = "correct horse")) }
+    @Test fun unlockResetDark() = shootOne("unlock-reset", dark = true) { UnlockSample(resetWrong) }
+    @Test fun unlockResetLight() = shootOne("unlock-reset", dark = false) { UnlockSample(resetWrong) }
+    @Test fun setupDark() = shootOne("setup", dark = true) { UnlockSample(setup) }
+    @Test fun setupLight() = shootOne("setup", dark = false) { UnlockSample(setup) }
+    @Test fun waitingDark() = shootOne("waiting", dark = true) { UnlockSample(UnlockState(vault = VaultState.WAITING_FOR_OWNER)) }
+    @Test fun waitingLight() = shootOne("waiting", dark = false) { UnlockSample(UnlockState(vault = VaultState.WAITING_FOR_OWNER)) }
+    @Test fun addDeviceDark() = shootOne("add-device", dark = true) { AddDeviceSample() }
+    @Test fun addDeviceLight() = shootOne("add-device", dark = false) { AddDeviceSample() }
+    @Test fun settingsOwnerDark() = shootOne("settings-owner", dark = true) { SettingsSample(owner = true) }
+    @Test fun settingsOwnerLight() = shootOne("settings-owner", dark = false) { SettingsSample(owner = true) }
+    @Test fun historyUnknownDark() = shootOne("history-unknown", dark = true) { HistorySample(unknown) }
+    @Test fun historyUnknownLight() = shootOne("history-unknown", dark = false) { HistorySample(unknown) }
+    @Test fun searchOlderDark() = shootOne("history-search-older", dark = true) { HistorySample(searchOlder) }
+    @Test fun searchOlderLight() = shootOne("history-search-older", dark = false) { HistorySample(searchOlder) }
 
     private fun shootOne(name: String, dark: Boolean, tag: String? = null, content: @Composable () -> Unit) {
         assumeTrue("PP_SCREENSHOT_DIR not set", dir != null)
@@ -121,11 +144,49 @@ class ScreenshotTest {
     )
 
     @Composable
-    private fun SettingsSample() = SettingsContent(
+    private fun SettingsSample(owner: Boolean = false) = SettingsContent(
         state = SettingsState(
             serverUrl = "https://paste.example.com/", deviceName = "Pixel 9",
-            deliveryMode = DeliveryMode.AUTOMATIC, batteryExempt = false, appVersion = "0.1.0",
+            deliveryMode = DeliveryMode.AUTOMATIC, batteryExempt = false, appVersion = "0.1.0", isOwner = owner,
+            passphraseChanged = owner,
         ),
         onDeliveryMode = {}, onAllowBackground = {}, onSignOut = {}, onBack = {},
     )
+
+    private val resetWrong = UnlockState(
+        vault = VaultState.LOCKED, keyWasReset = true, passphrase = "the old one",
+        error = UiText.Res(R.string.vault_wrong_passphrase),
+    )
+
+    private val setup = UnlockState(
+        vault = VaultState.NEEDS_OWNER_SETUP, passphrase = "a short sentence works", repeat = "a short sentence work",
+        error = UiText.Res(R.string.vault_mismatch),
+    )
+
+    @Composable
+    private fun UnlockSample(state: UnlockState) = UnlockContent(
+        state = state,
+        onPassphraseChange = {}, onRepeatChange = {}, onUnlock = {}, onSetUp = {}, onScan = {}, onRetry = {}, onSignOut = {},
+    )
+
+    @Composable
+    private fun AddDeviceSample() = AddDeviceContent(
+        state = AddDeviceState(
+            loading = false,
+            qrText = "privatepaste:handover?id=2f4f7a8e-6b7a-4f3c-9e55-2d2b1c0e9a11&k=q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA&kid=0123456789abcdef",
+            expiresAt = now.plusSeconds(581),
+        ),
+        left = Duration.ofSeconds(581),
+        onNewCode = {}, onBack = {},
+    )
+
+    private val unknown = history.copy(
+        items = listOf(
+            history.items[0],
+            clip("u", ClipKind.UNKNOWN, null, 3, "Workstation", "windows"),
+            history.items[1],
+        ),
+    )
+
+    private val searchOlder = HistoryState(query = "invoice", canSearchOlder = true, syncState = SyncState.CONNECTED)
 }

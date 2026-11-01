@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,7 @@ import xyz.ficdev.privatepaste.storage.StoredSession
 import xyz.ficdev.privatepaste.storage.ThumbnailStore
 import xyz.ficdev.privatepaste.sync.SignInResult
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.sync.VaultState
 import java.io.File
 
 /** Test Application: Task 6's PrivatePasteApp implements [UiDepsProvider] the same way. */
@@ -68,6 +70,15 @@ class FakeUiDeps(app: Application) : UiDeps {
     override val areNotificationsEnabled: () -> Boolean = { notificationsEnabled }
     override val requestBatteryExemption: () -> Intent = { Intent("test.REQUEST_BATTERY") }
     override val appVersion: String = "0.1.0"
+
+    val vault = MutableStateFlow(VaultState.UNLOCKED)
+    val unlocks = mutableListOf<String>()
+    override val vaultState: StateFlow<VaultState> get() = vault
+    override suspend fun unlock(passphrase: String): UiText? {
+        unlocks += passphrase
+        vault.value = VaultState.UNLOCKED
+        return null
+    }
 }
 
 @RunWith(RobolectricTestRunner::class)
@@ -180,5 +191,55 @@ class AppNavTest {
         compose.onNodeWithText("Sign out of this phone? Local history is removed.").assertIsDisplayed()
         compose.onNodeWithText("Cancel").performClick()
         assertEquals(0, deps.signOuts)
+    }
+
+    @Test
+    fun lockedShowsUnlock() {
+        deps.sessionFlow.value = session
+        deps.settings.onboardingDone = true
+        deps.vault.value = VaultState.LOCKED
+        launch()
+
+        compose.onNodeWithText("Unlock your history").assertIsDisplayed()
+        compose.onNodeWithText("Scan a code").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Nothing here yet. Copy something on your computer and it shows up here.").assertDoesNotExist()
+
+        compose.onNodeWithText("Passphrase").performTextInput("correct horse battery")
+        compose.onNodeWithText("Unlock").performScrollTo().performClick()
+        compose.waitForIdle()
+
+        assertEquals(listOf("correct horse battery"), deps.unlocks)
+        compose.onNodeWithText("Nothing here yet. Copy something on your computer and it shows up here.").assertIsDisplayed()
+    }
+
+    @Test
+    fun eachBlockedStateSaysWhy() {
+        deps.sessionFlow.value = session
+        deps.settings.onboardingDone = true
+        deps.vault.value = VaultState.WAITING_FOR_OWNER
+        launch()
+        compose.onNodeWithText("Ask the owner to set up encryption.").assertIsDisplayed()
+        compose.onNodeWithText("Try again").assertIsDisplayed()
+
+        deps.vault.value = VaultState.SERVER_TOO_OLD
+        compose.onNodeWithText("Update your PrivatePaste server to keep syncing.").assertIsDisplayed()
+
+        deps.vault.value = VaultState.UPDATE_REQUIRED
+        compose.onNodeWithText("Update PrivatePaste to keep syncing.").assertIsDisplayed()
+
+        deps.vault.value = VaultState.NEEDS_OWNER_SETUP
+        compose.onNodeWithText("Set up encryption").assertIsDisplayed()
+        compose.onNodeWithText("Repeat passphrase").assertIsDisplayed()
+        compose.onNodeWithText("Use at least 12 characters. A short sentence works well.").assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsOffersAddADeviceToEveryoneAndChangePassphraseToTheOwner() {
+        deps.sessionFlow.value = session
+        deps.settings.onboardingDone = true
+        launch()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Add a device").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Change passphrase").assertDoesNotExist()
     }
 }
