@@ -140,4 +140,18 @@ class ServiceClipApplierTest {
         mode = DeliveryMode.NOTIFICATION
         assertFalse(applier().apply(text("c1", "hi")))
     }
+
+    @Test
+    fun neverAppliesUnknown() = runBlocking {
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("x", "before"))
+        // A kind from a newer client, or a clip that didn't open: even with text, it never reaches the clipboard.
+        val unknown = text("u1", "not for the clipboard").copy(kind = ClipKind.UNKNOWN)
+        assertFalse(applier().apply(unknown))
+        mode = DeliveryMode.NOTIFICATION
+        assertFalse(applier().apply(unknown))
+
+        assertEquals("before", clipboard.primaryClip!!.getItemAt(0).text.toString())
+        assertNull(shadowOf(nm).getNotification(Notifications.ID_CLIP))
+        assertTrue(fetched.isEmpty())
+    }
 }

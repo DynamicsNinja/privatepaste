@@ -74,6 +74,9 @@ private fun SignInRoute(deps: UiDeps) {
     SignInScreen(vm)
 }
 
+/** The server, opened with the vault key; null while signed out or locked. */
+private fun UiDeps.remote() = codec()?.let { codec -> api()?.asClipRemote(codec) }
+
 /** Keyed by session, so a new sign-in gets a fresh list (no rows hidden by an earlier session's deletes). */
 private fun StoredSession.key() = "$deviceId/${token.hashCode()}"
 
@@ -88,7 +91,7 @@ private fun HistoryRoute(deps: UiDeps, session: StoredSession, relativeTime: Rel
                     cached = cache?.items ?: MutableStateFlow(emptyList()),
                     lastAppliedHash = { cache?.lastAppliedHash },
                     syncState = deps.syncState,
-                    remote = { deps.api()?.asClipRemote() },
+                    remote = { deps.remote() },
                     copier = deps.clipboard.asClipCopier(),
                     cachedImage = deps.cachedImage,
                     onUnauthorized = deps::onUnauthorized,
@@ -97,7 +100,7 @@ private fun HistoryRoute(deps: UiDeps, session: StoredSession, relativeTime: Rel
         },
     )
     val thumbnails = remember(session.key()) {
-        ThumbnailLoader(deps.thumbs, remote = { deps.api()?.asClipRemote() }, onUnauthorized = deps::onUnauthorized)
+        ThumbnailLoader(deps.thumbs, remote = { deps.remote() }, onUnauthorized = deps::onUnauthorized)
     }
     HistoryScreen(vm, thumbnails, relativeTime, onOpenSettings)
 }

@@ -1,17 +1,14 @@
 package xyz.ficdev.privatepaste.send
 
+import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import okio.ByteString.Companion.toByteString
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.MockResponse
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -24,22 +21,24 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
 import xyz.ficdev.privatepaste.api.ApiException
+import xyz.ficdev.privatepaste.api.UpdateRequiredException
 import xyz.ficdev.privatepaste.core.ContentHash
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.time.Instant
 
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ClipSenderTest {
     @get:Rule val tmp = TemporaryFolder()
     private lateinit var f: SenderFixture
 
     @Before fun setUp() { f = SenderFixture(tmp.newFolder()) }
     @After fun tearDown() { f.shutdown() }
-
-    private fun body(text: String) = Json.parseToJsonElement(text).jsonObject
 
     @Test
     fun sendTextLiveSuccessRecordsCapture() = runBlocking {
@@ -50,11 +49,17 @@ class ClipSenderTest {
         assertEquals(SendResult.Sent, result)
         assertEquals("Sent to your devices", result.message)
         val req = f.server.takeRequest()
-        assertEquals("/api/clips/text", req.path)
-        val sent = body(req.body.readUtf8())
-        assertEquals("false", sent["backfill"]!!.jsonPrimitive.content)
+        assertEquals("/api/clips", req.path)
+        val upload = f.uploaded(req)
+        assertEquals("hello", upload.text)
+        assertEquals(false, upload.meta.backfill)
+        assertNull("a live send takes the server's time", upload.meta.copiedAt)
+        assertEquals(f.vaultKey.keyId, upload.meta.keyId)
+        assertEquals(ClipCodec(f.vaultKey).keyedHash(ContentHash.text("hello")), upload.meta.hash)
+        assertTrue("nothing travels in the clear", !req.body.clone().readUtf8().contains("hello"))
         assertEquals(Instant.parse("2026-10-28T12:00:05Z"), f.capture.lastLocalCaptureAt)
-        assertEquals("c1", f.cache.items.value.single().id)
+        // The cache holds the opened clip.
+        assertEquals("hello", f.cache.items.value.single().text)
         assertEquals("a live send is not part of the sync stream", 0L, f.cache.highestSeq)
         assertTrue(f.queue.isEmpty)
     }
@@ -74,28 +79,37 @@ class ClipSenderTest {
     }
 
     @Test
+    fun withoutAVaultKeyASendIsQueued() = runBlocking {
+        f.codec = null
+        assertEquals(SendResult.Queued, f.sender.sendText("locked"))
+        assertEquals(0, f.server.requestCount)
+        assertEquals("locked", f.queue.peek()!!.text)
+
+        f.sender.flushQueue()   // still locked: nothing to seal with, so it waits
+        assertEquals(0, f.server.requestCount)
+        assertEquals(1, f.queue.size)
+    }
+
+    @Test
     fun queuedSendsFlushInOrderAsBackfill() = runBlocking {
         val t1 = Instant.parse("2026-10-28T10:00:00Z")
         val t2 = Instant.parse("2026-10-28T10:01:00Z")
         f.queue.enqueueText("first", t1)
         f.queue.enqueueText("second", t2)
-        f.respondWith { req ->
-            val text = body(req.body.readUtf8())["text"]!!.jsonPrimitive.content
-            f.json(f.clipJson("id-$text", text))
-        }
+        f.respondWith { f.echo(it) }
 
         f.sender.flushQueue()
 
-        val a = body(f.server.takeRequest().body.readUtf8())
-        val b = body(f.server.takeRequest().body.readUtf8())
-        assertEquals("first", a["text"]!!.jsonPrimitive.content)
-        assertEquals("second", b["text"]!!.jsonPrimitive.content)
-        assertEquals("true", a["backfill"]!!.jsonPrimitive.content)
-        assertEquals("true", b["backfill"]!!.jsonPrimitive.content)
-        assertEquals(t1.toString(), a["copiedAt"]!!.jsonPrimitive.content)
-        assertEquals(t2.toString(), b["copiedAt"]!!.jsonPrimitive.content)
+        val a = f.uploaded(f.server.takeRequest())
+        val b = f.uploaded(f.server.takeRequest())
+        assertEquals("first", a.text)
+        assertEquals("second", b.text)
+        assertTrue(a.meta.backfill)
+        assertTrue(b.meta.backfill)
+        assertEquals(t1, a.meta.copiedAt)
+        assertEquals(t2, b.meta.copiedAt)
         assertTrue(f.queue.isEmpty)
-        assertEquals(2, f.cache.items.value.size)
+        assertEquals(setOf("first", "second"), f.cache.items.value.map { it.text }.toSet())
         assertNull("backfill does not record capture time", f.capture.lastLocalCaptureAt)
         assertTrue(f.notices.isEmpty())
     }
@@ -105,8 +119,7 @@ class ClipSenderTest {
         f.queue.enqueueText("poison", f.now)
         f.queue.enqueueText("good", f.now)
         f.respondWith { req ->
-            val text = body(req.body.readUtf8())["text"]!!.jsonPrimitive.content
-            if (text == "poison") f.problem(500, "boom") else f.json(f.clipJson("g", "good"))
+            if (f.uploaded(req).text == "poison") f.problem(500, "boom") else f.echo(req, "g")
         }
 
         // Attempts 1..4 stop the flush at the poison head.
@@ -158,7 +171,7 @@ class ClipSenderTest {
         var calls = 0
         f.respondWith {
             if (calls++ == 0) f.problem(410, "History was cleared")
-            else f.json(f.clipJson("c2", "fresh"))
+            else f.echo(it, "c2")
         }
 
         f.sender.flushQueue()
@@ -166,6 +179,48 @@ class ClipSenderTest {
         assertTrue(f.queue.isEmpty)
         assertTrue("no notification for a cleared clip", f.notices.isEmpty())
         assertEquals(listOf("c2"), f.cache.items.value.map { it.id })
+    }
+
+    @Test
+    fun keyResetOnFlushClearsQueueOnce() = runBlocking {
+        repeat(3) { f.queue.enqueueText("old key $it", f.now) }
+        f.respondWith { f.problem(409, "Encryption was reset.", title = "Encryption was reset") }
+
+        f.sender.flushQueue()
+
+        assertTrue(f.queue.isEmpty)
+        assertEquals("no upload under the old key after the first 409", 1, f.server.requestCount)
+        assertEquals(listOf(f.vaultKey.keyId), f.resetKeyIds)
+        assertTrue("no per-clip notification", f.notices.isEmpty())
+
+        f.sender.flushQueue()   // nothing left to retry
+        assertEquals(1, f.server.requestCount)
+        assertEquals(1, f.keyResets.get())
+    }
+
+    @Test
+    fun keyResetOnALiveSendSignalsTheReset() = runBlocking {
+        f.respondWith { f.problem(409, "Encryption was reset.", title = "Encryption was reset") }
+
+        val result = f.sender.sendText("x")
+
+        assertEquals(SendResult.Rejected("Encryption was reset."), result)
+        assertEquals(1, f.keyResets.get())
+        assertTrue("not queued under the old key", f.queue.isEmpty)
+    }
+
+    @Test
+    fun updateRequiredOnFlushKeepsTheItemAndPropagates() = runBlocking {
+        f.queue.enqueueText("kept", f.now)
+        f.respondWith { f.problem(426, "Update PrivatePaste to keep syncing.") }
+        try {
+            f.sender.flushQueue()
+            fail("expected UpdateRequiredException")
+        } catch (_: UpdateRequiredException) {
+        }
+        assertEquals("kept", f.queue.peek()!!.text)
+        assertEquals(0, f.queue.peek()!!.attempts)
+        assertTrue(f.notices.isEmpty())
     }
 
     @Test
@@ -186,10 +241,10 @@ class ClipSenderTest {
 
     @Test
     fun flushDropsQueuedImageWhoseFileIsGone() = runBlocking {
-        f.queue.enqueueImage(ByteArray(10), "image/png", f.now)
+        f.queue.enqueueImage(SenderFixture.png(), "image/png", f.now)
         f.queue.enqueueText("after", f.now)
         f.imageDir.listFiles()!!.forEach { it.delete() }
-        f.respondWith { f.json(f.clipJson("a", "after")) }
+        f.respondWith { f.echo(it) }
 
         f.sender.flushQueue()
 
@@ -215,28 +270,44 @@ class ClipSenderTest {
     }
 
     @Test
-    fun queuedImageFlushesAsBackfillWithItsBytes() = runBlocking {
-        val bytes = ByteArray(500) { (it % 251).toByte() }
+    fun queuedImageFlushesAsBackfillSealed() = runBlocking {
+        val png = SenderFixture.png(30, 12)
         val t = Instant.parse("2026-10-28T09:00:00Z")
-        f.queue.enqueueImage(bytes, "image/png", t)
-        f.respondWith { f.json(f.clipJson("img", "")) }
+        f.queue.enqueueImage(png, "image/png", t)
+        f.respondWith { f.echo(it, "img") }
 
         f.sender.flushQueue()
 
-        val req = f.server.takeRequest()
-        assertEquals("/api/clips/image", req.path)
-        val raw = req.body.readByteString()
-        assertTrue(raw.indexOf(bytes.toByteString()) >= 0)
-        val text = raw.utf8()
-        assertTrue(text.contains("name=\"backfill\""))
-        assertTrue(text.contains(t.toString()))
+        val upload = f.uploaded(f.server.takeRequest())
+        assertEquals("image", upload.meta.kind)
+        assertTrue(upload.meta.backfill)
+        assertEquals(t, upload.meta.copiedAt)
+        val opened = ClipCodec(f.vaultKey).decodeBlob(upload.parts.getValue("blob0"))
+        val bitmap = BitmapFactory.decodeByteArray(opened, 0, opened.size)
+        assertEquals(30, bitmap.width)
+        assertEquals(12, bitmap.height)
+        assertTrue(upload.parts.containsKey("thumb"))
         assertTrue(f.queue.isEmpty)
+        assertEquals(30, f.cache.items.value.single().width)
+    }
+
+    @Test
+    fun flushDropsAnImageOverTheLimitWithItsMessage() = runBlocking {
+        f.queue.enqueueImage(SenderFixture.png(), "image/png", f.now)
+        f.limits = f.limits.copy(imageMb = 0)
+        f.respondWith { f.echo(it) }
+
+        f.sender.flushQueue()
+
+        assertTrue(f.queue.isEmpty)
+        assertEquals(0, f.server.requestCount)
+        assertEquals(listOf("Images over 0 MB aren't synced."), f.notices)
     }
 
     @Test
     fun concurrentFlushesUploadEachItemOnce() = runBlocking {
         repeat(3) { f.queue.enqueueText("t$it", f.now) }
-        f.respondWith { f.json(f.clipJson("x", "x")).setBodyDelay(150, TimeUnit.MILLISECONDS) }
+        f.respondWith { f.echo(it).setBodyDelay(150, TimeUnit.MILLISECONDS) }
 
         listOf(
             async(Dispatchers.Default) { f.sender.flushQueue() },
@@ -275,10 +346,23 @@ class ClipSenderTest {
     }
 
     @Test
-    fun sendImageBytesUploadsOriginalBytes() = runBlocking {
-        f.respondWith { f.json(f.clipJson("i", "")) }
-        assertEquals(SendResult.Sent, f.sender.sendImageBytes(ByteArray(50) { 3 }, "image/png"))
-        assertEquals("/api/clips/image", f.server.takeRequest().path)
+    fun sendImageBytesUploadsASealedPng() = runBlocking {
+        f.respondWith { f.echo(it, "i") }
+        assertEquals(SendResult.Sent, f.sender.sendImageBytes(SenderFixture.png(), "image/png"))
+        val upload = f.uploaded(f.server.takeRequest())
+        assertEquals("image", upload.meta.kind)
+        assertEquals(false, upload.meta.backfill)
+        assertEquals(1, upload.parts.keys.count { it.startsWith("blob") })
+        assertEquals(20, f.cache.items.value.single().width)
+    }
+
+    @Test
+    fun tooManyPixelsIsTooLarge() = runBlocking {
+        // 7200x7200 declared in the header: refused before decoding or uploading.
+        val header = ClipSenderTestImages.pngHeader(7200, 7200)
+        assertEquals(SendResult.TooLarge("Images over 50 megapixels aren't synced."), f.sender.sendImageBytes(header, "image/png"))
+        assertEquals(0, f.server.requestCount)
+        assertTrue(f.queue.isEmpty)
     }
 
     @Test
@@ -317,7 +401,8 @@ class ClipSenderTest {
 
     @Test
     fun alreadySyncedSkipsUpload() = runBlocking {
-        f.cache.markApplied(f.now, ContentHash.text("same"))
+        // Synced clips carry the keyed hash, so that is what a send compares with.
+        f.cache.markApplied(f.now, ClipCodec(f.vaultKey).keyedHash(ContentHash.text("same")))
 
         val result = f.sender.sendText("same")
 
@@ -327,17 +412,28 @@ class ClipSenderTest {
     }
 
     @Test
-    fun undecodableImageIsUploadedAsIsAndQueuedOffline() = runBlocking {
+    fun undecodableImageIsRefused() = runBlocking {
         val bytes = ByteArray(300) { it.toByte() }
-        f.respondWith { f.problem(502, "gateway") }
 
         val result = f.sender.sendImage({ ByteArrayInputStream(bytes) }, "image/png")
+
+        assertEquals(SendResult.Rejected("Couldn't read the image"), result)
+        assertEquals(0, f.server.requestCount)
+        assertTrue(f.queue.isEmpty)
+    }
+
+    @Test
+    fun imageSentOfflineIsQueued() = runBlocking {
+        val png = SenderFixture.png()
+        f.respondWith { f.problem(502, "gateway") }
+
+        val result = f.sender.sendImage({ ByteArrayInputStream(png) }, "image/png")
 
         assertEquals(SendResult.Queued, result)
         val queued = f.queue.peek()!!
         assertEquals(ClipKind.IMAGE, queued.kind)
         assertEquals("image/png", queued.mime)
-        assertTrue(bytes.contentEquals(f.queue.imageBytes(queued)))
+        assertTrue(png.contentEquals(f.queue.imageBytes(queued)))
         assertEquals(f.now, f.capture.lastLocalCaptureAt)
         assertEquals(1, f.server.requestCount)
     }
@@ -345,7 +441,7 @@ class ClipSenderTest {
     /** A send in flight when the session ends: its completion writes nothing (the next session's stores are clean). */
     private fun sendThatEndsMidFlight(response: MockResponse): SendResult = runBlocking {
         var ending = false
-        val sender = ClipSender(f.api, f.queue, f.cache, f.capture, { }, java.time.Clock.fixed(f.now, java.time.ZoneOffset.UTC)) { ending }
+        val sender = f.sender { ending }
         val release = java.util.concurrent.CountDownLatch(1)
         f.respondWith {
             release.await(10, TimeUnit.SECONDS)
@@ -378,5 +474,43 @@ class ClipSenderTest {
         assertEquals(SendResult.SignedOut, result)
         assertTrue("never reaches the next session's queue", f.queue.isEmpty)
         assertNull(f.capture.lastLocalCaptureAt)
+    }
+
+    @Test
+    fun aKeyClosedMidSendNeverSealsAndQueuesTheClip() = runBlocking {
+        val closed = xyz.ficdev.privatepaste.core.crypto.VaultKey.create().also { it.close() }
+        f.codec = ClipCodec(closed)
+        f.respondWith { f.echo(it) }
+
+        assertEquals(SendResult.Queued, f.sender.sendText("typed during a reset"))
+        assertEquals(SendResult.Queued, f.sender.sendImageBytes(SenderFixture.png(), "image/png"))
+        assertEquals("nothing goes out under a wiped key", 0, f.server.requestCount)
+        assertEquals(2, f.queue.size)
+
+        f.sender.flushQueue()   // still the closed key: the items wait, no attempt counted
+        assertEquals(0, f.server.requestCount)
+        assertEquals(0, f.queue.peek()!!.attempts)
+
+        // Once signing out, the same race drops the clip instead.
+        assertEquals(SendResult.SignedOut, f.sender { true }.sendText("typed during sign-out"))
+        assertEquals(2, f.queue.size)
+    }
+}
+
+/** A PNG that only declares its size (IHDR), with no real pixel data. */
+internal object ClipSenderTestImages {
+    fun pngHeader(width: Int, height: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        out.write(byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 13, 10, 26, 10))
+        fun chunk(type: String, data: ByteArray) {
+            out.write(java.nio.ByteBuffer.allocate(4).putInt(data.size).array())
+            val typed = type.toByteArray() + data
+            out.write(typed)
+            out.write(java.nio.ByteBuffer.allocate(4).putInt(java.util.zip.CRC32().apply { update(typed) }.value.toInt()).array())
+        }
+        chunk("IHDR", java.nio.ByteBuffer.allocate(13).putInt(width).putInt(height).put(8).put(6).put(0).put(0).put(0).array())
+        chunk("IDAT", byteArrayOf(0x78, 0x9c.toByte(), 0x03, 0x00, 0x00, 0x00, 0x00, 0x01))
+        chunk("IEND", ByteArray(0))
+        return out.toByteArray()
     }
 }

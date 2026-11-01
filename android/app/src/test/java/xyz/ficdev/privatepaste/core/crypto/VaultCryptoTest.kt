@@ -7,10 +7,12 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import xyz.ficdev.privatepaste.core.ContentHash
 import xyz.ficdev.privatepaste.core.model.VaultWrap
@@ -45,8 +47,8 @@ class VaultCryptoTest {
         val key = testKey()
         val vk = section("vaultKey")
         assertEquals(vk.str("keyId"), key.keyId)
-        assertEquals(vk.str("encKey"), key.encKey.hex())
-        assertEquals(vk.str("hashKey"), key.hashKey.hex())
+        assertEquals(vk.str("encKey"), key.useEncKey { it.hex() })
+        assertEquals(vk.str("hashKey"), key.useHashKey { it.hex() })
 
         val payload = section("payload")
         val sealed = SealedBox.seal(key, payload.str("purpose"), payload.str("json").toByteArray(), payload.bytes("nonce"))
@@ -87,14 +89,36 @@ class VaultCryptoTest {
         assertEquals(UUID.fromString(handover.str("id")), qr!!.id)
         assertArrayEquals(handover.bytes("otk"), qr.otk)
         assertEquals(vk.str("keyId"), qr.keyId)
+
+        // An otk whose base64url uses '-' and '_' (and whose last character carries spare bits).
+        val urlSafe = section("handoverUrlSafe")
+        assertEquals(urlSafe.str("blob"), Handover.wrap(key, urlSafe.bytes("otk"), urlSafe.bytes("nonce")).hex())
+        assertEquals(
+            urlSafe.str("qrText"),
+            Handover.qrText(UUID.fromString(urlSafe.str("id")), urlSafe.bytes("otk"), vk.str("keyId")),
+        )
+        val urlSafeQr = Handover.parseQr(urlSafe.str("qrText"))
+        assertNotNull(urlSafeQr)
+        assertEquals(UUID.fromString(urlSafe.str("id")), urlSafeQr!!.id)
+        assertArrayEquals(urlSafe.bytes("otk"), urlSafeQr.otk)
+        assertEquals(vk.str("keyId"), urlSafeQr.keyId)
+        assertEquals(vk.str("keyId"), Handover.unwrap(urlSafeQr.otk, urlSafe.bytes("blob"), urlSafeQr.keyId).keyId)
+
+        val thumb = section("thumb")
+        val sealedThumb = SealedBox.seal(key, thumb.str("purpose"), thumb.bytes("plaintext"), thumb.bytes("nonce"))
+        assertEquals(thumb.str("sealed"), sealedThumb.hex())
+        assertArrayEquals(thumb.bytes("plaintext"), SealedBox.open(key, thumb.str("purpose"), thumb.bytes("sealed")))
     }
 
-    // The argon2 and passphraseWrap arrays are filled by a later .NET task; until then this loop has nothing to do.
-    // Expected entry shapes: argon2 {passphrase, salt (hex), memoryKiB, iterations, parallelism, key (hex)} and
+    // Entry shapes: argon2 {passphrase, salt (hex), memoryKiB, iterations, parallelism, key (hex)} and
     // passphraseWrap {passphrase, vk (hex), wrap (a VaultWrap as on the wire)}.
     @Test
     fun argon2VectorsMatch() {
-        for (case in vectors["argon2"] as? JsonArray ?: JsonArray(emptyList())) {
+        val argon2 = vectors.getValue("argon2") as JsonArray
+        val wraps = vectors.getValue("passphraseWrap") as JsonArray
+        assertTrue("argon2 vectors are present", argon2.isNotEmpty())
+        assertTrue("passphraseWrap vectors are present", wraps.isNotEmpty())
+        for (case in argon2) {
             val c = case.jsonObject
             val kek = PassphraseWrap.deriveKek(
                 c.str("passphrase"), c.bytes("salt"),
@@ -102,7 +126,7 @@ class VaultCryptoTest {
             )
             assertEquals(c.str("key"), kek.hex())
         }
-        for (case in vectors["passphraseWrap"] as? JsonArray ?: JsonArray(emptyList())) {
+        for (case in wraps) {
             val c = case.jsonObject
             val wrap = Json.decodeFromJsonElement(VaultWrap.serializer(), c.getValue("wrap"))
             val key = PassphraseWrap.unwrap(wrap, c.str("passphrase"))
@@ -186,6 +210,8 @@ class VaultCryptoTest {
         assertNull(Handover.parseQr(good.replace("&k=ICEi", "&k=ICEiX")))
         assertNull(Handover.parseQr(good.replace("&kid=13dee80fba1d5400", "")))
         assertNotNull(Handover.parseQr("$good&future=1"))
+        // Only the canonical encoding: "...Pj9" decodes to the same bytes as "...Pj8" but isn't what qrText writes.
+        assertNull(Handover.parseQr(good.replace("Pj8&", "Pj9&")))
     }
 
     @Test
@@ -291,11 +317,55 @@ class VaultCryptoTest {
     @Test
     fun closedKeyIsWipedAndUnusable() {
         val key = VaultKey.create()
-        val snapshot = key.encKey
+        val copy = key.useEncKey { it.clone() }
         key.close()
-        assertArrayEquals(ByteArray(32), snapshot)
-        assertThrows(IllegalStateException::class.java) { key.export() }
-        assertThrows(IllegalStateException::class.java) { SealedBox.seal(key, "payload", ByteArray(1)) }
-        assertThrows(IllegalStateException::class.java) { KeyedHash.forHash(key, "x") }
+        assertTrue(key.isWiped())
+        assertFalse("a copy taken before the close is not wiped", copy.all { it == 0.toByte() })
+        assertThrows(VaultKeyClosedException::class.java) { key.export() }
+        assertThrows(VaultKeyClosedException::class.java) { SealedBox.seal(key, "payload", ByteArray(1)) }
+        assertThrows(VaultKeyClosedException::class.java) { SealedBox.open(key, "payload", ByteArray(40)) }
+        assertThrows(VaultKeyClosedException::class.java) { KeyedHash.forHash(key, "x") }
+        assertThrows(VaultKeyClosedException::class.java) {
+            BlobCipher.encrypt(key, ByteArrayInputStream(ByteArray(1)), ByteArrayOutputStream())
+        }
+    }
+
+    /** A close racing seals and opens never lets crypto run on the wiped (all-zero) key. */
+    @Test
+    fun closeRacingSealsNeverUsesZeroedBytes() {
+        val zeroKey = VaultKey.fromBytes(ByteArray(32))   // what a wiped vk would derive to
+        repeat(200) { round ->
+            val key = VaultKey.create()
+            val real = VaultKey.fromBytes(key.export())
+            val sealed = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+            val opened = java.util.concurrent.atomic.AtomicInteger()
+            val good = SealedBox.seal(real, "payload", "x".toByteArray())
+            val start = java.util.concurrent.CountDownLatch(1)
+            val workers = List(4) {
+                Thread {
+                    start.await()
+                    repeat(50) {
+                        try {
+                            sealed += SealedBox.seal(key, "payload", "secret $round".toByteArray())
+                            SealedBox.open(key, "payload", good)   // never fails as tampered: it opens, or the key is closed
+                            opened.incrementAndGet()
+                        } catch (_: VaultKeyClosedException) {
+                        }
+                    }
+                }.apply { start() }
+            }
+            start.countDown()
+            key.close()
+            workers.forEach { it.join() }
+            for (box in sealed) {
+                // Everything sealed opens under the real key, never under the wiped one.
+                assertArrayEquals("secret $round".toByteArray(), SealedBox.open(real, "payload", box))
+                assertThrows(GeneralSecurityException::class.java) { SealedBox.open(zeroKey, "payload", box) }
+                // A wiped encKey (zeros, not derived from zeros) can't open it either.
+                assertThrows(GeneralSecurityException::class.java) {
+                    SealedBox.open(ByteArray(32), "privatepaste v1 payload".toByteArray(), box)
+                }
+            }
+        }
     }
 }

@@ -1,7 +1,5 @@
 package xyz.ficdev.privatepaste.send
 
-import android.graphics.Bitmap
-import android.graphics.ImageDecoder
 import android.util.Log
 import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
@@ -10,18 +8,22 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import xyz.ficdev.privatepaste.api.ApiException
+import xyz.ficdev.privatepaste.api.KeyResetException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
-import xyz.ficdev.privatepaste.core.BitmapHashing
-import xyz.ficdev.privatepaste.core.ContentHash
+import xyz.ficdev.privatepaste.api.UpdateRequiredException
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
+import xyz.ficdev.privatepaste.core.crypto.ClipTooLargeException
+import xyz.ficdev.privatepaste.core.crypto.UnreadableImageException
+import xyz.ficdev.privatepaste.core.crypto.VaultKeyClosedException
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
+import xyz.ficdev.privatepaste.core.model.ServerLimits
 import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.OutboundQueue
 import xyz.ficdev.privatepaste.sync.LocalCaptureClock
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.nio.ByteBuffer
 import java.time.Clock
 import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
@@ -82,15 +84,25 @@ internal fun ImageRead.toFailure(): SendResult? = when (this) {
 /**
  * Phone to PC sending: a live upload when the user shares or taps the tile, a persistent queue when the server is
  * unreachable, and [flushQueue] (run by the sync engine on connect) to upload queued clips as backfill.
- * [notifier] gets messages about queued clips only (live results are returned to the caller to show).
+ *
+ * Every clip is sealed with [codec] at upload time; the queue keeps plaintext (encrypted at rest on this phone), so a
+ * clip queued while locked or offline goes out under whatever key is current when it is sent. Without a codec a send
+ * is queued and a flush waits. [limits] gives the server's limits (images are checked against `imageMb`).
+ * [onKeyReset] gets the id of the key the server refused as reset (409): queued clips are dropped then, since they
+ * were meant for the history that the reset wiped. A key closed mid-send (sign-out, or a reset handled meanwhile)
+ * never seals anything: the clip is queued instead, or dropped once the session is ending. [notifier] gets messages about queued clips only (live results
+ * are returned to the caller to show).
  */
 class ClipSender(
     private val api: PrivatePasteApi,
+    private val codec: () -> ClipCodec?,
+    private val limits: suspend () -> ServerLimits,
     private val queue: OutboundQueue,
     private val cache: HistoryCache,
     private val capture: LocalCaptureClock,
     private val notifier: (String) -> Unit,
     private val clock: Clock,
+    private val onKeyReset: (keyId: String) -> Unit = {},
     private val isEnding: () -> Boolean = { false },
 ) {
     private val flushLock = Mutex()
@@ -104,8 +116,16 @@ class ClipSender(
     suspend fun sendText(text: String): SendResult = withContext(Dispatchers.IO) {
         if (text.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES) return@withContext SendResult.TooLarge(TEXT_TOO_LARGE)
         val copiedAt = clock.instant()
-        if (ContentHash.text(text) == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
-        live(copiedAt, { queue.enqueueText(text, copiedAt) }) { api.uploadText(text, copiedAt, backfill = false) }
+        val enqueue = { queue.enqueueText(text, copiedAt) }
+        val c = codec() ?: return@withContext queueOnly(copiedAt, enqueue)
+        val encoded = try {
+            c.encodeText(text, copiedAt = null, backfill = false)
+        } catch (e: VaultKeyClosedException) {
+            return@withContext queueOnly(copiedAt, enqueue)
+        }
+        // Synced clips carry the keyed hash, so that is what is compared.
+        if (encoded.meta.hash == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
+        live(c, copiedAt, enqueue) { api.uploadClip(encoded.meta, encoded.thumb, encoded.blobs) }
     }
 
     /** Reads at most 20 MB + 1 byte from the stream [open] returns (and closes it), off the main thread. */
@@ -129,12 +149,28 @@ class ClipSender(
 
     suspend fun sendImageBytes(bytes: ByteArray, mime: String): SendResult {
         val copiedAt = clock.instant()
-        val hash = withContext(Dispatchers.Default) { uprightHash(bytes) }
+        val enqueue = { queue.enqueueImage(bytes, mime, copiedAt) }
+        val c = codec() ?: return withContext(Dispatchers.IO) { queueOnly(copiedAt, enqueue) }
+        val serverLimits = try {
+            limits()
+        } catch (e: ApiException.Unauthorized) {
+            return SendResult.SignedOut
+        } catch (e: ApiException) {
+            return withContext(Dispatchers.IO) { queueOnly(copiedAt, enqueue) }   // offline: sealed when it is sent
+        }
+        // Decoding, rotating and re-encoding the image is CPU work.
+        val encoded = try {
+            withContext(Dispatchers.Default) { c.encodeImage(bytes, copiedAt = null, backfill = false, limits = serverLimits) }
+        } catch (e: ClipTooLargeException) {
+            return SendResult.TooLarge(e.message ?: IMAGE_TOO_LARGE)
+        } catch (e: UnreadableImageException) {
+            return SendResult.Rejected(UNREADABLE_IMAGE)
+        } catch (e: VaultKeyClosedException) {
+            return withContext(Dispatchers.IO) { queueOnly(copiedAt, enqueue) }
+        }
         return withContext(Dispatchers.IO) {
-            if (hash != null && hash == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
-            live(copiedAt, { queue.enqueueImage(bytes, mime, copiedAt) }) {
-                api.uploadImage(bytes, fileNameFor(mime), mime, copiedAt, backfill = false)
-            }
+            if (encoded.meta.hash == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
+            live(c, copiedAt, enqueue) { api.uploadClip(encoded.meta, encoded.thumb, encoded.blobs) }
         }
     }
 
@@ -142,48 +178,65 @@ class ClipSender(
      * Uploads now; on a transient failure queues instead. Once the session is ending ([isEnding]) the outcome is not
      * recorded: no cache upsert or save, no enqueue, so a send still in flight never reaches the next session.
      */
-    private suspend fun live(copiedAt: Instant, enqueue: () -> Unit, upload: suspend () -> ClipDto): SendResult =
+    private suspend fun live(c: ClipCodec, copiedAt: Instant, enqueue: () -> Unit, upload: suspend () -> ClipDto): SendResult =
         try {
-            val clip = upload()
+            val uploaded = upload()
             synchronized(commitLock) {
                 if (isEnding()) return SendResult.SignedOut
-                cache.upsert(clip, fromSync = false)
-                cache.save()
-                capture.record(clip.lastCopiedAt)
+                // Opened only now: once the session is ending, its vault key may already be closed. Closed by a reset
+                // meanwhile, the clip still went out; it just isn't added to the history, which the reset wipes.
+                try {
+                    cache.upsert(c.decode(uploaded), fromSync = false)
+                    cache.save()
+                } catch (e: VaultKeyClosedException) {
+                    Log.w(TAG, "The vault key was closed before the sent clip could be cached")
+                }
+                capture.record(uploaded.lastCopiedAt)
             }
             SendResult.Sent
         } catch (e: ApiException.Unauthorized) {
             SendResult.SignedOut
+        } catch (e: KeyResetException) {
+            onKeyReset(c.keyId)
+            SendResult.Rejected(e.message ?: KEY_RESET)
         } catch (e: ApiException.Rejected) {
             SendResult.Rejected(e.message ?: "The server refused the clip")
         } catch (e: ApiException) { // Transient, RateLimited
-            try {
-                synchronized(commitLock) {
-                    if (isEnding()) return SendResult.SignedOut
-                    enqueue()
-                    capture.record(copiedAt)
-                }
-                SendResult.Queued
-            } catch (io: IOException) {
-                Log.w(TAG, "Cannot queue the clip (${io.javaClass.simpleName})")
-                SendResult.Rejected("Couldn't save the clip to send later")
+            queueOnly(copiedAt, enqueue)
+        }
+
+    /** Keeps the clip for [flushQueue]; nothing is recorded once the session is ending. */
+    private fun queueOnly(copiedAt: Instant, enqueue: () -> Unit): SendResult =
+        try {
+            synchronized(commitLock) {
+                if (isEnding()) return SendResult.SignedOut
+                enqueue()
+                capture.record(copiedAt)
             }
+            SendResult.Queued
+        } catch (io: IOException) {
+            Log.w(TAG, "Cannot queue the clip (${io.javaClass.simpleName})")
+            SendResult.Rejected("Couldn't save the clip to send later")
         }
 
     /**
-     * Uploads queued clips in order as backfill with their original copy time, each at most once per call. A transient
-     * failure counts an attempt: below 5 the flush stops here (the next one retries), from 5 the item moves to the back,
-     * at 10 it is dropped with one notification. A rejection drops the item with the server's message, except 410 (cleared), which drops it silently.
-     * [ApiException.Unauthorized] and cancellation propagate (the item stays queued, no attempt is counted).
+     * Seals and uploads queued clips in order as backfill with their original copy time, each at most once per call.
+     * A transient failure counts an attempt: below 5 the flush stops here (the next one retries), from 5 the item moves
+     * to the back, at 10 it is dropped with one notification. A rejection drops the item with the server's message,
+     * except 410 (cleared), which drops it silently; an image over a limit, or one that doesn't decode, is dropped
+     * with its message. A key reset (409) clears the whole queue and calls [onKeyReset] once. Without a codec nothing
+     * is sent. [ApiException.Unauthorized], [UpdateRequiredException] and cancellation propagate (the item stays
+     * queued, no attempt is counted).
      */
     suspend fun flushQueue(): Unit = flushLock.withLock { withContext(Dispatchers.IO) { flushLocked() } }
 
     private suspend fun flushLocked() {
+        val c = codec() ?: return
         var remaining = queue.size
         while (remaining-- > 0) {
             val item = queue.peek() ?: return
             val clip: ClipDto = try {
-                when (item.kind) {
+                val encoded = when (item.kind) {
                     ClipKind.IMAGE -> {
                         val bytes = queue.imageBytes(item)
                         if (bytes == null) {
@@ -191,14 +244,34 @@ class ClipSender(
                             queue.removeHead()
                             continue
                         }
-                        api.uploadImage(bytes, fileNameFor(item.mime ?: "image/png"), item.mime ?: "image/png", item.copiedAt, backfill = true)
+                        val serverLimits = limits()
+                        // Decoding, rotating and re-encoding the image is CPU work.
+                        withContext(Dispatchers.Default) { c.encodeImage(bytes, item.copiedAt, backfill = true, limits = serverLimits) }
                     }
-                    else -> api.uploadText(item.text.orEmpty(), item.copiedAt, backfill = true)
+                    else -> c.encodeText(item.text.orEmpty(), item.copiedAt, backfill = true)
                 }
+                api.uploadClip(encoded.meta, encoded.thumb, encoded.blobs)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException.Unauthorized) {
                 throw e
+            } catch (e: UpdateRequiredException) {
+                throw e
+            } catch (e: VaultKeyClosedException) {
+                return   // signed out or reset meanwhile: nothing is sealed under a closed key, the item stays
+            } catch (e: KeyResetException) {
+                // Everything queued was meant for the history the reset wiped: none of it is retried.
+                queue.clear()
+                onKeyReset(c.keyId)
+                return
+            } catch (e: ClipTooLargeException) {
+                notifier(e.message ?: IMAGE_TOO_LARGE)
+                queue.removeHead()
+                continue
+            } catch (e: UnreadableImageException) {
+                notifier(UNREADABLE_IMAGE)
+                queue.removeHead()
+                continue
             } catch (e: ApiException.Rejected) {
                 // 410: history was cleared (or the clip is too old) since it was copied. That is expected after a
                 // clear, so the item goes quietly.
@@ -218,41 +291,19 @@ class ClipSender(
                 continue
             }
             queue.removeHead() // uploaded: never send it twice
-            cache.upsert(clip, fromSync = false)
-            cache.save()
-        }
-    }
-
-    /** Hash of the upright decoded pixels, or null when the image cannot be decoded or is too big to hash cheaply. */
-    private fun uprightHash(bytes: ByteArray): String? {
-        var bitmap: Bitmap? = null
-        return try {
-            bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) { decoder, info, _ ->
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE // readable pixels; EXIF orientation is applied
-                // A sampled bitmap would hash differently from the server's, so a huge image skips the check instead.
-                if (info.size.width.toLong() * info.size.height > MAX_HASH_PIXELS) throw TooBigToHash()
+            try {
+                cache.upsert(c.decode(clip), fromSync = false)
+                cache.save()
+            } catch (e: VaultKeyClosedException) {
+                return
             }
-            BitmapHashing.hash(bitmap)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: TooBigToHash) {
-            null
-        } catch (e: Exception) {
-            null // undecodable here: the server decides
-        } catch (e: OutOfMemoryError) {
-            null
-        } finally {
-            bitmap?.recycle()
         }
     }
-
-    private class TooBigToHash : IOException()
 
     internal companion object {
         const val TAG = "ClipSender"
         const val MAX_TEXT_BYTES = 1024 * 1024
         const val MAX_IMAGE_BYTES = 20 * 1024 * 1024
-        const val MAX_HASH_PIXELS = 24L * 1000 * 1000
         const val ROTATE_AFTER_ATTEMPTS = 5
         const val DROP_AFTER_ATTEMPTS = 10
         const val GONE = 410
@@ -260,17 +311,10 @@ class ClipSender(
         const val IMAGE_TOO_LARGE = "Clip too large to sync (image over 20 MB)."
         const val GAVE_UP = "Couldn't sync a clip after several tries."
         const val UNREADABLE_IMAGE = "Couldn't read the image"
+        const val KEY_RESET = "Encryption was reset."
 
         /** Same text as `R.string.sign_in_first`, for the send results (no Context here). */
         const val SIGN_IN_FIRST = "Sign in to PrivatePaste first"
-
-        fun fileNameFor(mime: String): String = when (mime.lowercase()) {
-            "image/jpeg", "image/jpg" -> "clip.jpg"
-            "image/gif" -> "clip.gif"
-            "image/webp" -> "clip.webp"
-            "image/bmp" -> "clip.bmp"
-            else -> "clip.png"
-        }
 
         /** Reads up to [limit] bytes; null when the stream has more (after reading at most limit + 1 bytes). */
         fun readLimited(input: InputStream, limit: Int): ByteArray? {

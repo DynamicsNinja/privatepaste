@@ -19,12 +19,16 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.core.ServerUrl
+import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
+import xyz.ficdev.privatepaste.core.crypto.VaultKey
+import xyz.ficdev.privatepaste.core.model.VaultWrap
 import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.OutboundQueue
 import xyz.ficdev.privatepaste.storage.SessionStore
 import xyz.ficdev.privatepaste.storage.SettingsStore
 import xyz.ficdev.privatepaste.storage.StoredSession
 import xyz.ficdev.privatepaste.storage.ThumbnailStore
+import xyz.ficdev.privatepaste.storage.VaultKeyStore
 import java.io.IOException
 import kotlin.time.Duration.Companion.seconds
 
@@ -60,9 +64,10 @@ class PrefsSignInHints(context: Context) : SignInHints {
 }
 
 /**
- * Signs in and out, and owns the local data tied to a session. [signIn], [signOut] and [onRevoked] are serialized.
- * Stop the sync engine (and the sender) before [signOut] or [onRevoked], so nothing writes the cache after the clear.
- * Blocking file IO runs on [io].
+ * Signs in and out, and owns the local data tied to a session, including the vault key ([vaultKey], kept in
+ * [vaultKeys]). [signIn], [signOut], [onRevoked], [onKeyReset] and the vault key changes are serialized. Stop the sync
+ * engine (and the sender) before [signOut], [onRevoked] or [onKeyReset], so nothing writes the cache after the clear.
+ * Blocking file IO runs on [io]; Argon2 runs on [cpu], never the main thread.
  */
 class SessionManager(
     private val store: SessionStore,
@@ -72,10 +77,19 @@ class SessionManager(
     private val apiFactory: (baseUrl: HttpUrl, token: String?) -> PrivatePasteApi,
     private val hints: SignInHints = InMemorySignInHints(),
     private val settings: SettingsStore? = null,
+    private val vaultKeys: VaultKeyStore? = null,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val cpu: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val mutex = Mutex()
     private val _session = MutableStateFlow(store.load())
+    private val _vaultKey = MutableStateFlow(vaultKeys?.load())
+
+    /**
+     * The vault key this phone holds, or null (locked, or encryption not set up). Owned here: a replaced or forgotten
+     * key is closed, so read it when needed instead of keeping it.
+     */
+    val vaultKey: StateFlow<VaultKey?> = _vaultKey.asStateFlow()
 
     /** The signed-in session, or null when signed out. */
     val session: StateFlow<StoredSession?> = _session.asStateFlow()
@@ -160,10 +174,56 @@ class SessionManager(
         _session.value = null
     }
 
+    /**
+     * Unwraps the vault key from the server's [wrap] (Argon2, on [cpu]) and keeps it.
+     * @throws xyz.ficdev.privatepaste.core.crypto.WrongPassphraseException when [passphrase] doesn't open it.
+     * @throws java.security.GeneralSecurityException when the wrap is malformed.
+     * @throws IOException when the key can't be saved.
+     */
+    suspend fun unlockVault(wrap: VaultWrap, passphrase: String) {
+        val key = withContext(cpu) { PassphraseWrap.unwrap(wrap, passphrase) }
+        useVaultKey(key)
+    }
+
+    /**
+     * Saves [key] and makes it the current one; the one it replaces is closed. This manager owns [key] from the call
+     * on: when it can't be kept (a failed save, or cancelled while waiting for the lock) it is closed.
+     */
+    suspend fun useVaultKey(key: VaultKey) {
+        var kept = false
+        try {
+            mutex.withLock {
+                withContext(io + NonCancellable) { vaultKeys?.save(key) }
+                replaceVaultKey(key)
+                kept = true
+            }
+        } finally {
+            if (!kept) key.close()
+        }
+    }
+
+    /**
+     * The owner reset encryption: the stored key opens nothing new, and the history it opened is gone from the server.
+     * Forgets both; the session stays.
+     */
+    suspend fun onKeyReset() = mutex.withLock {
+        withContext(io + NonCancellable) { clearLocalData() }
+    }
+
+    // Caller holds mutex.
+    private fun replaceVaultKey(key: VaultKey?) {
+        val old = _vaultKey.value
+        _vaultKey.value = key
+        if (old !== key) old?.close()
+    }
+
+    // Caller holds mutex. Includes the vault key: it belongs to the session's server.
     private fun clearLocalData() {
         cache.clear()
         thumbs.clear()
         queue.clear()
+        vaultKeys?.delete()
+        replaceVaultKey(null)
     }
 
     private companion object {

@@ -18,6 +18,7 @@ import xyz.ficdev.privatepaste.PrivatePasteApp
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
 import xyz.ficdev.privatepaste.clipboard.WindowsHostFileProvider
+import xyz.ficdev.privatepaste.core.crypto.VaultKey
 import xyz.ficdev.privatepaste.storage.InMemoryKeyProvider
 import xyz.ficdev.privatepaste.storage.KeyProvider
 import xyz.ficdev.privatepaste.sync.SignInResult
@@ -108,10 +109,14 @@ class FakeServer {
     }
 }
 
-/** Signs in through the app's session manager (the UiDeps path the sign-in screen uses). */
+/**
+ * Signs in through the app's session manager (the UiDeps path the sign-in screen uses), then gives the phone a vault
+ * key, as unlocking does: without one the engine has nothing to open clips with and does not connect.
+ */
 fun PrivatePasteApp.signInTo(server: FakeServer) {
     val result = runBlocking { uiDeps.signIn(server.url, "owner", "dev", "Pixel Test") }
     assertEquals(SignInResult.Ok, result)
+    runBlocking { graph.sessions.useVaultKey(VaultKey.create()) }
 }
 
 /** Stops everything the app started, so no engine of this test keeps running into the next one. */
