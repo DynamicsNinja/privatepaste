@@ -1,6 +1,6 @@
 services:
   privatepaste:
-    image: ghcr.io/dynamicsninja/privatepaste:0.3.2
+    image: ghcr.io/dynamicsninja/privatepaste:0.4.0
     restart: unless-stopped
     stop_grace_period: 15s
     environment:
