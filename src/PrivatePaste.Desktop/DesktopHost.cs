@@ -8,11 +8,13 @@ using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Security;
 using PrivatePaste.Client.Core.Settings;
 using PrivatePaste.Client.Core.Sync;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Desktop.Input;
 using PrivatePaste.Desktop.Logging;
 using PrivatePaste.Desktop.Platform;
 using PrivatePaste.Desktop.ViewModels;
 using PrivatePaste.Protocol;
+using PrivatePaste.Protocol.Crypto;
 
 namespace PrivatePaste.Desktop;
 
@@ -32,6 +34,11 @@ public sealed class DesktopHost : IAsyncDisposable
     private readonly HostTransport _transport;
     private readonly SettingsStore _settingsStore;
     private readonly SecretFile _tokenFile;
+    private readonly VaultKeyStore _vaultKeyStore;
+    private readonly object _keyGate = new();
+    // The host owns the vault key; codecs (and so the session) only borrow it. Replaced as a pair under _keyGate.
+    private VaultKey? _vaultKey;
+    private volatile ClipCodec? _codec;
     // Replaced once when a sign-in leaves ephemeral mode (see LeaveEphemeralMode); otherwise fixed.
     private byte[] _cacheKey;
     private string _cachePath;
@@ -66,6 +73,8 @@ public sealed class DesktopHost : IAsyncDisposable
 
         // ---- Secrets, cache and queue ----
         _tokenFile = new SecretFile(Path.Combine(dataDirectory, "token.dat"), platform.SecretProtector);
+        _vaultKeyStore = new VaultKeyStore(Path.Combine(dataDirectory, "vault.dat"), platform.SecretProtector);
+        if (_vaultKeyStore.Load() is { } storedKey) ReplaceVaultKey(storedKey);
         if (LoadOrCreateCacheKey() is { } key)
         {
             _cacheKey = key;
@@ -104,6 +113,31 @@ public sealed class DesktopHost : IAsyncDisposable
 
     /// <summary>The coordinator of the current session; null while signed out.</summary>
     public ClipboardCoordinator? Coordinator => _session?.Coordinator;
+
+    /// <summary>Seals and opens clips with this device's vault key; null while there is no key (locked).</summary>
+    public ClipCodec? Codec => _codec;
+
+    /// <summary>
+    /// Stores <paramref name="key"/> as this device's vault key (protected like the sign-in token) and uses it from now on.
+    /// The host takes ownership: the previous key is disposed, and anything still using it fails cleanly.
+    /// </summary>
+    public void SetVaultKey(VaultKey key)
+    {
+        _vaultKeyStore.Save(key);
+        ReplaceVaultKey(key);
+    }
+
+    private void ReplaceVaultKey(VaultKey? key)
+    {
+        VaultKey? old;
+        lock (_keyGate)
+        {
+            old = _vaultKey;
+            _vaultKey = key;
+            _codec = key is null ? null : new ClipCodec(key);
+        }
+        if (!ReferenceEquals(old, key)) old?.Dispose();
+    }
 
     public bool IsSignedIn => _session is not null;
 
@@ -321,13 +355,13 @@ public sealed class DesktopHost : IAsyncDisposable
         http ??= CreateHttpClient(server);
         var api = new PrivatePasteApi(http, _time) { Token = token };
         var coordinator = new ClipboardCoordinator(
-            Platform.Clipboard, api, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused,
+            Platform.Clipboard, api, () => _codec, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused,
             app => BlockedApps.Matches(_settings.BlockedApps, app),   // reads the current settings, so edits apply at once
             _log.Info);
         var wsUri = WebSocketUri(http.BaseAddress!);
         var engine = new SyncEngine(
-            api, Cache, coordinator, ct => ConnectWithTimeoutAsync(t => _transport.Connect(wsUri, token, t), _time, ct), deviceId,
-            _time, new Backoff(Random.Shared), () => _paused);
+            api, Cache, coordinator, () => _codec, ct => ConnectWithTimeoutAsync(t => _transport.Connect(wsUri, token, t), _time, ct),
+            deviceId, _time, new Backoff(Random.Shared), () => _paused);
 
         var session = new Session(http, api, coordinator, engine);
         engine.StateChanged += (_, state) =>
@@ -342,6 +376,8 @@ public sealed class DesktopHost : IAsyncDisposable
         };
         // Never block the engine loop: sign out on another task.
         engine.Revoked += (_, _) => _ = Task.Run(() => OnRevokedAsync(session));
+        engine.KeyReset += (_, _) => _log.Info("Encryption was reset on the server; sync stopped until the new passphrase is entered.");
+        engine.UpdateRequired += (_, _) => _log.Info("The server needs a newer version of this app; sync stopped.");
 
         _session = session;
         engine.Start();
@@ -663,6 +699,7 @@ public sealed class DesktopHost : IAsyncDisposable
             }
         }
         finally { _lifecycle.Release(); }
+        ReplaceVaultKey(null);   // after the session stopped: nothing uses it any more
         if (_ephemeralDirectory is not null)
         {
             try { Directory.Delete(_ephemeralDirectory, recursive: true); }

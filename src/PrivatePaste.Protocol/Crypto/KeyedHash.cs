@@ -10,6 +10,10 @@ namespace PrivatePaste.Protocol.Crypto;
 public static class KeyedHash
 {
     /// <summary>Lowercase hex of HMAC-SHA256(hashKey, UTF8(<paramref name="contentHash"/>)).</summary>
-    public static string For(VaultKey key, string contentHash) =>
-        Convert.ToHexStringLower(HMACSHA256.HashData(key.HashKey, Encoding.UTF8.GetBytes(contentHash)));
+    public static string For(VaultKey key, string contentHash)
+    {
+        var hashKey = key.HashKey;
+        try { return Convert.ToHexStringLower(HMACSHA256.HashData(hashKey, Encoding.UTF8.GetBytes(contentHash))); }
+        finally { CryptographicOperations.ZeroMemory(hashKey); }
+    }
 }

@@ -39,7 +39,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Empty(await ServerClipsAsync());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Flush_413_drops_one_item_with_one_notification_and_continues()
     {
         await StartAsync();
@@ -52,7 +52,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Equal("ok", Assert.Single(await ServerClipsAsync()).Text);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Duplicate_changed_events_for_unchanged_content_upload_once()
     {
         await StartAsync();
@@ -63,7 +63,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Single(_handler.Uploads);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Content_copied_while_paused_is_not_sent_after_resume()
     {
         await StartAsync();
@@ -81,7 +81,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Equal("new", Assert.Single(await ServerClipsAsync()).Text);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Write_failure_does_not_swallow_the_next_user_copy()
     {
         await StartAsync();
@@ -95,18 +95,18 @@ public partial class ClipboardCoordinatorTests
         Assert.Equal("x", Assert.Single(await ServerClipsAsync()).Text);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task First_change_after_remote_write_is_own_even_if_os_transformed_it()
     {
         await StartAsync();
-        var up = await _api.UploadImageAsync(TestImages.MakePng(6, 6, 1).ToArray(), null, false);
+        var up = await _api.UploadImageAsync(_codec, TestImages.MakePng(6, 6, 1).ToArray());
         await _c.ApplyRemoteAsync(up, default);
         _clip.ReadOverride = new ClipboardContent.Image(TestImages.MakePng(6, 6, 99).ToArray());   // different pixels, like a DIB round trip
         await _c.OnClipboardChangedAsync(default);
         Assert.Single(await ServerClipsAsync());   // only the original upload
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Own_write_guard_expires_after_one_second()
     {
         await StartAsync();
@@ -132,7 +132,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Null(_cache.LastAppliedAt);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Copies_made_during_a_slow_upload_are_each_uploaded_in_order()
     {
         await StartAsync();
@@ -156,16 +156,16 @@ public partial class ClipboardCoordinatorTests
         await StartAsync();
         _clip.Current = new ClipboardContent.Image(new byte[ClipboardCoordinator.MaxImageBytes + 1]);
         await _c.OnClipboardChangedAsync(default);
-        Assert.Contains("too large", Assert.Single(_notes.Messages));
+        Assert.Equal("Images over 20 MB aren't synced.", Assert.Single(_notes.Messages));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Cache_save_failure_during_flush_is_non_fatal_and_item_is_dequeued()
     {
         await StartAsync();
         var bad = Path.Combine(_dir, "h-is-a-dir");
         Directory.CreateDirectory(bad);   // File.Move onto a directory fails
-        var c = new ClipboardCoordinator(_clip, _api, new HistoryCache(bad, _key), _queue, _echo, _notes, _time, () => false);
+        var c = new ClipboardCoordinator(_clip, _api, () => _codec, new HistoryCache(bad, _key), _queue, _echo, _notes, _time, () => false);
         _queue.Enqueue(new ClipboardContent.Text("a"), _time.GetUtcNow());
         _queue.Enqueue(new ClipboardContent.Text("b"), _time.GetUtcNow());
         await c.FlushQueueAsync(default);

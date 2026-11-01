@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Client.Core.Cache;
@@ -7,7 +8,8 @@ namespace PrivatePaste.Client.Core.Cache;
 public sealed record CachedClip(ClipDto Clip, byte[]? ThumbnailPng);
 
 /// <summary>
-/// Local, encrypted history of recent clips. File layout matches the server's BlobStore:
+/// Local, encrypted history of recent clips, as decoded by <see cref="Vault.ClipCodec"/>: they hold plaintext, which is
+/// why the file is encrypted with a key of its own. File layout matches the server's BlobStore:
 /// nonce(12) || tag(16) || ciphertext (AES-256-GCM). Thread-safe; call <see cref="Save"/> after a batch of changes.
 /// </summary>
 public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
@@ -23,6 +25,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     private readonly Dictionary<Guid, long> _tombstones = [];
     private long _highestSeq;
     private DateTimeOffset? _lastAppliedAt;
+    private string? _keyId;
 
     /// <summary>
     /// The visible items changed (upsert, removal of a held item, clear). Raised synchronously on the mutating thread,
@@ -37,6 +40,16 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
     public long HighestSeq { get { lock (_gate) return _highestSeq; } }
 
     public DateTimeOffset? LastAppliedAt { get { lock (_gate) return _lastAppliedAt; } }
+
+    /// <summary>
+    /// The id of the vault key the held clips were decoded with; null for a cache from before encryption (or a new one).
+    /// A cache whose key id differs from the server's vault belongs to a history that a reset wiped.
+    /// </summary>
+    public string? KeyId
+    {
+        get { lock (_gate) return _keyId; }
+        set { lock (_gate) _keyId = value; }
+    }
 
     /// <summary>Snapshot, newest first (LastCopiedAt desc, then Seq desc).</summary>
     public IReadOnlyList<CachedClip> Items { get { lock (_gate) return _items.ToArray(); } }
@@ -137,7 +150,8 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             byte[] plaintext;
             lock (_gate)
                 plaintext = JsonSerializer.SerializeToUtf8Bytes(
-                    new Snapshot(_highestSeq, _lastAppliedAt, _items.ToList(), new Dictionary<Guid, long>(_tombstones)), ProtocolJson.Options);
+                    new Snapshot(_highestSeq, _lastAppliedAt, _items.ToList(), new Dictionary<Guid, long>(_tombstones), _keyId),
+                    FileJson);
 
             var file = new byte[NonceSize + TagSize + plaintext.Length];
             var nonce = file.AsSpan(0, NonceSize);
@@ -160,7 +174,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             var plaintext = new byte[file.Length - NonceSize - TagSize];
             using (var aes = new AesGcm(key, TagSize))
                 aes.Decrypt(file.AsSpan(0, NonceSize), file.AsSpan(NonceSize + TagSize), file.AsSpan(NonceSize, TagSize), plaintext);
-            var snap = JsonSerializer.Deserialize<Snapshot>(plaintext, ProtocolJson.Options);
+            var snap = JsonSerializer.Deserialize<Snapshot>(plaintext, FileJson);
             if (snap?.Items is null) return cache;
             var loaded = snap.Items.Where(i => i?.Clip is not null).ToList();
             loaded.Sort(Compare);
@@ -168,6 +182,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             cache._items.AddRange(loaded);
             cache._highestSeq = snap.HighestSeq;
             cache._lastAppliedAt = snap.LastAppliedAt;
+            cache._keyId = snap.KeyId;
             if (snap.Tombstones is not null)
             {
                 foreach (var (id, seq) in snap.Tombstones) cache._tombstones[id] = seq;
@@ -179,6 +194,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             cache._items.Clear();
             cache._highestSeq = 0;
             cache._lastAppliedAt = null;
+            cache._keyId = null;
             cache._tombstones.Clear();
         }
         return cache;
@@ -193,6 +209,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
                 _items.Clear();
                 _highestSeq = 0;
                 _lastAppliedAt = null;
+                _keyId = null;
                 _tombstones.Clear();
             }
             try { File.Delete(path); } catch (IOException) { }
@@ -226,6 +243,42 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             t.Remove(k);
     }
 
+    /// <summary>
+    /// The wire options, except that <see cref="ClipKind.Unknown"/> is written too: the cache keeps clips this app can't
+    /// open (shown as such), which the wire format never carries.
+    /// </summary>
+    private static readonly JsonSerializerOptions FileJson = CreateFileJson();
+
+    private static JsonSerializerOptions CreateFileJson()
+    {
+        var options = new JsonSerializerOptions(ProtocolJson.Options);
+        options.Converters.Insert(0, new FileClipKindConverter());
+        return options;
+    }
+
+    private sealed class FileClipKindConverter : JsonConverter<ClipKind>
+    {
+        public override ClipKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            reader.TokenType == JsonTokenType.String
+                ? reader.GetString() switch
+                {
+                    "text" => ClipKind.Text,
+                    "link" => ClipKind.Link,
+                    "image" => ClipKind.Image,
+                    _ => ClipKind.Unknown,
+                }
+                : ClipKind.Unknown;
+
+        public override void Write(Utf8JsonWriter writer, ClipKind value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value switch
+            {
+                ClipKind.Text => "text",
+                ClipKind.Link => "link",
+                ClipKind.Image => "image",
+                _ => "unknown",
+            });
+    }
+
     private sealed record Snapshot(long HighestSeq, DateTimeOffset? LastAppliedAt, List<CachedClip> Items,
-        Dictionary<Guid, long>? Tombstones = null);
+        Dictionary<Guid, long>? Tombstones = null, string? KeyId = null);
 }

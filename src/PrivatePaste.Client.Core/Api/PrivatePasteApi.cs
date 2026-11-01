@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
@@ -13,6 +14,7 @@ namespace PrivatePaste.Client.Core.Api;
 /// uploads get <see cref="UploadTimeout"/> for their size), measured on the injected <see cref="TimeProvider"/>.
 /// Exception contract: <see cref="HttpRequestException"/> = offline/transient (network failure, a timeout with the
 /// TimeoutException as inner, or a 2xx with an unparseable body such as a captive-portal page); <see cref="UnauthorizedApiException"/> = 401;
+/// <see cref="KeyResetException"/> = 409, the upload's vault key was reset; <see cref="UpdateRequiredException"/> = 426;
 /// any other <see cref="ApiException"/> = the server rejected the request. Caller cancellation surfaces as <see cref="OperationCanceledException"/>.
 /// </summary>
 public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
@@ -20,6 +22,7 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
     private const long UploadBytesPerExtraSecond = 256 * 1024;
     private static readonly TimeSpan BaseTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MaxUploadTimeout = TimeSpan.FromMinutes(5);
+    private const string KeyResetTitle = "Encryption was reset";
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     /// <summary>Sent as a Bearer token when set.</summary>
@@ -54,42 +57,80 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
             return true;
         });
 
-    public Task<ClipDto> UploadTextAsync(string text, DateTimeOffset? copiedAt, bool backfill, CancellationToken ct = default) =>
-        WithTimeoutAsync(UploadTimeout(Encoding.UTF8.GetByteCount(text)), ct, async t =>
+    /// <summary>What the server supports and its limits; null when it predates end-to-end encryption (404).</summary>
+    public Task<ServerInfoDto?> GetServerInfoAsync(CancellationToken ct = default) =>
+        OrNullOn404(GetJsonAsync<ServerInfoDto>("api/server-info", ct));
+
+    public Task<MeDto> GetMeAsync(CancellationToken ct = default) => GetJsonAsync<MeDto>("api/me", ct);
+
+    /// <summary>The wrapped vault key; null when encryption isn't set up yet (404).</summary>
+    public Task<VaultWrapDto?> GetVaultAsync(CancellationToken ct = default) =>
+        OrNullOn404(GetJsonAsync<VaultWrapDto>("api/vault", ct));
+
+    /// <summary>Sets up encryption, or replaces the wrap of the same key (a new passphrase). Owner only.</summary>
+    public Task PutVaultAsync(VaultWrapDto wrap, CancellationToken ct = default) =>
+        SendJsonBodyAsync(HttpMethod.Put, "api/vault", wrap, ct);
+
+    /// <summary>Replaces the vault key, which deletes every clip on the server. Owner only.</summary>
+    public Task ResetVaultAsync(VaultWrapDto wrap, CancellationToken ct = default) =>
+        SendJsonBodyAsync(HttpMethod.Post, "api/vault/reset", wrap, ct);
+
+    /// <summary>Stores a sealed handover blob for a new device to fetch once.</summary>
+    public Task<HandoverCreated> CreateHandoverAsync(byte[] blob, CancellationToken ct = default) =>
+        WithTimeoutAsync(RequestTimeout, ct, async t =>
         {
-            using var req = Request(HttpMethod.Post, "api/clips/text");
-            req.Content = JsonContent.Create(new TextClipUpload(text, copiedAt, backfill), options: ProtocolJson.Options);
-            return await SendJsonAsync<ClipDto>(req, t).ConfigureAwait(false);
+            using var req = Request(HttpMethod.Post, "api/vault/handovers");
+            req.Content = JsonContent.Create(new HandoverCreateRequest(Convert.ToBase64String(blob)), options: ProtocolJson.Options);
+            return await SendJsonAsync<HandoverCreated>(req, t).ConfigureAwait(false);
         });
 
-    public Task<ClipDto> UploadImageAsync(byte[] png, DateTimeOffset? copiedAt, bool backfill, CancellationToken ct = default) =>
-        WithTimeoutAsync(UploadTimeout(png.Length), ct, async t =>
-        {
-            using var form = new MultipartFormDataContent();
-            var file = new ByteArrayContent(png);
-            file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
-            form.Add(file, "file", "clip.png");
-            if (copiedAt is { } at)
-                form.Add(new StringContent(at.ToString("O", CultureInfo.InvariantCulture)), "copiedAt");
-            form.Add(new StringContent(backfill ? "true" : "false"), "backfill");
-            using var req = Request(HttpMethod.Post, "api/clips/image");
-            req.Content = form;
-            return await SendJsonAsync<ClipDto>(req, t).ConfigureAwait(false);
-        });
+    /// <summary>Fetches (and so uses up) a handover blob; null when it is unknown, expired or already taken (404).</summary>
+    public async Task<byte[]?> TakeHandoverAsync(Guid id, CancellationToken ct = default)
+    {
+        var blob = await OrNullOn404(GetJsonAsync<HandoverBlob>($"api/vault/handovers/{id}", ct)).ConfigureAwait(false);
+        if (blob is null) return null;
+        try { return Convert.FromBase64String(blob.Blob); }
+        catch (FormatException e) { throw new HttpRequestException("Unexpected response from server.", e); }
+    }
 
-    public Task<ClipPage> ListAsync(string? query, string? cursor, int limit = 50, CancellationToken ct = default)
+    /// <summary>
+    /// Uploads a sealed clip (see <see cref="Vault.ClipCodec.EncodeAsync"/>) and returns it as stored, still sealed. A
+    /// 409 for a key the server no longer has is a <see cref="KeyResetException"/>.
+    /// </summary>
+    public Task<ClipDto> UploadClipAsync(ClipUpload upload, CancellationToken ct = default) =>
+        WithTimeoutAsync(UploadTimeout(upload.Meta.Payload.Length + (upload.Thumb?.Length ?? 0) + upload.Blobs.Sum(b => (long)b.Length)),
+            ct, async t =>
+            {
+                using var form = new MultipartFormDataContent
+                {
+                    { new StringContent(JsonSerializer.Serialize(upload.Meta, ProtocolJson.Options), Encoding.UTF8, "application/json"), "meta" },
+                };
+                if (upload.Thumb is { } thumb) form.Add(new ByteArrayContent(thumb), "thumb", "thumb");
+                for (var n = 0; n < upload.Blobs.Count; n++)
+                {
+                    var name = "blob" + n.ToString(CultureInfo.InvariantCulture);
+                    form.Add(new ByteArrayContent(upload.Blobs[n]), name, name);
+                }
+                using var req = Request(HttpMethod.Post, "api/clips");
+                req.Content = form;
+                return await SendJsonAsync<ClipDto>(req, t).ConfigureAwait(false);
+            });
+
+    /// <summary>
+    /// A page of history, newest first, still sealed. The server can't search (it holds only ciphertext): see
+    /// <see cref="Sync.OlderClipSearch"/>.
+    /// </summary>
+    public Task<ClipPage> ListAsync(string? cursor, int limit = 50, CancellationToken ct = default)
     {
         var url = $"api/clips?limit={limit.ToString(CultureInfo.InvariantCulture)}";
-        if (!string.IsNullOrEmpty(query)) url += "&q=" + Uri.EscapeDataString(query);
         if (!string.IsNullOrEmpty(cursor)) url += "&cursor=" + Uri.EscapeDataString(cursor);
         return GetJsonAsync<ClipPage>(url, ct);
     }
 
     /// <summary>Pinned clips only, newest pinned first; cursors work as in <see cref="ListAsync"/>.</summary>
-    public Task<ClipPage> ListPinnedAsync(string? query, string? cursor, int limit = 50, CancellationToken ct = default)
+    public Task<ClipPage> ListPinnedAsync(string? cursor, int limit = 50, CancellationToken ct = default)
     {
         var url = $"api/clips?pinned=true&limit={limit.ToString(CultureInfo.InvariantCulture)}";
-        if (!string.IsNullOrEmpty(query)) url += "&q=" + Uri.EscapeDataString(query);
         if (!string.IsNullOrEmpty(cursor)) url += "&cursor=" + Uri.EscapeDataString(cursor);
         return GetJsonAsync<ClipPage>(url, ct);
     }
@@ -117,9 +158,12 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
             return true;
         });
 
-    public Task<byte[]> GetImageAsync(Guid id, CancellationToken ct = default) => GetBytesAsync($"api/clips/{id}/image", ct);
+    /// <summary>A clip's sealed thumbnail (<see cref="Vault.ClipCodec.DecodeThumb"/> opens it).</summary>
+    public Task<byte[]> GetThumbAsync(Guid id, CancellationToken ct = default) => GetBytesAsync($"api/clips/{id}/thumb", ct);
 
-    public Task<byte[]> GetThumbnailAsync(Guid id, CancellationToken ct = default) => GetBytesAsync($"api/clips/{id}/thumbnail", ct);
+    /// <summary>A clip's sealed blob <paramref name="n"/> (<see cref="Vault.ClipCodec.DecodeBlobAsync"/> opens it).</summary>
+    public Task<byte[]> GetBlobAsync(Guid id, int n, CancellationToken ct = default) =>
+        GetBytesAsync($"api/clips/{id}/blobs/{n.ToString(CultureInfo.InvariantCulture)}", ct);
 
     public Task<SyncResponse> SyncAsync(long afterSeq, int limit = 200, CancellationToken ct = default) =>
         GetJsonAsync<SyncResponse>(
@@ -149,6 +193,21 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
             using var req = Request(HttpMethod.Get, url);
             return await SendJsonAsync<T>(req, t).ConfigureAwait(false);
         });
+
+    private Task SendJsonBodyAsync<TBody>(HttpMethod method, string url, TBody body, CancellationToken ct) =>
+        WithTimeoutAsync(RequestTimeout, ct, async t =>
+        {
+            using var req = Request(method, url);
+            req.Content = JsonContent.Create(body, options: ProtocolJson.Options);
+            using var _ = await SendAsync(req, t).ConfigureAwait(false);
+            return true;
+        });
+
+    private static async Task<T?> OrNullOn404<T>(Task<T> call) where T : class
+    {
+        try { return await call.ConfigureAwait(false); }
+        catch (ApiException e) when (e.Status == HttpStatusCode.NotFound) { return null; }
+    }
 
     private Task<byte[]> GetBytesAsync(string url, CancellationToken ct) =>
         WithTimeoutAsync(RequestTimeout, ct, async t =>
@@ -192,15 +251,22 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
         if (res.IsSuccessStatusCode) return res;
         try
         {
-            var message = await ReadMessageAsync(res, ct).ConfigureAwait(false);
-            throw res.StatusCode == System.Net.HttpStatusCode.Unauthorized
-                ? new UnauthorizedApiException(message)
-                : new ApiException(res.StatusCode, message);
+            var (title, detail) = await ReadProblemAsync(res, ct).ConfigureAwait(false);
+            var message = detail ?? title ?? $"{(int)res.StatusCode} {res.ReasonPhrase}";
+            throw res.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized => new UnauthorizedApiException(message),
+                HttpStatusCode.UpgradeRequired => new UpdateRequiredException(message),
+                // The server marks this one by its title; other 409s (no vault yet, a kind clash) are plain rejections.
+                HttpStatusCode.Conflict when title == KeyResetTitle => new KeyResetException(message),
+                _ => new ApiException(res.StatusCode, message),
+            };
         }
         finally { res.Dispose(); }
     }
 
-    private static async Task<string> ReadMessageAsync(HttpResponseMessage res, CancellationToken ct)
+    /// <summary>The problem details' title and detail, each null when missing or empty, both null when the body isn't JSON.</summary>
+    private static async Task<(string? Title, string? Detail)> ReadProblemAsync(HttpResponseMessage res, CancellationToken ct)
     {
         try
         {
@@ -209,15 +275,13 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
             {
                 using var doc = JsonDocument.Parse(body);
                 if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                {
-                    foreach (var name in new[] { "detail", "title" })
-                        if (doc.RootElement.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String
-                            && p.GetString() is { Length: > 0 } s)
-                            return s;
-                }
+                    return (Text(doc.RootElement, "title"), Text(doc.RootElement, "detail"));
             }
         }
         catch (JsonException) { }
-        return $"{(int)res.StatusCode} {res.ReasonPhrase}";
+        return (null, null);
+
+        static string? Text(JsonElement e, string name) =>
+            e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String && p.GetString() is { Length: > 0 } s ? s : null;
     }
 }

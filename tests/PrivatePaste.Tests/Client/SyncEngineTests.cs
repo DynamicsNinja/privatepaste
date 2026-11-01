@@ -7,6 +7,7 @@ using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Cache;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Sync;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Tests.Client;
@@ -19,6 +20,7 @@ public class SyncEngineTests : IAsyncLifetime
     private readonly PrivatePasteFactory _server = new();
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));   // CLIENT clock
     private readonly byte[] _key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+    private ClipCodec _codec = null!;
     private readonly ConcurrentQueue<SyncState> _states = new();
     private readonly List<SyncEngine> _engines = [];
     private FakeClipboard _clip = new();
@@ -56,13 +58,15 @@ public class SyncEngineTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         Directory.CreateDirectory(_dir);
+        var vaultKey = await _server.VaultKeyAsync();
+        _codec = new ClipCodec(vaultKey);
         _apiA = new PrivatePasteApi(_server.CreateClient());
         var a = await _apiA.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "A", "windows");
         (_idA, _tokenA, _apiA.Token) = (a.DeviceId, a.Token, a.Token);
         _apiB = new PrivatePasteApi(_server.CreateClient());
         _apiB.Token = (await _apiB.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "B", "windows")).Token;
         _cache = new HistoryCache(CachePath, _key);
-        _handlerA = new SwitchHandler(_server.Server.CreateHandler());
+        _handlerA = new SwitchHandler(_server.Server.CreateHandler()) { Key = vaultKey };
         _coordApi = new PrivatePasteApi(new HttpClient(_handlerA) { BaseAddress = new Uri("http://localhost/") }) { Token = _tokenA };
         _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
     }
@@ -95,9 +99,9 @@ public class SyncEngineTests : IAsyncLifetime
     private SyncEngine CreateEngine(Backoff? backoff = null, IClipboardAccess? clipboard = null,
         Func<CancellationToken, Task<WebSocket>>? connect = null)
     {
-        var coordinator = _coordinator = new ClipboardCoordinator(clipboard ?? _clip, _coordApi, _cache, _queue,
+        var coordinator = _coordinator = new ClipboardCoordinator(clipboard ?? _clip, _coordApi, () => _codec, _cache, _queue,
             new EchoGuard(_time, TimeSpan.FromSeconds(30)), _notes, _time, () => _paused);
-        var engine = new SyncEngine(_apiA, _cache, coordinator, connect ?? ConnectAsync, _idA, _time,
+        var engine = new SyncEngine(_apiA, _cache, coordinator, () => _codec, connect ?? ConnectAsync, _idA, _time,
             backoff ?? new Backoff(new Random(1)), () => _paused);
         engine.StateChanged += (_, s) => _states.Enqueue(s);
         engine.Revoked += (_, _) => Interlocked.Increment(ref _revoked);
@@ -136,12 +140,12 @@ public class SyncEngineTests : IAsyncLifetime
 
     // ---------------------------------------------------------------- ClipApplied (the "clip arrived" toast)
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Clip_applied_is_raised_once_for_a_live_clip_from_another_device()
     {
         await StartConnectedAsync();
 
-        await _apiB.UploadTextAsync("\n  first line of the clip  \nsecond line", null, false);
+        await _apiB.UploadTextAsync(_codec, "\n  first line of the clip  \nsecond line", null, false);
 
         await WaitUntilAsync(() => !_appliedEvents.IsEmpty);
         await Task.Delay(100);   // nothing else follows
@@ -154,34 +158,34 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal("windows", toast.Platform.Key);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Clip_applied_is_not_raised_for_own_or_backfilled_clips()
     {
         await StartConnectedAsync();
 
-        await _apiA.UploadTextAsync("mine", null, false);
-        await _apiB.UploadTextAsync("old", null, backfill: true);
-        await _apiB.UploadTextAsync("sentinel", null, false);   // messages are handled in order
+        await _apiA.UploadTextAsync(_codec, "mine", null, false);
+        await _apiB.UploadTextAsync(_codec, "old", null, backfill: true);
+        await _apiB.UploadTextAsync(_codec, "sentinel", null, false);   // messages are handled in order
 
         await WaitUntilAsync(() => Written().Contains("sentinel") && !_appliedEvents.IsEmpty);
         Assert.Equal(["sentinel"], Notified());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Clip_applied_is_not_raised_when_the_clipboard_write_fails()
     {
         await StartConnectedAsync();
         _clip.WriteFailure = new IOException("clipboard locked");
-        await _apiB.UploadTextAsync("locked", null, false);
+        await _apiB.UploadTextAsync(_codec, "locked", null, false);
         await WaitUntilAsync(() => !_errors.IsEmpty && Cached("locked"));
 
         _clip.WriteFailure = null;
-        await _apiB.UploadTextAsync("works", null, false);
+        await _apiB.UploadTextAsync(_codec, "works", null, false);
         await WaitUntilAsync(() => Written().Contains("works") && !_appliedEvents.IsEmpty);
         Assert.Equal(["works"], Notified());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Clip_applied_is_not_raised_for_clips_that_arrive_while_paused()
     {
         var engine = await PauseWhileBUploadsAsync();
@@ -192,7 +196,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(["first"], Notified());   // the catch-up after a pause is history only
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Clip_applied_is_raised_once_for_the_single_catch_up_clip()
     {
         await PrimeAppliedAsync();
@@ -203,51 +207,51 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(["first", "z"], Notified());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Live_clip_from_other_device_is_applied()
     {
         var engine = await StartConnectedAsync();
         var changed = 0;
         engine.HistoryChanged += (_, _) => Interlocked.Increment(ref changed);
 
-        await _apiB.UploadTextAsync("hi", null, false);
+        await _apiB.UploadTextAsync(_codec, "hi", null, false);
 
         await WaitUntilAsync(() => Written().Contains("hi") && Cached("hi"));
         Assert.Equal(["hi"], Written());
         await WaitUntilAsync(() => Volatile.Read(ref changed) > 0);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Own_clip_is_cached_not_applied()
     {
         await StartConnectedAsync();
 
-        await _apiA.UploadTextAsync("mine", null, false);
-        await _apiB.UploadTextAsync("sentinel", null, false);   // messages are handled in order
+        await _apiA.UploadTextAsync(_codec, "mine", null, false);
+        await _apiB.UploadTextAsync(_codec, "sentinel", null, false);   // messages are handled in order
 
         await WaitUntilAsync(() => Written().Contains("sentinel"));
         Assert.Equal(["sentinel"], Written());
         Assert.True(Cached("mine"));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Backfill_clip_is_cached_not_applied()
     {
         await StartConnectedAsync();
 
-        await _apiB.UploadTextAsync("old", null, backfill: true);
-        await _apiB.UploadTextAsync("sentinel", null, false);
+        await _apiB.UploadTextAsync(_codec, "old", null, backfill: true);
+        await _apiB.UploadTextAsync(_codec, "sentinel", null, false);
 
         await WaitUntilAsync(() => Written().Contains("sentinel"));
         Assert.Equal(["sentinel"], Written());
         Assert.True(Cached("old"));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Delete_removes_from_cache()
     {
         await StartConnectedAsync();
-        var clip = await _apiB.UploadTextAsync("gone", null, false);
+        var clip = await _apiB.UploadTextAsync(_codec, "gone", null, false);
         await WaitUntilAsync(() => Cached("gone"));
 
         await _apiB.DeleteAsync(clip.Id);
@@ -260,7 +264,7 @@ public class SyncEngineTests : IAsyncLifetime
         foreach (var t in new[] { "x", "y", "z" })
         {
             _server.Clock.Advance(TimeSpan.FromMinutes(1));
-            await _apiB.UploadTextAsync(t, null, false);
+            await _apiB.UploadTextAsync(_codec, t, null, false);
         }
     }
 
@@ -268,13 +272,13 @@ public class SyncEngineTests : IAsyncLifetime
     private async Task PrimeAppliedAsync()
     {
         var engine = await StartConnectedAsync();
-        await _apiB.UploadTextAsync("first", null, false);
+        await _apiB.UploadTextAsync(_codec, "first", null, false);
         await WaitUntilAsync(() => Written().Contains("first"));
         await engine.StopAsync();
         Assert.NotNull(_cache.LastAppliedAt);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Catch_up_after_offline_applies_only_newest_once()
     {
         await PrimeAppliedAsync();
@@ -288,7 +292,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(["first", "z"], Written());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Catch_up_does_not_reapply_already_applied()
     {
         await PrimeAppliedAsync();
@@ -313,12 +317,12 @@ public class SyncEngineTests : IAsyncLifetime
         await _coordinator.OnClipboardChangedAsync(default);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Catch_up_never_overwrites_a_newer_local_copy()
     {
         await PrimeAppliedAsync();
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await _apiB.UploadTextAsync("remote", null, false);
+        await _apiB.UploadTextAsync(_codec, "remote", null, false);
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
         var engine = CreateEngine();
         await CopyLocallyAsync("local, copied after remote");
@@ -330,12 +334,12 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.True(Cached("remote"));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Catch_up_does_not_apply_while_local_copies_are_queued()
     {
         await PrimeAppliedAsync();
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await _apiB.UploadTextAsync("remote", null, false);
+        await _apiB.UploadTextAsync(_codec, "remote", null, false);
         var engine = CreateEngine();
         _handlerA.Offline = true;
         await CopyLocallyAsync("queued while offline");   // queued at the client clock, which is OLDER than "remote"
@@ -349,7 +353,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(0, _queue.Count);   // flushed after the catch-up
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Catch_up_applies_a_remote_clip_newer_than_everything_once()
     {
         await PrimeAppliedAsync();
@@ -357,7 +361,7 @@ public class SyncEngineTests : IAsyncLifetime
         var engine = CreateEngine();
         await CopyLocallyAsync("local, older");
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await _apiB.UploadTextAsync("remote, newest", null, false);
+        await _apiB.UploadTextAsync(_codec, "remote, newest", null, false);
 
         engine.Start();
         await WaitUntilAsync(() => engine.State == SyncState.Connected);
@@ -369,7 +373,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(["first", "remote, newest"], Written());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Catch_up_never_applies_a_backfilled_clip_older_than_a_local_copy()
     {
         await PrimeAppliedAsync();
@@ -379,7 +383,7 @@ public class SyncEngineTests : IAsyncLifetime
         await CopyLocallyAsync("local");
         var local = _cache.Items.Single(i => i.Clip.Text == "local").Clip;
         await _apiB.DeleteAsync(local.Id);   // gone from history, but still what the user has on the clipboard
-        await _apiB.UploadTextAsync("backfilled", firstAt.AddMinutes(1), backfill: true);
+        await _apiB.UploadTextAsync(_codec, "backfilled", firstAt.AddMinutes(1), backfill: true);
 
         engine.Start();
         await WaitUntilAsync(() => engine.State == SyncState.Connected);
@@ -388,12 +392,12 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.True(Cached("backfilled") && !Cached("local"));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task A_private_copy_still_counts_as_the_newest_local_copy()
     {
         await PrimeAppliedAsync();
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await _apiB.UploadTextAsync("remote", null, false);
+        await _apiB.UploadTextAsync(_codec, "remote", null, false);
         _time.Advance(TimeSpan.FromMinutes(2));   // the private copy is read after "remote" was copied
         var engine = CreateEngine();
         _clip.Current = new ClipboardContent.Text("password") { IsPrivate = true };
@@ -406,7 +410,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.True(Cached("remote") && !Cached("password"));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Catch_up_after_a_pin_applies_nothing()
     {
         // "while paused" is the newest clip but was never applied (the catch-up after a pause is history only).
@@ -427,7 +431,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(["first"], Notified());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task A_transient_failure_while_connected_is_retried_by_the_periodic_flush()
     {
         var engine = await StartConnectedAsync();
@@ -441,43 +445,43 @@ public class SyncEngineTests : IAsyncLifetime
         _time.Advance(TimeSpan.FromSeconds(1));
         await WaitUntilAsync(() => _queue.Count == 0);
 
-        Assert.Contains("retry me", (await _apiB.ListAsync(null, null)).Items.Select(c => c.Text));
+        Assert.Contains("retry me", (await _apiB.ListOpenedAsync(_codec)).Items.Select(c => c.Text));
         Assert.Equal(1, Volatile.Read(ref _connects));
         Assert.Equal(SyncState.Connected, engine.State);
     }
 
     private bool HasThumbnail(Guid id) => _cache.Items.Any(i => i.Clip.Id == id && i.ThumbnailPng is { Length: > 0 });
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task A_live_image_from_another_device_gets_a_thumbnail_in_the_cache()
     {
         await StartConnectedAsync();
-        var image = await _apiB.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(300, 200, 3).ToArray(), null, false);
+        var image = await _apiB.UploadImageAsync(_codec, PrivatePaste.Tests.Images.TestImages.MakePng(300, 200, 3).ToArray(), null, false);
 
         // The thumbnail fetch runs in the background beside the apply (image download + clipboard write), so either can finish first.
         await WaitUntilAsync(() => HasThumbnail(image.Id) && _clip.Writes.Count > 0);
         Assert.Single(_clip.Writes);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Caught_up_images_get_thumbnails_too()
     {
-        var image = await _apiB.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(40, 30, 4).ToArray(), null, false);
+        var image = await _apiB.UploadImageAsync(_codec, PrivatePaste.Tests.Images.TestImages.MakePng(40, 30, 4).ToArray(), null, false);
         await StartConnectedAsync();
         await WaitUntilAsync(() => HasThumbnail(image.Id));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task A_failed_thumbnail_fetch_is_swallowed()
     {
-        _handlerA.Respond = r => r.RequestUri!.AbsolutePath.EndsWith("/thumbnail")
+        _handlerA.Respond = r => r.RequestUri!.AbsolutePath.EndsWith("/thumb")
             ? new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError) : null;
         var engine = await StartConnectedAsync();
-        var image = await _apiB.UploadImageAsync(PrivatePaste.Tests.Images.TestImages.MakePng(8, 8, 5).ToArray(), null, false);
+        var image = await _apiB.UploadImageAsync(_codec, PrivatePaste.Tests.Images.TestImages.MakePng(8, 8, 5).ToArray(), null, false);
         await WaitUntilAsync(() => _clip.Writes.Count == 1 && _cache.Items.Any(i => i.Clip.Id == image.Id));
 
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await _apiB.UploadTextAsync("after the failed thumbnail", null, false);
+        await _apiB.UploadTextAsync(_codec, "after the failed thumbnail", null, false);
         await WaitUntilAsync(() => Written().Contains("after the failed thumbnail"));
         Assert.False(HasThumbnail(image.Id));
         Assert.Equal(SyncState.Connected, engine.State);
@@ -504,7 +508,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Contains(_errors, e => e.Message == "Could not connect to the server." && e.Exception is TimeoutException);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Nudge_drops_a_live_link_and_reconnects_at_once()
     {
         var engine = await StartConnectedAsync();
@@ -514,7 +518,7 @@ public class SyncEngineTests : IAsyncLifetime
 
         await WaitUntilAsync(() => Volatile.Read(ref _connects) == 2 && engine.State == SyncState.Connected);
         Assert.NotEqual(WebSocketState.Open, first.State);
-        await _apiB.UploadTextAsync("after nudge", null, false);
+        await _apiB.UploadTextAsync(_codec, "after nudge", null, false);
         await WaitUntilAsync(() => Written().Contains("after nudge"));
     }
 
@@ -533,11 +537,11 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(2, Volatile.Read(ref _connects));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task First_catch_up_with_fresh_cache_is_history_only()
     {
         await UploadXyzWhileStoppedAsync();
-        await _apiB.UploadTextAsync("old", null, backfill: true);
+        await _apiB.UploadTextAsync(_codec, "old", null, backfill: true);
 
         await StartConnectedAsync();
 
@@ -664,7 +668,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Contains(_errors, e => e.Message.Contains("pong"));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Pong_keeps_connection_alive()
     {
         TestSocket? socket = null;
@@ -678,13 +682,13 @@ public class SyncEngineTests : IAsyncLifetime
             await WaitUntilAsync(() => socket!.PongsHandled == i);      // engine has processed the pong
             _time.Advance(TimeSpan.FromSeconds(10));                    // past the pong timeout
         }
-        await _apiB.UploadTextAsync("still here", null, false);
+        await _apiB.UploadTextAsync(_codec, "still here", null, false);
         await WaitUntilAsync(() => Written().Contains("still here"));
         Assert.Equal(1, Volatile.Read(ref _connects));
         Assert.Equal(SyncState.Connected, engine.State);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Throwing_event_handler_does_not_stop_the_engine()
     {
         var engine = CreateEngine();
@@ -693,28 +697,28 @@ public class SyncEngineTests : IAsyncLifetime
         engine.Start();
 
         await WaitUntilAsync(() => engine.State == SyncState.Connected);
-        await _apiB.UploadTextAsync("hi", null, false);
+        await _apiB.UploadTextAsync(_codec, "hi", null, false);
         await WaitUntilAsync(() => Written().Contains("hi"));
         Assert.Equal(1, Volatile.Read(ref _connects));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Clipboard_write_failure_is_reported_and_engine_keeps_running()
     {
         var engine = await StartConnectedAsync();
         _clip.WriteFailure = new IOException("clipboard locked");
-        await _apiB.UploadTextAsync("locked", null, false);
+        await _apiB.UploadTextAsync(_codec, "locked", null, false);
         await WaitUntilAsync(() => !_errors.IsEmpty && Cached("locked"));
         Assert.Null(_cache.LastAppliedAt);
 
         _clip.WriteFailure = null;
-        await _apiB.UploadTextAsync("works", null, false);
+        await _apiB.UploadTextAsync(_codec, "works", null, false);
         await WaitUntilAsync(() => Written().Contains("works"));
         Assert.Equal(SyncState.Connected, engine.State);
         Assert.Equal(1, Volatile.Read(ref _connects));
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Slow_apply_does_not_trip_the_pong_timeout()
     {
         TestSocket? socket = null;
@@ -724,7 +728,7 @@ public class SyncEngineTests : IAsyncLifetime
         engine.Start();
         await WaitUntilAsync(() => engine.State == SyncState.Connected);
 
-        await _apiB.UploadTextAsync("slow", null, false);
+        await _apiB.UploadTextAsync(_codec, "slow", null, false);
         await slow.Entered.Task.WaitAsync(WaitTimeout);
         for (var i = 0; i < 60; i++)   // a minute of client time while the write is stuck
         {
@@ -735,7 +739,7 @@ public class SyncEngineTests : IAsyncLifetime
         slow.Release.SetResult();
         await WaitUntilAsync(() => slow.Written is not null);
 
-        await _apiB.UploadTextAsync("next", null, false);
+        await _apiB.UploadTextAsync(_codec, "next", null, false);
         await WaitUntilAsync(() => slow.Written is ClipboardContent.Text { Value: "next" });
         Assert.Equal(1, Volatile.Read(ref _connects));
         Assert.Equal(SyncState.Connected, engine.State);
@@ -768,7 +772,7 @@ public class SyncEngineTests : IAsyncLifetime
     {
         var engine = await StartConnectedAsync();
         Assert.True(_sockets.TryPeek(out var socket));
-        await _apiB.UploadTextAsync("first", null, false);
+        await _apiB.UploadTextAsync(_codec, "first", null, false);
         await WaitUntilAsync(() => Written().Contains("first"));
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
 
@@ -777,7 +781,7 @@ public class SyncEngineTests : IAsyncLifetime
         await WaitUntilAsync(() => engine.State == SyncState.Paused);
         Assert.NotEqual(WebSocketState.Open, socket.State);
 
-        await _apiB.UploadTextAsync("while paused", null, false);
+        await _apiB.UploadTextAsync(_codec, "while paused", null, false);
         _time.Advance(TimeSpan.FromSeconds(5));
         Assert.Equal(SyncState.Paused, engine.State);
         Assert.Equal(1, Volatile.Read(ref _connects));
@@ -786,7 +790,7 @@ public class SyncEngineTests : IAsyncLifetime
         return engine;
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Paused_engine_disconnects_and_ignores_updates()
     {
         var engine = await PauseWhileBUploadsAsync();
@@ -798,7 +802,7 @@ public class SyncEngineTests : IAsyncLifetime
         Assert.Equal(["first"], Written());   // the first catch-up after a pause is history only
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Live_clip_after_resume_is_applied()
     {
         var engine = await PauseWhileBUploadsAsync();
@@ -806,12 +810,12 @@ public class SyncEngineTests : IAsyncLifetime
         await WaitUntilAsync(() => engine.State == SyncState.Connected, AdvanceWhilePaused(engine));
 
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await _apiB.UploadTextAsync("after resume", null, false);
+        await _apiB.UploadTextAsync(_codec, "after resume", null, false);
         await WaitUntilAsync(() => Written().Contains("after resume"));
         Assert.Equal(["first", "after resume"], Written());
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Resume_skip_survives_a_failed_reconnect()
     {
         var engine = await PauseWhileBUploadsAsync();
@@ -827,7 +831,7 @@ public class SyncEngineTests : IAsyncLifetime
         // A later reconnect (not after a pause) applies catch-up as usual.
         await engine.StopAsync();
         _server.Clock.Advance(TimeSpan.FromMinutes(1));
-        await _apiB.UploadTextAsync("later", null, false);
+        await _apiB.UploadTextAsync(_codec, "later", null, false);
         engine.Start();
         await WaitUntilAsync(() => engine.State == SyncState.Connected);
         Assert.Equal(["first", "later"], Written());

@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Cache;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Client.Core.Sync;
@@ -18,6 +19,15 @@ public sealed record SyncError(string Message, Exception Exception);
 /// a non-empty offline queue is flushed again every 30 s (a live upload that failed transiently waits there).
 /// A 1008 close or a 401 from any API call raises <see cref="Revoked"/> once and stops for good (State = SignedOut);
 /// any other failure sets State = Offline and reconnects after <see cref="Backoff.Next"/>.
+/// <para>
+/// Every clip from the WebSocket and the catch-up is opened with the current <c>codec</c> (<see cref="ClipCodec.Decode"/>)
+/// before it reaches the cache, so the cache holds plaintext and <see cref="ClipKind.Unknown"/> clips are never applied.
+/// Without a codec (locked) the engine stays disconnected (State = Offline) and checks again every second; each connection
+/// keeps the codec it started with, and a key disposed under it ends that connection like a dropped link.
+/// A <c>vault.reset</c> message, a clip sealed under another key id, or the coordinator's <see cref="ClipboardCoordinator.KeyReset"/>
+/// raises <see cref="KeyReset"/>; a 426 raises <see cref="UpdateRequired"/>. Either is raised once and stops the engine for
+/// good (State = Offline): the host builds a new session once it has the new key or the app was updated.
+/// </para>
 /// <para>
 /// The engine does not own pausing; it polls <c>isPaused</c> every second, disconnecting while paused (State = Paused).
 /// The host must sequence Resume as: <c>await coordinator.OnResumedAsync(ct)</c> while still paused, THEN flip the flag,
@@ -40,7 +50,7 @@ public sealed record SyncError(string Message, Exception Exception);
 /// </para>
 /// </summary>
 public sealed class SyncEngine(
-    PrivatePasteApi api, HistoryCache cache, ClipboardCoordinator coordinator,
+    PrivatePasteApi api, HistoryCache cache, ClipboardCoordinator coordinator, Func<ClipCodec?> codec,
     Func<CancellationToken, Task<WebSocket>> connect, Guid ownDeviceId,
     TimeProvider time, Backoff backoff, Func<bool> isPaused) : IAsyncDisposable
 {
@@ -53,14 +63,16 @@ public sealed class SyncEngine(
     private const int MaxMessageBytes = 8 * 1024 * 1024;   // text clips are at most 1 MB; JSON escaping can grow that
     private static readonly byte[] PingBytes = JsonSerializer.SerializeToUtf8Bytes(new WsMessage(WsTypes.Ping), ProtocolJson.Options);
 
-    private enum Outcome { Failed, Revoked, Paused, Stopped }
-    private enum AbortReason { None, Paused, PongTimeout, SendFailed, Revoked, Nudged }
+    private enum Outcome { Failed, Revoked, Paused, Stopped, KeyReset, UpdateRequired }
+    private enum AbortReason { None, Paused, PongTimeout, SendFailed, Revoked, Nudged, Halted }
 
     private readonly object _gate = new();
     private CancellationTokenSource? _stop;
     private Task? _loop;
     private volatile SyncState _state = SyncState.Offline;
     private int _signedOut;
+    /// <summary>0 while running; otherwise the <see cref="Outcome"/> (KeyReset or UpdateRequired) that stopped the engine for good.</summary>
+    private int _halted;
 
     private readonly object _saveGate = new();
     private bool _dirty;
@@ -81,6 +93,14 @@ public sealed class SyncEngine(
     public event EventHandler? HistoryChanged;
     /// <summary>1008 close or 401: the host signs out. Raised at most once.</summary>
     public event EventHandler? Revoked;
+    /// <summary>
+    /// The server's vault key is no longer this device's (reset by the owner): the engine has stopped, and the host asks for
+    /// the new passphrase. Raised at most once, and never together with <see cref="UpdateRequired"/>. May be raised on the
+    /// thread that ran the coordinator's upload.
+    /// </summary>
+    public event EventHandler? KeyReset;
+    /// <summary>The server answered 426 (this app is too old to sync): the engine has stopped. Raised at most once.</summary>
+    public event EventHandler? UpdateRequired;
     /// <summary>A recovered failure (connect error, clipboard write failure, failed image fetch, ...), for logging.</summary>
     public event EventHandler<SyncError>? Error;
     /// <summary>
@@ -89,16 +109,17 @@ public sealed class SyncEngine(
     /// </summary>
     public event EventHandler<ClipDto>? ClipApplied;
 
-    /// <summary>Runs the loop on a background task. No-op if already running or after a revoke.</summary>
+    /// <summary>Runs the loop on a background task. No-op if already running, after a revoke, or after a key reset or 426.</summary>
     public void Start()
     {
         lock (_gate)
         {
-            if (_loop is not null || Volatile.Read(ref _signedOut) != 0) return;
+            if (_loop is not null || Volatile.Read(ref _signedOut) != 0 || Volatile.Read(ref _halted) != 0) return;
             if (!_thumbnailsHooked)
             {
                 _thumbnailsHooked = true;
                 coordinator.Thumbnails.Stored += (_, _) => { lock (_saveGate) _dirty = true; };   // saved on the next tick or stop
+                coordinator.KeyReset += (_, _) => Halt(Outcome.KeyReset);
             }
             _stop = new CancellationTokenSource();
             var token = _stop.Token;
@@ -117,11 +138,6 @@ public sealed class SyncEngine(
         if (_link is { } link) link.Abort(AbortReason.Nudged);
         else Cancel(_attempt);
         Cancel(_wait);
-
-        static void Cancel(CancellationTokenSource? cts)
-        {
-            try { cts?.Cancel(); } catch (ObjectDisposedException) { }
-        }
     }
 
     public async Task StopAsync()
@@ -149,6 +165,11 @@ public sealed class SyncEngine(
         {
             while (!stop.IsCancellationRequested)
             {
+                if (Volatile.Read(ref _halted) != 0)
+                {
+                    SetState(SyncState.Offline);
+                    return;
+                }
                 if (isPaused())
                 {
                     _resumingFromPause = true;
@@ -157,9 +178,18 @@ public sealed class SyncEngine(
                     await poll.ConfigureAwait(false);
                     continue;
                 }
+                if (codec() is not { } current)
+                {
+                    // Locked: nothing could be opened, so nothing is fetched until there is a key.
+                    var poll = Task.Delay(PollInterval, time, stop);
+                    SetState(SyncState.Offline);
+                    await poll.ConfigureAwait(false);
+                    continue;
+                }
 
                 SetState(SyncState.Connecting);
-                switch (await RunConnectionAsync(stop).ConfigureAwait(false))
+                var outcome = await RunConnectionAsync(current, stop).ConfigureAwait(false);
+                switch (outcome)
                 {
                     case Outcome.Revoked:
                         SignOut();
@@ -169,7 +199,11 @@ public sealed class SyncEngine(
                     case Outcome.Paused:
                         _resumingFromPause = true;
                         continue;
+                    case Outcome.KeyReset or Outcome.UpdateRequired:
+                        Halt(outcome);
+                        continue;   // the check at the top ends the loop
                 }
+                if (Volatile.Read(ref _halted) != 0) continue;   // halted from elsewhere (the coordinator) meanwhile
 
                 if (Interlocked.Exchange(ref _nudged, 0) == 1)
                 {
@@ -198,7 +232,7 @@ public sealed class SyncEngine(
         }
     }
 
-    private async Task<Outcome> RunConnectionAsync(CancellationToken stop)
+    private async Task<Outcome> RunConnectionAsync(ClipCodec c, CancellationToken stop)
     {
         Interlocked.Exchange(ref _nudged, 0);   // this attempt is the fresh start a nudge asks for
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
@@ -222,7 +256,7 @@ public sealed class SyncEngine(
         {
             _attempt = null;
             Report("Could not connect to the server.", e);
-            return await ProbeAuthAsync(stop).ConfigureAwait(false);
+            return await ProbeAuthAsync(stop).ConfigureAwait(false);   // a 426 or 401 also fails the upgrade itself
         }
 
         var link = new Link(socket, lifetime);
@@ -234,8 +268,10 @@ public sealed class SyncEngine(
         DateTimeOffset? connectedAt = null;
         try
         {
-            await CatchUpAsync(lifetime.Token).ConfigureAwait(false);
+            cache.KeyId = c.KeyId;
+            await CatchUpAsync(c, lifetime.Token).ConfigureAwait(false);
             await coordinator.FlushQueueAsync(lifetime.Token).ConfigureAwait(false);
+            if (Volatile.Read(ref _halted) != 0) return Outcome.Failed;   // the flush hit a key reset
             if (isPaused()) return Outcome.Paused;
 
             link.LastPingAt = time.GetUtcNow();
@@ -243,11 +279,19 @@ public sealed class SyncEngine(
             monitor = MonitorAsync(link, timer);
             connectedAt = time.GetUtcNow();
             SetState(SyncState.Connected);
-            return await ReceiveLoopAsync(link).ConfigureAwait(false);
+            return await ReceiveLoopAsync(link, c).ConfigureAwait(false);
         }
         catch (UnauthorizedApiException)
         {
             return Outcome.Revoked;
+        }
+        catch (UpdateRequiredException)
+        {
+            return Outcome.UpdateRequired;
+        }
+        catch (VaultResetSignal)
+        {
+            return Outcome.KeyReset;
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
@@ -266,6 +310,11 @@ public sealed class SyncEngine(
                     break;
                 case AbortReason.PongTimeout:
                     Report("No pong from the server; reconnecting.", e);
+                    break;
+                case AbortReason.Halted:
+                    break;
+                case AbortReason.None when e is VaultKeyClosedException:
+                    Report("The vault key was closed; reconnecting.", e);
                     break;
                 default:
                     Report("Connection to the server lost.", e);
@@ -298,6 +347,10 @@ public sealed class SyncEngine(
         {
             return Outcome.Revoked;
         }
+        catch (UpdateRequiredException)
+        {
+            return Outcome.UpdateRequired;
+        }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
             return Outcome.Stopped;
@@ -306,7 +359,7 @@ public sealed class SyncEngine(
         return Outcome.Failed;
     }
 
-    private async Task CatchUpAsync(CancellationToken ct)
+    private async Task CatchUpAsync(ClipCodec c, CancellationToken ct)
     {
         var caught = new List<ClipDto>();
         var changed = false;
@@ -317,8 +370,9 @@ public sealed class SyncEngine(
         {
             var before = cache.HighestSeq;
             var page = await api.SyncAsync(before, ct: ct).ConfigureAwait(false);
-            foreach (var clip in page.Clips)
+            foreach (var wire in page.Clips)
             {
+                var clip = Decode(c, wire);
                 changed |= cache.Upsert(clip);
                 caught.Add(clip);
                 coordinator.Thumbnails.Request(clip);
@@ -339,7 +393,8 @@ public sealed class SyncEngine(
         var items = cache.Items;
         var present = items.ToDictionary(i => i.Clip.Id, i => i.Clip.Seq);
         var newest = caught
-            .Where(c => c.SourceDeviceId != ownDeviceId && present.TryGetValue(c.Id, out var seq) && seq == c.Seq
+            .Where(c => c.SourceDeviceId != ownDeviceId && c.Kind != ClipKind.Unknown
+                        && present.TryGetValue(c.Id, out var seq) && seq == c.Seq
                         && !(heldCopiedAt.TryGetValue(c.Id, out var heldAt) && c.LastCopiedAt <= heldAt))
             .MaxBy(c => (c.LastCopiedAt, c.Seq));
         if (newest is null || isPaused()) return;
@@ -350,7 +405,7 @@ public sealed class SyncEngine(
         await ApplyAsync(newest, ct).ConfigureAwait(false);
     }
 
-    private async Task<Outcome> ReceiveLoopAsync(Link link)
+    private async Task<Outcome> ReceiveLoopAsync(Link link, ClipCodec c)
     {
         var ct = link.Token;
         var buffer = new byte[16 * 1024];
@@ -379,22 +434,25 @@ public sealed class SyncEngine(
                 Report("Ignored an unreadable message from the server.", e);
                 continue;
             }
-            if (msg is not null) await HandleAsync(msg, link, ct).ConfigureAwait(false);
+            if (msg is not null) await HandleAsync(msg, link, c, ct).ConfigureAwait(false);
         }
     }
 
-    private async Task HandleAsync(WsMessage msg, Link link, CancellationToken ct)
+    private async Task HandleAsync(WsMessage msg, Link link, ClipCodec c, CancellationToken ct)
     {
         switch (msg.Type)
         {
             case WsTypes.Pong:
                 link.PongReceived();
                 return;
-            case WsTypes.ClipCreated when msg.Clip is { } clip:
+            case WsTypes.VaultReset:
+                throw new VaultResetSignal();
+            case WsTypes.ClipCreated when msg.Clip is { } wire:
+                var clip = Decode(c, wire);
                 // Recorded (and saved when due) before the apply, which a stop can cancel midway.
                 if (cache.Upsert(clip)) OnHistoryChanged();
                 coordinator.Thumbnails.Request(clip);
-                if (clip.SourceDeviceId != ownDeviceId && msg.Live == true && !isPaused()
+                if (clip.SourceDeviceId != ownDeviceId && clip.Kind != ClipKind.Unknown && msg.Live == true && !isPaused()
                     && _lastApplied != (clip.Id, clip.Seq)
                     && !(cache.LastAppliedAt > clip.LastCopiedAt))   // out-of-order broadcast of an older clip
                 {
@@ -527,6 +585,34 @@ public sealed class SyncEngine(
             Report("Could not save local history.", e);   // stays dirty: retried on the next tick
         }
     }
+
+    /// <summary>
+    /// Opens a clip from the server. One sealed under another key id means the owner reset encryption: this device's key
+    /// is stale (<see cref="VaultResetSignal"/>), and nothing more is fetched with it.
+    /// </summary>
+    private static ClipDto Decode(ClipCodec c, ClipDto wire) =>
+        wire.KeyId is { } keyId && keyId != c.KeyId ? throw new VaultResetSignal() : c.Decode(wire);
+
+    /// <summary>
+    /// Stops the engine for good on a key reset or a 426, raising the matching event once. Thread-safe: the coordinator
+    /// calls it from whichever thread hit the reset.
+    /// </summary>
+    private void Halt(Outcome why)
+    {
+        if (Interlocked.CompareExchange(ref _halted, (int)why, 0) != 0) return;
+        Raise(why == Outcome.KeyReset ? KeyReset : UpdateRequired, EventArgs.Empty);
+        if (_link is { } link) link.Abort(AbortReason.Halted);
+        else Cancel(_attempt);
+        Cancel(_wait);
+    }
+
+    private static void Cancel(CancellationTokenSource? cts)
+    {
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>The server's vault key is not this device's any more (a <c>vault.reset</c> message, or a foreign key id).</summary>
+    private sealed class VaultResetSignal() : Exception("Encryption was reset.");
 
     private void SignOut()
     {

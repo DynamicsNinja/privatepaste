@@ -4,6 +4,8 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using PrivatePaste.Client.Core.Platform;
+using PrivatePaste.Client.Core.Sync;
+using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Desktop.Input;
 using PrivatePaste.Protocol;
 using PrivatePaste.Desktop.Logging;
@@ -155,7 +157,8 @@ public partial class App : Application
         _activation = new PopupActivation(
             isSignedIn: () => _host?.IsSignedIn == true,
             isPaused: () => _host?.Paused == true,
-            restore: (id, ct) => (_host?.Api ?? throw new InvalidOperationException("Signed out.")).RestoreAsync(id, ct),
+            restore: async (id, ct) => Codec().Decode(
+                await (_host?.Api ?? throw new InvalidOperationException("Signed out.")).RestoreAsync(id, ct)),
             applyRemote: (clip, ct) => (_host?.Coordinator ?? throw new InvalidOperationException("Signed out.")).ApplyRemoteAsync(clip, ct),
             writeLocalText: (text, ct) => (_host ?? throw new InvalidOperationException("Shut down.")).Platform.Clipboard
                 .WriteAsync(new ClipboardContent.Text(text), ct),
@@ -237,22 +240,32 @@ public partial class App : Application
         window.ShowAt(cursor);
     }
 
+    /// <summary>The server can't search: page through the history and match on this device, up to 50 hits.</summary>
     private async Task<IReadOnlyList<ClipDto>> SearchServerAsync(string query, CancellationToken ct)
     {
-        var api = _host?.Api;
-        if (api is null) return [];
-        return (await api.ListAsync(query, null, 50, ct)).Items;
+        if (_host?.Api is not { } api || _host.Codec is not { } codec) return [];
+        var hits = new List<ClipDto>();
+        await foreach (var clip in new OlderClipSearch(api, codec).SearchAsync(query, null, ct))
+        {
+            hits.Add(clip);
+            if (hits.Count == 50) break;
+        }
+        return hits;
     }
 
-    private Task<ClipDto> PinFromPopupAsync(Guid id, bool pinned) =>
-        (_host?.Api ?? throw new InvalidOperationException("Signed out.")).PinAsync(id, pinned);
+    private async Task<ClipDto> PinFromPopupAsync(Guid id, bool pinned) =>
+        Codec().Decode(await (_host?.Api ?? throw new InvalidOperationException("Signed out.")).PinAsync(id, pinned));
 
     private async Task<IReadOnlyList<ClipDto>> ListPinnedFromServerAsync(string query, CancellationToken ct)
     {
-        var api = _host?.Api;
-        if (api is null) return [];
-        return (await api.ListPinnedAsync(query.Length == 0 ? null : query, null, 50, ct)).Items;
+        if (_host?.Api is not { } api || _host.Codec is not { } codec) return [];
+        return (await api.ListPinnedAsync(null, 50, ct)).Items.Select(codec.Decode)
+            .Where(c => query.Length == 0 || c.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
+
+    /// <summary>The codec that opens what the server returns; there is none while the vault is locked.</summary>
+    private ClipCodec Codec() => _host?.Codec ?? throw new InvalidOperationException("Locked.");
 
     private Task ActivateFromPopupAsync(ClipDto clip)
     {

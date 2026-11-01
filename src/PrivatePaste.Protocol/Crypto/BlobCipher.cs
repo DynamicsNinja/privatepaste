@@ -31,7 +31,7 @@ public static class BlobCipher
         noncePrefix.Span.CopyTo(header.AsSpan(1));
         await output.WriteAsync(header, ct);
 
-        using var aes = new AesGcm(key.EncKey, TagSize);
+        using var aes = NewAes(key);
         var current = new byte[ChunkSize];
         var next = new byte[ChunkSize];
         var sealedChunk = new byte[ChunkSize + TagSize];
@@ -69,7 +69,7 @@ public static class BlobCipher
         if (await input.ReadAtLeastAsync(header, HeaderSize, throwOnEndOfStream: false, ct) < HeaderSize || header[0] != Version)
             throw new CryptographicException("Not an encrypted blob.");
 
-        using var aes = new AesGcm(key.EncKey, TagSize);
+        using var aes = NewAes(key);
         var current = new byte[ChunkSize + TagSize];
         var next = new byte[ChunkSize + TagSize];
         var chunk = new byte[ChunkSize];
@@ -96,6 +96,14 @@ public static class BlobCipher
         {
             CryptographicOperations.ZeroMemory(chunk);
         }
+    }
+
+    // AesGcm keeps its own copy of the key, so the subkey copy is wiped at once.
+    private static AesGcm NewAes(VaultKey key)
+    {
+        var encKey = key.EncKey;
+        try { return new AesGcm(encKey, TagSize); }
+        finally { CryptographicOperations.ZeroMemory(encKey); }
     }
 
     private static byte[] Nonce(byte[] header, uint index)

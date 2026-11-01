@@ -8,11 +8,11 @@ namespace PrivatePaste.Tests.Client;
 
 public partial class ClipboardCoordinatorTests
 {
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Copy_read_before_a_remote_write_is_not_mistaken_for_the_own_write()
     {
         await StartAsync();
-        var remoteImage = await _api.UploadImageAsync(TestImages.MakePng(5, 5, 1).ToArray(), null, false);
+        var remoteImage = await _api.UploadImageAsync(_codec, TestImages.MakePng(5, 5, 1).ToArray());
         var mine = TestImages.MakePng(5, 5, 2).ToArray();
         var release = new TaskCompletionSource();
         _handler.Hold = release.Task;
@@ -28,14 +28,14 @@ public partial class ClipboardCoordinatorTests
         await Task.WhenAll(t1, apply, t2);
 
         var hashes = (await ServerClipsAsync()).Select(c => c.Hash).ToList();
-        Assert.Contains(ImageHashing.HashPng(mine), hashes);
+        Assert.Contains(PrivatePaste.Protocol.Crypto.KeyedHash.For(_vaultKey, ImageHashing.HashPng(mine)), hashes);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Text_copy_right_after_a_remote_image_write_is_uploaded()
     {
         await StartAsync();
-        var up = await _api.UploadImageAsync(TestImages.MakePng(5, 5, 1).ToArray(), null, false);
+        var up = await _api.UploadImageAsync(_codec, TestImages.MakePng(5, 5, 1).ToArray());
         await _c.ApplyRemoteAsync(up, default);
         _clip.Current = new ClipboardContent.Text("typed text");
         await _c.OnClipboardChangedAsync(default);
@@ -68,13 +68,13 @@ public partial class ClipboardCoordinatorTests
         Assert.Empty(_notes.Messages);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Save_failure_notifies_once_and_latch_resets_after_a_successful_save()
     {
         await StartAsync();
         var path = Path.Combine(_dir, "h-latch");
         Directory.CreateDirectory(path);   // File.Move onto a directory fails
-        var c = new ClipboardCoordinator(_clip, _api, new HistoryCache(path, _key), _queue, _echo, _notes, _time, () => false);
+        var c = new ClipboardCoordinator(_clip, _api, () => _codec, new HistoryCache(path, _key), _queue, _echo, _notes, _time, () => false);
         _queue.Enqueue(new ClipboardContent.Text("a"), _time.GetUtcNow());
         _queue.Enqueue(new ClipboardContent.Text("b"), _time.GetUtcNow());
         await c.FlushQueueAsync(default);
@@ -92,7 +92,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Equal(2, _notes.Messages.Count);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Same_content_is_uploaded_after_a_401_and_re_sign_in()
     {
         await StartAsync();
@@ -105,7 +105,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Equal("keep me", Assert.Single(await ServerClipsAsync()).Text);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task Rejected_content_is_not_remembered_so_a_retry_is_attempted()
     {
         await StartAsync();
@@ -131,7 +131,7 @@ public partial class ClipboardCoordinatorTests
         _handler.FailTextUpload = body => body.Contains("poison");
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task A_poison_item_rotates_to_the_back_and_later_items_still_upload()
     {
         await StartAsync();
@@ -178,7 +178,7 @@ public partial class ClipboardCoordinatorTests
         Assert.Equal(2, item.Attempts);
     }
 
-    [Fact(Skip = "Task 13 rewrites the client upload path")]
+    [Fact]
     public async Task An_uploaded_image_gets_a_thumbnail_in_the_cache_off_the_gate()
     {
         await StartAsync();
