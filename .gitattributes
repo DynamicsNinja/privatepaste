@@ -1,4 +1,5 @@
 *.sh text eol=lf
 # Hashed byte for byte by tests on every platform.
 src/PrivatePaste.Server/wwwroot/js/common-passphrases.txt text eol=lf
+android/app/src/main/assets/common-passphrases.txt text eol=lf
 src/PrivatePaste.Server/wwwroot/lib/hash-wasm/* -text
