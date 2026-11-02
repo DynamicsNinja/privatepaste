@@ -35,12 +35,13 @@ export function indexedDbBackend(indexedDB, name = 'privatepaste') {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+  // `work` returns one request, or an array of them read in the same transaction.
   const run = async (mode, work) => {
     const db = await opened;
     return new Promise((resolve, reject) => {
       const tx = db.transaction('kv', mode);
       const request = work(tx.objectStore('kv'));
-      tx.oncomplete = () => resolve(request?.result);
+      tx.oncomplete = () => resolve(Array.isArray(request) ? request.map(r => r.result) : request?.result);
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
     });
@@ -52,10 +53,8 @@ export function indexedDbBackend(indexedDB, name = 'privatepaste') {
     delete: key => run('readwrite', s => s.delete(key)).then(() => undefined),
     entries: async prefix => {
       const range = IDBKeyRange.bound(prefix, prefix + LAST);
-      const [keys, values] = await Promise.all([
-        run('readonly', s => s.getAllKeys(range)),
-        run('readonly', s => s.getAll(range)),
-      ]);
+      // One transaction, so a write can't land between the keys and the values.
+      const [keys, values] = await run('readonly', s => [s.getAllKeys(range), s.getAll(range)]);
       return keys.map((k, i) => [k, values[i]]);
     },
     clear: () => run('readwrite', s => s.clear()).then(() => undefined),
@@ -68,6 +67,7 @@ export function indexedDbBackend(indexedDB, name = 'privatepaste') {
 export function openStore(backend) {
   const kv = typeof backend?.open === 'function' ? indexedDbBackend(backend) : backend;
   let cache = null;          // [clip], newest first; loaded on first use
+  let stateWrites = Promise.resolve();   // state updates one after another, so none is lost
   let queueCounter = null;
 
   const loadCache = async () => {
@@ -102,10 +102,14 @@ export function openStore(backend) {
 
     getState: async () => ({ ...DEFAULT_STATE, ...((await kv.get('state')) ?? {}) }),
     /** Merges the given fields into the stored state. */
-    setState: async partial => {
-      const next = { ...DEFAULT_STATE, ...((await kv.get('state')) ?? {}), ...partial };
-      await kv.set('state', next);
-      return next;
+    setState: partial => {
+      const write = stateWrites.then(async () => {
+        const next = { ...DEFAULT_STATE, ...((await kv.get('state')) ?? {}), ...partial };
+        await kv.set('state', next);
+        return next;
+      });
+      stateWrites = write.catch(() => {});
+      return write;
     },
 
     /** The cached clips, newest first (lastCopiedAt, then seq). */

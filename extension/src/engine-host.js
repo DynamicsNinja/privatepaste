@@ -1,9 +1,8 @@
 // Builds the sync engine with the real dependencies of the offscreen document (IndexedDB, fetch, WebSocket, the system
 // clock) and feeds it what the clipboard poller sees. offscreen.js calls startEngine once (ruling R-X1).
 //
-// The WebSocket: a browser can't set the Authorization or X-PrivatePaste-Protocol header on the upgrade request, and the
-// server's /ws takes the token only from that header. Until something adds them (a declarativeNetRequest session rule
-// for the server's /ws, or a server change), the socket fails to open and the engine polls /api/sync every 2 s instead.
+// The WebSocket: a browser can't set headers on the upgrade request, so the engine offers the protocol version and the
+// token as subprotocols (docs/api.md, WebSocket). A server from before that answers 401 and the engine polls instead.
 
 import { createApi } from './core/api.js';
 import { openStore } from './core/store.js';
@@ -12,7 +11,7 @@ import { createEngine } from './core/engine.js';
 export const STATUS_MESSAGE = 'engine.statusChanged';
 
 /**
- * @param {{clipboard: {writeText, writeImage}, startPolling: (onChange: (item) => void, intervalMs?: number) => void}} platform
+ * @param {{clipboard: {readClipboard, writeText, writeImage}, startPolling: (onChange: (item) => void, intervalMs?: number) => void}} platform
  * @returns the engine (see core/engine.js), with `ready`: a promise that settles once the stored state is loaded.
  */
 export function startEngine({ clipboard, startPolling }) {
@@ -29,7 +28,8 @@ export function startEngine({ clipboard, startPolling }) {
       } catch { /* no receiver */ }
     },
   });
-  const ready = engine.start();
+  // A store that can't be opened leaves the engine signed out; copies are then ignored rather than failing each poll.
+  const ready = engine.start().catch(() => {});
   startPolling(item => { ready.then(() => engine.onLocalChange(item)); });
   return Object.assign(engine, { ready });
 }

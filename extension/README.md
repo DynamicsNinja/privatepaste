@@ -34,6 +34,9 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   sets up encryption on the web UI and drives `popup.html`: sign in, unlock, rows, chips, search, tabs, Copy, Download,
   Pause syncing, Sign out. The image Copy's `navigator.clipboard.write` is stubbed, so the real clipboard is never
   written. With `PP_SCREENSHOT_DIR` set it saves the popup in dark and light.
+- Real Edge, by hand: `node extension/test/socket.playwright.mjs` starts its own local server (throwaway data), loads a
+  fake-clipboard build and checks that the sync socket opens with the subprotocol token and that a clip from another
+  device reaches the (fake) clipboard through it. `PP_WS_DEBUG=1` adds the server's request log.
 
 ## How it works
 

@@ -103,3 +103,8 @@ test('decodeClip of an unknown kind, another key or a bad payload gives unknown'
   assert.deepEqual(await codec.decodeClip(await wire('file', { files: [{ name: 'a', size: -1 }] }, { blobCount: 1 }), vault), { kind: 'unknown' });
   assert.deepEqual(await codec.decodeClip(await wire('file', { files: [{ size: 1 }] }, { blobCount: 1 }), vault), { kind: 'unknown' });
 });
+
+test('decodeClip ignores payload fields it does not know', async () => {
+  assert.deepEqual(await codec.decodeClip(await wire('text', { text: 'hi', html: '<b>hi</b>', later: { x: 1 } }), vault), { kind: 'text', text: 'hi' });
+  assert.deepEqual(await codec.decodeClip(await wire('image', { width: 1, height: 2, exif: 6 }), vault), { kind: 'image', width: 1, height: 2 });
+});

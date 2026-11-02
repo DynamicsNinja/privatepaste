@@ -82,42 +82,6 @@ test('local copy uploads', async () => {
   assert.equal((await env.store.getCache())[0].id, 'up1');
 });
 
-test('own write is not uploaded', async () => {
-  const env = await setup();
-  const socket = await connected(env);
-  await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'from the\nphone' }));
-  assert.deepEqual(env.clipboard.written, ['from the\nphone']);
-  // The poller reads the write back (Windows may hand it back with CRLF; the hash is the same).
-  await env.engine.onLocalChange({ text: 'from the\r\nphone' });
-  await env.engine.onLocalChange({ text: 'from the\nphone' });
-  assert.equal(env.server.uploads.length, 0);
-  // Not re-applied either when the same message comes again.
-  await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'from the\nphone' }));
-  assert.equal(env.clipboard.written.length, 1);
-});
-
-test('older live clip does not overwrite a newer local copy', async () => {
-  const env = await setup();
-  const socket = await connected(env);
-  const T = env.clock.now();
-  await env.engine.onLocalChange({ text: 'copied here' });
-  assert.equal(env.server.stored[0].lastCopiedAt, iso(T));
-  await live(socket, await clip({ id: 'p1', seq: 200, at: T - 1000, text: 'older from the phone' }));
-  assert.deepEqual(env.clipboard.written, []);
-  assert.ok((await env.store.getCache()).some(c => c.id === 'p1'));
-  // A newer one still applies.
-  await live(socket, await clip({ id: 'p2', seq: 201, at: T + 1000, text: 'newer from the phone' }));
-  assert.deepEqual(env.clipboard.written, ['newer from the phone']);
-});
-
-test("own device's clip is not applied", async () => {
-  const env = await setup();
-  const socket = await connected(env);
-  await live(socket, await clip({ id: 'o1', seq: 1, at: env.clock.now() + 1000, device: OWN }));
-  assert.deepEqual(env.clipboard.written, []);
-  assert.ok((await env.store.getCache()).some(c => c.id === 'o1'));
-});
-
 test('non-live clip is not applied', async () => {
   const env = await setup();
   const socket = await connected(env);
@@ -561,4 +525,245 @@ test('download gives the decrypted file and its safe name', async () => {
   assert.equal(file.mime, 'text/plain');
   assert.equal(await env.engine.copy('f'), false);
   await assert.rejects(() => env.engine.download('f', 2));
+});
+
+// ---- the rules that matter most, on both links: the socket, and polling /api/sync (when the socket can't open) ----
+
+/** Connected with an open socket, or (mode 'poll') with the socket refused, so the engine polls. */
+async function connectedIn(env, mode) {
+  if (mode === 'socket') return connected(env);
+  env.ws.control.refuse = true;
+  await env.engine.start();
+  await until(() => env.engine.status().state === 'syncing' && env.engine.status().link === 'polling', 'polling');
+  return null;
+}
+
+/** Clips from another device reaching the engine: live messages on the socket, or the next poll's page. */
+async function deliver(env, mode, socket, wires) {
+  if (mode === 'socket') {
+    for (const wire of wires) await live(socket, wire);
+    return;
+  }
+  env.server.syncPages.push({ clips: wires, deletedIds: [], latestSeq: Math.max(...wires.map(w => w.seq)), hasMore: false });
+  await env.clock.advance(POLL_MS);
+  await settle(30);
+}
+
+/** The user copies text in another app and the poller reports it. */
+async function userCopies(env, text) {
+  env.clipboard.copyHere(text);
+  await env.engine.onLocalChange({ text });
+}
+
+for (const mode of ['socket', 'poll']) {
+  test(`own write is not uploaded (${mode})`, async () => {
+    const env = await setup();
+    const socket = await connectedIn(env, mode);
+    const wire = await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'from the\nphone' });
+    await deliver(env, mode, socket, [wire]);
+    assert.deepEqual(env.clipboard.written, ['from the\nphone']);
+    // The poller reads the write back (Windows may hand it back with CRLF; the hash is the same).
+    await env.engine.onLocalChange({ text: 'from the\r\nphone' });
+    await env.engine.onLocalChange({ text: 'from the\nphone' });
+    assert.equal(env.server.uploads.length, 0);
+    // Not re-applied either when the same clip comes again.
+    await deliver(env, mode, socket, [wire]);
+    assert.equal(env.clipboard.written.length, 1);
+  });
+
+  test(`older live clip does not overwrite a newer local copy (${mode})`, async () => {
+    const env = await setup();
+    const socket = await connectedIn(env, mode);
+    const T = env.clock.now();
+    await userCopies(env, 'copied here');
+    assert.equal(env.server.stored[0].lastCopiedAt, iso(T));
+    await deliver(env, mode, socket, [await clip({ id: 'p1', seq: 200, at: T - 1000, text: 'older from the phone' })]);
+    assert.deepEqual(env.clipboard.written, []);
+    assert.ok((await env.store.getCache()).some(c => c.id === 'p1'));
+    // A newer one still applies.
+    await deliver(env, mode, socket, [await clip({ id: 'p2', seq: 201, at: env.clock.now() + 1000, text: 'newer from the phone' })]);
+    assert.deepEqual(env.clipboard.written, ['newer from the phone']);
+  });
+
+  test(`own device's clip is not applied (${mode})`, async () => {
+    const env = await setup();
+    const socket = await connectedIn(env, mode);
+    await deliver(env, mode, socket, [await clip({ id: 'o1', seq: 1, at: env.clock.now() + 1000, device: OWN })]);
+    assert.deepEqual(env.clipboard.written, []);
+    assert.ok((await env.store.getCache()).some(c => c.id === 'o1'));
+  });
+
+  test(`a copy the poller has not read yet is not overwritten (${mode})`, async () => {
+    const env = await setup();
+    const socket = await connectedIn(env, mode);
+    await userCopies(env, 'known');
+    env.clipboard.copyHere('just copied');   // not polled yet
+    await deliver(env, mode, socket, [await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' })]);
+    assert.deepEqual(env.clipboard.written, []);
+    assert.deepEqual(env.clipboard.current, { text: 'just copied' });
+    assert.ok((await env.store.getCache()).some(c => c.id === 'p1'));
+    // Taken as the copy it is: uploaded now, and not again when the poller reports it.
+    assert.equal(env.server.uploads.length, 2);
+    assert.deepEqual(await e2e.openPayload(keys, env.server.uploads[1].meta.payload), { text: 'just copied' });
+    await env.engine.onLocalChange({ text: 'just copied' });
+    assert.equal(env.server.uploads.length, 2);
+  });
+
+  test(`a copy waiting to be handled is not overwritten (${mode})`, async () => {
+    const env = await setup();
+    const socket = await connectedIn(env, mode);
+    const wire = await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' });
+    let pending;
+    if (mode === 'socket') {
+      socket.receive({ type: 'clip.created', clip: wire, live: true });
+      pending = env.engine.onLocalChange({ text: 'copied meanwhile' });
+    } else {
+      let release;
+      env.server.syncHold = new Promise(r => { release = r; });
+      env.server.syncPages.push({ clips: [wire], deletedIds: [], latestSeq: 1, hasMore: false });
+      await env.clock.advance(POLL_MS);   // the poll is waiting for /api/sync
+      pending = env.engine.onLocalChange({ text: 'copied meanwhile' });
+      env.server.syncHold = null;
+      release();
+    }
+    await pending;
+    await settle(30);
+    assert.deepEqual(env.clipboard.written, []);
+    assert.equal(env.server.uploads.length, 1);
+    assert.ok((await env.store.getCache()).some(c => c.id === 'p1'));
+  });
+}
+
+test('the clipboard as it was at start is the baseline, not a new copy', async () => {
+  const env = await setup();
+  env.clipboard.copyHere('there before the extension started');
+  const socket = await connected(env);
+  await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+  assert.deepEqual(env.clipboard.written, ['incoming']);
+  assert.equal(env.server.uploads.length, 0);
+});
+
+test('catch-up applies only the newest (poll)', async () => {
+  const env = await setup();
+  await connectedIn(env, 'poll');
+  const at = env.clock.now();
+  await deliver(env, 'poll', null, [
+    await clip({ id: 'a', seq: 1, at: at + 1000, text: 'first' }),
+    await clip({ id: 'c', seq: 3, at: at + 3000, text: 'third' }),
+    await clip({ id: 'b', seq: 2, at: at + 2000, text: 'second' }),
+  ]);
+  assert.deepEqual(env.clipboard.written, ['third']);
+  // Older than what was applied: history only.
+  await deliver(env, 'poll', null, [await clip({ id: 'd', seq: 4, at: at + 2500, text: 'late' })]);
+  assert.deepEqual(env.clipboard.written, ['third']);
+});
+
+// ---- the socket's credentials (ruling R-X8) ----
+
+test('the socket offers the protocol version and the token as subprotocols', async () => {
+  const env = await setup();
+  const socket = await connected(env);
+  assert.equal(socket.url, 'ws://localhost:5202/ws');
+  assert.deepEqual(socket.protocols, ['privatepaste.v2', 'privatepaste.auth.tok']);
+  assert.equal(env.engine.status().link, 'socket');
+  await env.engine.signOut();
+  assert.equal(env.engine.status().link, null);
+});
+
+test('after a sign-in the socket offers the new token', async () => {
+  const env = await setup({ signedIn: false, wrap: vectors.passphraseWrap[0].wrap });
+  await env.engine.start();
+  await env.engine.signIn(SERVER, 'owner', 'dev', 'Edge');
+  await env.engine.unlock(vectors.passphraseWrap[0].passphrase);
+  await until(() => env.ws.open().length === 1, 'the socket');
+  assert.deepEqual(env.ws.open()[0].protocols, ['privatepaste.v2', 'privatepaste.auth.tok-new']);
+});
+
+test('the status says when it polls instead of using the socket', async () => {
+  const env = await setup();
+  await connectedIn(env, 'poll');
+  assert.equal(env.engine.status().link, 'polling');
+  assert.ok(env.statuses.some(s => s.link === 'polling'));
+});
+
+// ---- more client rules ----
+
+test('409 Encryption was reset on a queued upload relocks and drops the queue', async () => {
+  const env = await setup();
+  await env.store.enqueue({ copiedAt: Date.now(), kind: 'text', sealed: await e2e.encryptBlob(keys, new TextEncoder().encode('queued')) });
+  await env.store.enqueue({ copiedAt: Date.now(), kind: 'text', sealed: await e2e.encryptBlob(keys, new TextEncoder().encode('queued too')) });
+  env.server.uploadErrors.push(new ApiError(409, 'Encryption was reset', MESSAGES.reset));
+  await env.engine.start();
+  await until(() => env.engine.status().state === 'locked', 'locked');
+  assert.equal(env.server.uploads.length, 1);
+  assert.equal(env.server.uploads[0].meta.backfill, true);
+  assert.equal(env.engine.status().message, MESSAGES.reset);
+  assert.deepEqual(await env.store.queue(), []);
+  assert.equal(await env.store.getVault(), null);
+});
+
+test('an older seq of a clip arriving late does not replace the newer one', async () => {
+  const env = await setup();
+  const socket = await connected(env);
+  const at = env.clock.now() - 1000;
+  await live(socket, await clip({ id: 'x', seq: 5, at, extra: { pinnedAt: iso(at) } }), false);
+  await live(socket, await clip({ id: 'x', seq: 4, at }), false);
+  const [cached] = await env.store.getCache();
+  assert.equal(cached.seq, 5);
+  assert.ok(cached.pinnedAt);
+  // Nor does a deleted clip come back.
+  socket.receive({ type: 'clip.deleted', id: 'x', seq: 6 });
+  await settle(30);
+  await live(socket, await clip({ id: 'x', seq: 5, at }), false);
+  assert.deepEqual(await env.store.getCache(), []);
+});
+
+test('a vault gone at connect wipes the key and asks the owner to set encryption up', async () => {
+  const env = await setup({ wrap: null });
+  await env.store.putClips([await clip({ id: 'x', seq: 1, at: 1000 })]);
+  await env.engine.start();
+  await until(() => env.engine.status().state === 'noVault', 'noVault');
+  assert.equal(env.engine.status().message, MESSAGES.ownerSetUp);
+  assert.equal(await env.store.getVault(), null);
+  assert.deepEqual(await env.store.getCache(), []);
+});
+
+test('an upload answered "Set up encryption first." wipes the key too', async () => {
+  const env = await setup();
+  await connected(env);
+  env.server.uploadErrors.push(new ApiError(409, 'Conflict', 'Set up encryption first.'));
+  await env.engine.onLocalChange({ text: 'x' });
+  await until(() => env.engine.status().state === 'noVault', 'noVault');
+  assert.equal(await env.store.getVault(), null);
+});
+
+test('reconnects back off 1, 2, 5, 10, then 30 s', async () => {
+  const env = await setup();
+  env.server.infoError = new TypeError('fetch failed');
+  await env.engine.start();
+  await until(() => env.server.count('serverInfo') === 1, 'the first try');
+  for (const [i, delay] of [1000, 2000, 5000, 10000, 30000, 30000].entries()) {
+    await env.clock.advance(delay - 1);
+    assert.equal(env.server.count('serverInfo'), i + 1, `not before ${delay} ms`);
+    await env.clock.advance(1);
+    await until(() => env.server.count('serverInfo') === i + 2, `the try after ${delay} ms`);
+  }
+  assert.equal(env.engine.status().state, 'offline');
+});
+
+test('a second sign-in revokes the previous token', async () => {
+  const env = await setup();
+  await connected(env);
+  await env.engine.signIn(SERVER, 'owner', 'dev', 'Edge');
+  assert.equal(env.server.count('logout'), 1);
+  assert.equal((await env.store.getSession()).token, 'tok-new');
+});
+
+test('a queued copy the server rejects is dropped with a plain notice', async () => {
+  const env = await setup();
+  await env.store.enqueue({ copiedAt: Date.now(), kind: 'text', sealed: await e2e.encryptBlob(keys, new TextEncoder().encode('q')) });
+  env.server.uploadErrors.push(new ApiError(400, 'Bad Request', null));
+  await connected(env);
+  assert.deepEqual(await env.store.queue(), []);
+  assert.ok(env.statuses.some(st => st.message === MESSAGES.queuedRejected));
 });
