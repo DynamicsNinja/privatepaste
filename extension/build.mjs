@@ -1,8 +1,8 @@
 // Builds the unpacked extension: node extension/build.mjs [--version X.Y.Z] [--fake-clipboard] [--out <dir>]
 //
-// No bundler: src/ is copied as is, and the crypto (e2e.js and its Argon2 library) is copied from the web UI so there
-// is only ever one copy of it in the repo. --fake-clipboard swaps the real clipboard for an in-memory one that the
-// automated end-to-end tests drive, so they never touch the OS clipboard.
+// No bundler: src/ is copied as is, and the crypto (e2e.js and its Argon2 library) and the Sora font are copied from
+// the web UI so there is only ever one copy of them in the repo. --fake-clipboard swaps the real clipboard for an
+// in-memory one that the automated end-to-end tests drive, so they never touch the OS clipboard.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -46,6 +46,8 @@ cpSync(join(here, 'src'), args.out, {
 });
 cpSync(join(wwwroot, 'js', 'e2e.js'), join(args.out, 'js', 'e2e.js'));
 cpSync(join(wwwroot, 'lib', 'hash-wasm'), join(args.out, 'lib', 'hash-wasm'), { recursive: true });
+// The popup's Sora font (popup.css loads fonts/*.woff2), from the web UI like the crypto, with its licence.
+cpSync(join(wwwroot, 'fonts'), join(args.out, 'fonts'), { recursive: true });
 
 if (args.fakeClipboard)
   cpSync(join(here, 'src', 'platform', 'fake-clipboard.js'), join(args.out, 'platform', 'clipboard.js'));

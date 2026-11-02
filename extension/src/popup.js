@@ -5,6 +5,7 @@
 
 import { fromBase64 } from './core/base64.js';
 import { createAsk, EngineError, FAILED } from './ui/ask.js';
+import { historyWatch } from './ui/history-watch.js';
 import { formatSize, nextFilter } from './js/e2e.js';
 import * as ui from './ui/rows.js';
 
@@ -35,6 +36,9 @@ const thumbUrls = [];
 const expanded = new Set();
 
 const ask = createAsk(message => chrome.runtime.sendMessage(message));
+const watch = historyWatch(ask);
+// Thumbnails that failed earlier are asked for again once per popup open (the first load), not on every refresh.
+let thumbsRetried = false;
 
 /** Frees a download URL the offscreen document made (it also frees it after a minute, in case the popup closed). */
 const release = url => ask({ type: 'engine.release', url }).catch(() => {});
@@ -184,7 +188,9 @@ function clearList() {
 async function loadHistory() {
   const at = ++generation;
   try {
-    const answer = await ask({ type: 'engine.history', pinned: tab === 'pinned' });
+    await watch.changed();   // remember the version this list is drawn from
+    const answer = await ask({ type: 'engine.history', pinned: tab === 'pinned', retryThumbs: !thumbsRetried });
+    thumbsRetried = true;
     if (at !== generation) return;
     rows = answer.rows;
     older = [];
@@ -197,21 +203,24 @@ async function loadHistory() {
   }
 }
 
-/** While the popup is open: picks up new clips, pins and the status. Draws again only when the list changed. */
+/**
+ * While the popup is open: picks up the status, new clips and pins. Costs one status and one version answer while
+ * nothing changes; the rows are asked for (and decrypted) only after the engine's history version moved.
+ */
 async function refresh() {
   try {
     render(await ask({ type: 'engine.status' }));
     if (view !== 'history') return;
     const at = generation;
-    const pinned = tab === 'pinned';
-    const light = await ask({ type: 'engine.history', pinned, thumbs: false });
-    if (at !== generation || ui.listSignature(light.rows) === signature) return;
-    const answer = await ask({ type: 'engine.history', pinned });
-    if (at !== generation) return;
+    if (!(await watch.changed()) || at !== generation) return;
+    const answer = await ask({ type: 'engine.history', pinned: tab === 'pinned' });
+    if (at !== generation || ui.listSignature(answer.rows) === signature) return;
     rows = answer.rows;
     signature = ui.listSignature(rows);
     drawRows();
-  } catch { /* shown on the next user action */ }
+  } catch {
+    watch.forget();   // try the rows again on the next tick; errors show on the next user action
+  }
 }
 
 async function loadOlder(button, all) {

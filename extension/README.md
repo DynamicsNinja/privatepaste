@@ -11,7 +11,8 @@ node extension/build.mjs [--version X.Y.Z] [--fake-clipboard] [--out <dir>]
 
 Writes the unpacked extension to `extension/dist/` (or `--out`). There is no bundler: `src/` is copied as is, and the
 crypto is copied in from the web UI (`src/PrivatePaste.Server/wwwroot/js/e2e.js` to `js/e2e.js`, and
-`wwwroot/lib/hash-wasm/` to `lib/hash-wasm/`), so there is only one copy of it in the repo. `--version` defaults to
+`wwwroot/lib/hash-wasm/` to `lib/hash-wasm/`), so there is only one copy of it in the repo. The popup's Sora font
+comes the same way (`wwwroot/fonts/` to `fonts/`). `--version` defaults to
 `0.0.0`; a prerelease such as `0.6.0-rc1` becomes `version` `0.6.0` and `version_name` `0.6.0-rc1`.
 
 `--fake-clipboard` replaces `platform/clipboard.js` with `platform/fake-clipboard.js`, an in-memory clipboard that
@@ -44,10 +45,13 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   from a one-minute alarm.
 - `offscreen.html` / `offscreen.js`, the offscreen document (reason `CLIPBOARD`), hosts what keeps running: the
   clipboard poller (`core/poller.js`, once a second) and the sync engine (`engine-host.js`).
-- `popup.html` / `popup.js`, the toolbar popup, holds no keys: it asks the engine through runtime messages
+- `popup.html` / `popup.js`, the toolbar popup (the manifest's `action`), holds no keys: it asks the engine through runtime messages
   (`messages.js`, answered by the offscreen document; bytes cross as base64) and draws the rows with `ui/rows.js`.
   It asks for the host permission of the server's origin in the Sign in click. Copy on an image row is written by the
   popup itself (`navigator.clipboard.write`), after telling the engine so the poller doesn't send it back.
+  While open it refreshes every 2 s, asking only for the status and `engine.historyVersion` (a counter the engine bumps
+  on every cache change); rows are fetched and decrypted only when that moved. Downloads go through a blob URL made by
+  the offscreen document, so no file crosses the message channel.
 - `platform/clipboard.js` reads through `document.execCommand('paste')` into a contenteditable (plain text and the
   first `image/png` item) and writes text through a `copy` event and `execCommand('copy')`. The async Clipboard API
   doesn't work there, because an offscreen document never has the focus.

@@ -195,6 +195,10 @@ try {
         }
       },
     });
+    // Counts what the popup asks the engine, so the idle refresh can be checked.
+    window.__asked = [];
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
+    chrome.runtime.sendMessage = (message, ...rest) => { window.__asked.push(message?.type); return send(message, ...rest); };
     Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { window.__writes.push({ types: ['text'] }); } });
   });
   // page.waitForFunction evaluates a string in the page, which the extension's CSP blocks; this polls with evaluate.
@@ -255,6 +259,13 @@ try {
     }
     await popup.emulateMedia({ colorScheme: 'dark' });
   }
+
+  step('while nothing changes, the refresh asks for the status and the history version only');
+  await popup.evaluate(() => { window.__asked.length = 0; });
+  await popup.waitForTimeout(5000);
+  const idle = await popup.evaluate(() => window.__asked);
+  assert.ok(idle.includes('engine.historyVersion'), 'the refresh ran');
+  assert.deepEqual([...new Set(idle)].sort(), ['engine.historyVersion', 'engine.status']);
 
   const visibleIds = () => popup.locator('.clip:not([hidden])').evaluateAll(rows => rows.map(r => r.dataset.id));
 

@@ -7,8 +7,10 @@
 //   {type: 'engine.unlock', passphrase}                            -> status()
 //   {type: 'engine.signOut'}                                       -> status()
 //   {type: 'engine.setPaused', paused}                             -> status()
-//   {type: 'engine.history', pinned, cursor, query, thumbs = true} -> {rows, nextCursor}; image rows carry
+//   {type: 'engine.history', pinned, cursor, query, thumbs = true, retryThumbs = false}
+//                                                                  -> {rows, nextCursor}; image rows carry
 //                                                                     thumbPngBase64, or only hasThumb with thumbs false
+//   {type: 'engine.historyVersion'}                                -> a string that changes with the history cache
 //   {type: 'engine.copy', id}                                      -> true once written; false for an image (the popup
 //                                                                     writes it), a file or an unknown clip
 //   {type: 'engine.download', id, n}                               -> {url, name, mime?}: a blob URL of this page,
@@ -50,7 +52,10 @@ const handlers = {
   'engine.signOut': engine => engine.signOut(),
   'engine.setPaused': (engine, m) => engine.setPaused(!!m.paused),
   'engine.history': async (engine, m) =>
-    historyAnswer(await engine.history({ pinned: !!m.pinned, cursor: m.cursor ?? null, query: m.query ?? '' }), m.thumbs !== false),
+    historyAnswer(await engine.history({
+      pinned: !!m.pinned, cursor: m.cursor ?? null, query: m.query ?? '', retryThumbs: !!m.retryThumbs,
+    }), m.thumbs !== false),
+  'engine.historyVersion': engine => engine.historyVersion(),
   'engine.copy': async (engine, m) => !!(await engine.copy(m.id)),
   'engine.download': async (engine, m, urls) => {
     const { bytes, name, mime } = await engine.download(m.id, m.n ?? 0);

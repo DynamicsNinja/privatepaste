@@ -110,6 +110,13 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
   const tombstones = new Map();      // id -> seq of its deletion
   const extra = new Map();           // clips from server history pages (not in the cache), for copy and download
   const thumbs = new Map();          // `${id}:${hash}` -> thumbnail PNG
+  const failedThumbs = new Set();    // `${id}:${hash}` whose fetch failed: asked again only on history({retryThumbs})
+
+  // A cheap "did the history change" for the popup's refresh: bumped on every change to the cache, prefixed with an id
+  // of this engine instance so a restarted offscreen document never repeats an earlier value.
+  const instance = Math.random().toString(36).slice(2, 10);
+  let cacheVersion = 0;
+  store = watchCache(store, () => { cacheVersion++; });
 
   let chain = Promise.resolve();
   /** Runs fn after everything queued before it: captures, catch-ups, flushes and messages never interleave. */
@@ -367,6 +374,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     tombstones.clear();
     extra.clear();
     thumbs.clear();
+    failedThumbs.clear();
     lastApplied = null;
     await saveState({ highestSeq: 0, lastAppliedAt: null, lockState: stateName, lockMessage: message ?? null });
     setStatus(stateName, message);
@@ -382,6 +390,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     tombstones.clear();
     extra.clear();
     thumbs.clear();
+    failedThumbs.clear();
     lastApplied = null;
     lastLocalHash = null;
     echoes.clear();
@@ -632,16 +641,21 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     if (!wire.hasThumb) return undefined;
     const key = `${wire.id}:${wire.hash}`;
     if (thumbs.has(key)) return thumbs.get(key);
+    if (failedThumbs.has(key)) return undefined;
     try {
       const sealed = await currentApi().thumb(wire.id);
       const png = sealed ? await openSmall(vault, 'thumb', sealed) : undefined;
       if (png) {
         if (thumbs.size >= 600) thumbs.delete(thumbs.keys().next().value);
         thumbs.set(key, png);
-      }
+      } else failedThumbs.add(key);
       return png;
     } catch {
-      return undefined;   // shown without a thumbnail; asked again next time
+      // Shown without a thumbnail. Not asked again on every refresh (offline, that would be a request per image every
+      // few seconds): only the next time the popup opens.
+      if (failedThumbs.size >= 600) failedThumbs.delete(failedThumbs.values().next().value);
+      failedThumbs.add(key);
+      return undefined;
     }
   }
 
@@ -803,8 +817,10 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
      * page of older clips from the server, without the ones the cache already showed. `query` matches text and file
      * names, case-insensitively. Rows: {id, kind ('text'|'link'|'image'|'file'|'unknown'), text?, files?, width?,
      * height?, thumbPng?, sourceDeviceName, sourceDevicePlatform, sourceUserName, lastCopiedAt, pinnedAt}.
+     * `retryThumbs` asks again for thumbnails that failed before (the popup passes it once each time it opens).
      */
-    async history({ pinned = false, cursor = null, query = '' } = {}) {
+    async history({ pinned = false, cursor = null, query = '', retryThumbs = false } = {}) {
+      if (retryThumbs) failedThumbs.clear();
       if (!session || !vault) return { rows: [], nextCursor: null };
       const cache = await store.getCache();
       if (!cursor) {
@@ -865,6 +881,24 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       throw new Error('That clip has nothing to download.');
     },
 
+    /** Changes whenever the history cache changes (a clip arrives, is pinned, deleted, or the cache is emptied). */
+    historyVersion: () => `${instance}:${cacheVersion}`,
+
     status,
   };
+}
+
+/** The store, with `changed` called after every write to the history cache that changed something. */
+function watchCache(store, changed) {
+  const wrap = name => async (...args) => {
+    const result = await store[name](...args);
+    if (result !== false) changed();
+    return result;
+  };
+  return Object.assign(Object.create(store), {
+    putClips: wrap('putClips'),
+    removeClip: wrap('removeClip'),
+    clearCache: wrap('clearCache'),
+    clearAll: wrap('clearAll'),
+  });
 }

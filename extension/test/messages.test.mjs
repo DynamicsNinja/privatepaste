@@ -18,6 +18,7 @@ function fakeEngine(overrides = {}) {
     history: record('history'),
     copy: record('copy'),
     download: record('download'),
+    historyVersion: () => 'abc:7',
   };
 }
 
@@ -77,7 +78,7 @@ test('history rows carry thumbnails as base64, or none when not asked for', asyn
   ];
   const engine = fakeEngine({ history: () => ({ rows, nextCursor: 'server:' }) });
   const full = await handleEngineMessage(engine, { type: 'engine.history', pinned: true, cursor: 'server:x', query: 'q' });
-  assert.deepEqual(engine.calls[0], ['history', { pinned: true, cursor: 'server:x', query: 'q' }]);
+  assert.deepEqual(engine.calls[0], ['history', { pinned: true, cursor: 'server:x', query: 'q', retryThumbs: false }]);
   assert.equal(full.ok, true);
   assert.equal(full.value.nextCursor, 'server:');
   assert.equal(full.value.rows[0].thumbPngBase64, toBase64(png));
@@ -89,6 +90,14 @@ test('history rows carry thumbnails as base64, or none when not asked for', asyn
   const light = await handleEngineMessage(engine, { type: 'engine.history', thumbs: false });
   assert.equal(light.value.rows[0].thumbPngBase64, undefined);
   assert.equal(light.value.rows[0].hasThumb, true);
+});
+
+test('retryThumbs passes through, and the history version answers without touching the history', async () => {
+  const engine = fakeEngine({ history: () => ({ rows: [], nextCursor: null }) });
+  await handleEngineMessage(engine, { type: 'engine.history', retryThumbs: true });
+  assert.equal(engine.calls[0][1].retryThumbs, true);
+  assert.deepEqual(await handleEngineMessage(engine, { type: 'engine.historyVersion' }), { ok: true, value: 'abc:7' });
+  assert.equal(engine.calls.length, 1);
 });
 
 test('copy answers whether the engine wrote the clip', async () => {
