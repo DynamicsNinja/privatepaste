@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 
 namespace PrivatePaste.Protocol;
@@ -40,7 +40,7 @@ public static class FileNames
     /// <summary>
     /// The part after the last / or \; control characters and <c>&lt;&gt;:"|?*</c> dropped; trailing dots and spaces trimmed;
     /// "file" when nothing usable is left; a Windows reserved device name (CON, NUL, COM1, ...) prefixed with _;
-    /// cut to 200 UTF-16 units keeping the extension.
+    /// cut to 200 UTF-16 units keeping the extension (the cut never splits a surrogate pair and the stem is re-trimmed).
     /// </summary>
     public static string Safe(string name)
     {
@@ -58,7 +58,12 @@ public static class FileNames
         {
             var ext = ExtensionOf(s);
             if (ext.Length >= MaxLength) ext = "";
-            s = s[..(MaxLength - ext.Length)] + ext;
+            var keep = MaxLength - ext.Length;
+            // Ports mirror this: never end the cut stem on the first half of a surrogate pair (step back one unit),
+            // then trim trailing dots and spaces from the stem again; an empty stem becomes "file".
+            if (char.IsHighSurrogate(s[keep - 1]) && char.IsLowSurrogate(s[keep])) keep--;
+            var stem = s[..keep].TrimEnd('.', ' ');
+            s = (stem.Length == 0 ? Fallback : stem) + ext;
         }
         return s;
     }
@@ -86,14 +91,26 @@ public static class FileNames
         return ext.Length > 1 && MimeByExtension.TryGetValue(ext[1..], out var mime) ? mime : Octet;
     }
 
-    /// <summary>"0 B", "1023 B", "1.5 KB", "12 KB", "3.4 MB": 1 KB = 1024 B, one decimal below 10, none from 10 up.</summary>
+    /// <summary>
+    /// "0 B", "1023 B", "1.5 KB", "12 KB", "3.4 MB". 1 KB = 1024 B. In KB and MB the value is rounded half up to one decimal
+    /// and shown with it only when that is below 10 and not .0 ("1 KB", "9.9 MB", "10 MB"); from 10 up it is rounded to an
+    /// integer. A KB value that rounds to 1024 is shown in MB ("1 MB"). Integer arithmetic only, so ports agree to the digit.
+    /// </summary>
     public static string FormatSize(long bytes)
     {
         if (bytes < 1024) return $"{bytes} B";
-        var (value, unit) = bytes < 1024 * 1024 ? (bytes / 1024.0, "KB") : (bytes / (1024.0 * 1024), "MB");
-        return string.Create(CultureInfo.InvariantCulture, $"{(value < 10 ? value.ToString("F1", CultureInfo.InvariantCulture) : Math.Round(value, MidpointRounding.AwayFromZero).ToString("F0", CultureInfo.InvariantCulture))} {unit}");
+        var (text, kbOverflow) = Scaled(bytes, 1024, "KB");
+        return kbOverflow ? Scaled(bytes, 1024 * 1024, "MB").Text : text;
     }
 
+    private static (string Text, bool KbOverflow) Scaled(long bytes, long unit, string name)
+    {
+        var tenths = (bytes * 10 + unit / 2) / unit;
+        if (tenths < 100)
+            return (tenths % 10 == 0 ? $"{tenths / 10} {name}" : $"{tenths / 10}.{tenths % 10} {name}", false);
+        var whole = (bytes + unit / 2) / unit;
+        return ($"{whole} {name}", name == "KB" && whole >= 1024);
+    }
     /// <summary>The row text of a file clip: "report.pdf +2 more · 3.4 MB".</summary>
     public static string RowText(IReadOnlyList<ClipFileInfo> files)
     {

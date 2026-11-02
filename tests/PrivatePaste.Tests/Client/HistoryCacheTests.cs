@@ -186,6 +186,18 @@ public class HistoryCacheTests : IDisposable
     }
 
     [Fact]
+    public void File_clips_survive_save_and_load_as_file()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Clip(1, null, 1, kind: ClipKind.File) with { Files = [new ClipFileInfo("a.txt", 5, "text/plain")] });
+        c.Save();
+        var clip = Assert.Single(HistoryCache.Load(FilePath, key).Items).Clip;
+        Assert.Equal(ClipKind.File, clip.Kind);
+        Assert.Equal(new ClipFileInfo("a.txt", 5, "text/plain"), Assert.Single(clip.Files!));
+    }
+
+    [Fact]
     public void Key_id_survives_save_and_load_and_is_null_for_an_older_cache()
     {
         var key = NewKey();

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
@@ -92,6 +92,16 @@ public class ProtocolJsonTests
         var withFiles = SampleClip(ClipKind.File) with { Files = [new ClipFileInfo("a.txt", 5, "text/plain")] };
         var back = JsonSerializer.Deserialize<ClipDto>(JsonSerializer.Serialize(withFiles, ProtocolJson.Options), ProtocolJson.Options)!;
         Assert.Equal(new ClipFileInfo("a.txt", 5, "text/plain"), Assert.Single(back.Files!));
+    }
+
+    [Fact]
+    public void Payload_files_use_the_wire_field_names()
+    {
+        using var key = VaultKey.Create();
+        var sealedB64 = ClipPayload.Seal(key, new ClipPayload { Files = [new ClipFileInfo("a.txt", 5, "text/plain")] });
+        var json = Encoding.UTF8.GetString(SealedBox.Open(key, "payload", Convert.FromBase64String(sealedB64)));
+        // text, width and height are written as null today and readers ignore them; the files part is the contract here.
+        Assert.Contains("\"files\":[{\"name\":\"a.txt\",\"size\":5,\"mime\":\"text/plain\"}]", json);
     }
 
     [Fact]

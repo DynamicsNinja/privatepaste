@@ -1,4 +1,4 @@
-﻿using PrivatePaste.Protocol;
+using PrivatePaste.Protocol;
 
 namespace PrivatePaste.Tests.Protocol;
 
@@ -22,6 +22,17 @@ public class FileNamesTests
         ("console.txt", "console.txt"),
         (new string('a', 300) + ".pdf", new string('a', 196) + ".pdf"),
         (new string('b', 250), new string('b', 200)),
+        (new string('b', 199) + " " + new string('c', 50), new string('b', 199)),
+        (new string('a', 195) + "." + new string('b', 10) + ".pdf", new string('a', 195) + ".pdf"),
+        (new string('a', 199) + "\U0001F600z", new string('a', 199)),
+        (new string('a', 195) + "\U0001F600.pdf", new string('a', 195) + ".pdf"),
+        (new string('a', 197) + "\U0001F600", new string('a', 197) + "\U0001F600"),
+    ];
+
+    public static readonly (long Bytes, string Text)[] SizeCases =
+    [
+        (0, "0 B"), (1023, "1023 B"), (1024, "1 KB"), (1536, "1.5 KB"), (10188, "9.9 KB"), (10240, "10 KB"), (12288, "12 KB"),
+        (1048064, "1 MB"), (3565158, "3.4 MB"), (10433331, "9.9 MB"), (10433332, "10 MB"), (26214400, "25 MB"),
     ];
 
     public static readonly (ClipFileInfo[] Files, string Text)[] RowCases =
@@ -67,14 +78,26 @@ public class FileNamesTests
         Assert.Equal("application/octet-stream", FileNames.MimeFor("noext"));
     }
 
+    public static IEnumerable<object[]> Sizes => SizeCases.Select(c => new object[] { c.Bytes, c.Text });
+
     [Theory]
-    [InlineData(0L, "0 B")]
-    [InlineData(1023L, "1023 B")]
-    [InlineData(1536L, "1.5 KB")]
-    [InlineData(12288L, "12 KB")]
-    [InlineData(3565158L, "3.4 MB")]
-    [InlineData(26214400L, "25 MB")]
+    [MemberData(nameof(Sizes))]
     public void FormatSize_table(long bytes, string expected) => Assert.Equal(expected, FileNames.FormatSize(bytes));
+
+    [Fact]
+    public void Safe_never_leaves_a_lone_surrogate_or_trailing_dot()
+    {
+        for (var pad = 190; pad <= 200; pad++)
+            foreach (var tail in new[] { ".pdf", "", " x" })
+            {
+                var s = FileNames.Safe(new string('a', pad) + "\U0001F600\U0001F600" + tail);
+                Assert.True(s.Length <= 200);
+                for (var i = 0; i < s.Length; i++)
+                    if (char.IsHighSurrogate(s[i])) Assert.True(i + 1 < s.Length && char.IsLowSurrogate(s[++i]));
+                    else Assert.False(char.IsLowSurrogate(s[i]));
+                Assert.False(s.EndsWith('.') || s.EndsWith(' '));
+            }
+    }
 
     public static IEnumerable<object[]> RowIndexes => Enumerable.Range(0, RowCases.Length).Select(i => new object[] { i });
 
