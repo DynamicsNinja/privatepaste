@@ -64,7 +64,7 @@ A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId,
 - `text`, `width` and `height` are always null: the text and the image size are inside the payload. They stay in the JSON so the DTO only ever grows.
 - `hash` is the keyed hash (see [Keyed hash](#keyed-hash)), and `sizeBytes` the plaintext size the uploader declared.
 - `pinnedAt` is always present: the time the clip was pinned, or null when it isn't pinned.
-- `sourceDevice*` describe the device that last copied the clip (a new upload, a dedup bump or a restore). `sourceDevicePlatform` is that device's login `platform`, lowercased (`windows`, `macos`, `linux`, `android`, or whatever else a client sent), `web` for the web UI (which has no `sourceDeviceId`), or null when unknown. Clients show anything they do not recognize as an unknown device.
+- `sourceDevice*` describe the device that last copied the clip (a new upload, a dedup bump or a restore). `sourceDevicePlatform` is that device's login `platform`, lowercased (`windows`, `macos`, `linux`, `android`, `extension` (the browser extension), or whatever else a client sent), `web` for the web UI (which has no `sourceDeviceId`), or null when unknown. Clients show anything they do not recognize as an unknown device.
 - `sourceUserName` is the current name of the person who last copied the clip; it is null while the server has only one person and when unknown. Clients show it whenever it is present.
 - Every change (new clip, dedup bump, restore, pin, delete) gets a new, higher `seq`.
 

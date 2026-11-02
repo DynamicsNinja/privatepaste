@@ -14,9 +14,10 @@ public static class PlatformIcons
     public static readonly PlatformIcon Linux = new("linux", "Linux");
     public static readonly PlatformIcon Android = new("android", "Android");
     public static readonly PlatformIcon Web = new("web", "Web");
+    public static readonly PlatformIcon Extension = new("extension", "Browser extension");
     public static readonly PlatformIcon Unknown = new("unknown", "Unknown device");
 
-    public static IReadOnlyList<PlatformIcon> All { get; } = [Windows, MacOs, Linux, Android, Web, Unknown];
+    public static IReadOnlyList<PlatformIcon> All { get; } = [Windows, MacOs, Linux, Android, Web, Extension, Unknown];
 
     /// <summary>The icon for a clip's source platform; anything unrecognized (or null) is <see cref="Unknown"/>.</summary>
     public static PlatformIcon For(string? platform) => platform?.Trim().ToLowerInvariant() switch
@@ -26,6 +27,7 @@ public static class PlatformIcons
         "linux" => Linux,
         "android" => Android,
         "web" => Web,
+        "extension" => Extension,
         _ => Unknown,
     };
 }

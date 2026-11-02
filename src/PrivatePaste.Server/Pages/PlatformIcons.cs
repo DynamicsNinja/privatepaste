@@ -27,10 +27,13 @@ public static class PlatformIcons
     public static readonly PlatformIcon Web = new("web", "Web",
         "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM3 12h18M12 3c-2.5 2.4-3.8 5.4-3.8 9s1.3 6.6 3.8 9M12 3c2.5 2.4 3.8 5.4 3.8 9s-1.3 6.6-3.8 9");
 
+    public static readonly PlatformIcon Extension = new("extension", "Browser extension",
+        "M4 8h4.5a2.5 2.5 0 1 1 5 0H18v4.5a2.5 2.5 0 1 1 0 5V20H4z");
+
     public static readonly PlatformIcon Unknown = new("unknown", "Unknown device",
         "M5 4h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM12 16v4M8 20h8");
 
-    public static IReadOnlyList<PlatformIcon> All { get; } = [Windows, MacOs, Linux, Android, Web, Unknown];
+    public static IReadOnlyList<PlatformIcon> All { get; } = [Windows, MacOs, Linux, Android, Web, Extension, Unknown];
 
     /// <summary>The icon for a device platform; anything unrecognized (or null) is <see cref="Unknown"/>.</summary>
     public static PlatformIcon For(string? platform) => platform?.Trim().ToLowerInvariant() switch
@@ -40,6 +43,7 @@ public static class PlatformIcons
         "linux" => Linux,
         "android" => Android,
         "web" => Web,
+        "extension" => Extension,
         _ => Unknown,
     };
 

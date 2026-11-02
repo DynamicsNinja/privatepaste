@@ -11,6 +11,8 @@ public class PlatformIconsTests
     [InlineData("linux", "linux", "Linux")]
     [InlineData("android", "android", "Android")]
     [InlineData("web", "web", "Web")]
+    [InlineData("extension", "extension", "Browser extension")]
+    [InlineData("Extension", "extension", "Browser extension")]
     [InlineData("Android", "android", "Android")]
     [InlineData("unknown", "unknown", "Unknown device")]
     [InlineData("freebsd", "unknown", "Unknown device")]
