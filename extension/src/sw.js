@@ -1,6 +1,9 @@
-// The service worker only keeps the offscreen document open: Edge stops a service worker after 30 s idle, but the
+// The service worker keeps the offscreen document open: Edge stops a service worker after 30 s idle, but the
 // offscreen document can keep polling the clipboard once a second. It is (re)created on install, on browser startup,
-// whenever the worker wakes, and by a one-minute alarm in case Edge closed it.
+// whenever the worker wakes, and by a one-minute alarm in case Edge closed it. It also installs the session rule that
+// puts the token on the sync socket (ws-auth.js), which the offscreen document asks for.
+
+import { handleWsAuthMessage } from './ws-auth.js';
 
 const OFFSCREEN_URL = 'offscreen.html';
 const WATCHDOG = 'offscreen-watchdog';
@@ -31,3 +34,11 @@ chrome.runtime.onInstalled.addListener(() => { ensureWatchdog(); ensure(); });
 chrome.runtime.onStartup.addListener(() => { ensureWatchdog(); ensure(); });
 chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === WATCHDOG) ensure(); });
 ensure();
+
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (sender.id !== chrome.runtime.id) return false;
+  const answer = handleWsAuthMessage(message, chrome.declarativeNetRequest);
+  if (!answer) return false;
+  answer.then(reply);
+  return true;   // replies asynchronously
+});

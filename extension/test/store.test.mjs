@@ -65,3 +65,10 @@ test('the queue keeps its order across reopening; clearAll wipes everything', as
   assert.deepEqual(await again.queue(), []);
   assert.deepEqual(await again.getCache(), []);
 });
+
+test('state updates made at the same time are all kept', async () => {
+  const store = openStore(memoryBackend());
+  await Promise.all([store.setState({ highestSeq: 7 }), store.setState({ paused: true }), store.setState({ lastLocalAt: 3 })]);
+  const s = await store.getState();
+  assert.deepEqual([s.highestSeq, s.paused, s.lastLocalAt], [7, true, 3]);
+});

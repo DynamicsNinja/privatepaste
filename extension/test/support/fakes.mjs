@@ -43,14 +43,23 @@ export function fakeClock(start = Date.parse('2026-11-02T10:00:00Z')) {
   };
 }
 
+/** `current` is what the OS clipboard holds; `copyHere(text)` is a copy made in another app (not yet polled). */
 export function fakeClipboard() {
   return {
     written: [],
     images: [],
     writeOk: true,
-    async writeText(text) { if (!this.writeOk) return false; this.written.push(text); return true; },
+    current: null,
+    reads: 0,
+    copyHere(text) { this.current = { text }; },
+    async writeText(text) {
+      if (!this.writeOk) return false;
+      this.written.push(text);
+      this.current = { text };
+      return true;
+    },
     async writeImage(png) { this.images.push(png); return false; },
-    async readClipboard() { return null; },
+    async readClipboard() { this.reads++; return this.current ? { ...this.current } : {}; },
   };
 }
 
@@ -103,6 +112,7 @@ export function fakeServer({ wrap, now }) {
     isOwner: true,
     syncPages: [],
     syncError: null,
+    syncHold: null,
     latestSeq: 0,
     uploadErrors: [],
     stored: [],
@@ -138,6 +148,7 @@ export function fakeServer({ wrap, now }) {
       },
       async sync(afterSeq) {
         server.record('sync', afterSeq);
+        if (server.syncHold) await server.syncHold;   // a slow answer, for races
         if (server.syncError) throw server.syncError;
         return server.syncPages.shift() ?? { clips: [], deletedIds: [], latestSeq: Math.max(server.latestSeq, afterSeq), hasMore: false };
       },

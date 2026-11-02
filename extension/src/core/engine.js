@@ -3,9 +3,15 @@
 //
 // Per connection: read server-info (404: the server is too old), check the vault key id against GET /api/vault, catch up
 // with /api/sync (applying at most the newest caught-up clip), flush the offline queue, then follow the WebSocket, pinging
-// every 20 s. When the socket can't be opened (a browser can't put the bearer token on the upgrade request unless
-// something adds it, see engine-host.js) the connection polls /api/sync every 2 s instead, and tries the socket again
-// every minute. Any failure goes offline and reconnects after 1, 2, 5, 10, then 30 s.
+// every 20 s. A browser can't put the bearer token on the upgrade request; before each socket the engine asks `wsAuth`
+// (the service worker's declarativeNetRequest rule, ws-auth.js) to add it. Edge 156 doesn't apply that rule to socket
+// upgrades (measured with ws-auth.playwright.mjs), so in practice the socket fails and the connection polls /api/sync
+// every 2 s instead, trying the socket again every minute. Any failure goes offline and reconnects after 1, 2, 5, 10,
+// then 30 s.
+//
+// A clip from another device is never written over a copy made here that the engine hasn't handled yet: not while a
+// local change waits its turn, and not when the clipboard, read just before the write, holds a copy the poller hasn't
+// reported (that copy is taken as a local change instead).
 //
 // Echo and ordering rules:
 // - A clip this engine writes to the clipboard is remembered by content hash, so the poll reading it back isn't uploaded.
@@ -34,6 +40,7 @@ export const MESSAGES = Object.freeze({
   unsupportedWrap: "This server's passphrase settings aren't supported. Update PrivatePaste.",
   signInFirst: 'Sign in to PrivatePaste first.',
   syncFailed: "Couldn't sync a clip after several tries.",
+  queuedRejected: "A copy made offline couldn't be synced.",
 });
 
 export const DEFAULT_DEVICE_NAME = 'Edge';
@@ -67,6 +74,7 @@ function stopOf(e) {
     if (e.status === 401) return 'revoked';
     if (e.status === 426) return 'appTooOld';
     if (e.status === 409 && e.title === 'Encryption was reset') return 'reset';
+    if (e.status === 409 && e.detail === 'Set up encryption first.') return 'noVault';   // the vault was deleted
   }
   return null;
 }
@@ -79,18 +87,20 @@ function stopOf(e) {
  * @param deps.WebSocket  a WebSocket constructor
  * @param deps.onStatus   called with a copy of status() on every change
  */
-export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket, onStatus = () => {} }) {
+export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket, wsAuth = null, onStatus = () => {} }) {
   let session = null;
   let vault = null;
   let state = null;
   let running = false;
-  let current = { state: 'signedOut' };
+  let current = { state: 'signedOut', link: null };
 
   let gen = 0;
   let socket = null;
   const sleepers = new Set();
 
   let lastLocalHash = null;
+  let pendingLocal = 0;              // local changes waiting for their turn: an incoming clip must not overwrite them
+  let link = null;                   // 'socket' | 'polling' while connected
   const echoes = new Map();          // content hash -> when this engine wrote it
   let lastApplied = null;            // {id, seq}
   let resumingFromPause = false;
@@ -110,8 +120,9 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
 
   function setStatus(stateName, message) {
     const next = message ? { state: stateName, message } : { state: stateName };
-    if (current.state === next.state && current.message === next.message) return;
-    current = next;
+    const shownLink = stateName === 'syncing' ? link : null;
+    if (current.state === next.state && current.message === next.message && current.link === shownLink) return;
+    current = { ...next, link: shownLink };
     try { onStatus(status()); } catch { /* a listener must not break the engine */ }
   }
 
@@ -202,6 +213,11 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       return stop ? { stop } : {};
     }
     if (g !== gen) return {};
+    // The browser can't put headers on the upgrade request: the service worker adds them with a session rule.
+    if (wsAuth) {
+      try { await wsAuth.set(api.socketUrl(), session.token); } catch { /* the socket fails and polling takes over */ }
+      if (g !== gen) return {};
+    }
     const ws = await openSocket(g, api);
     if (g !== gen) return {};
     return ws ? followSocket(g, api, ws) : poll(g, api);
@@ -253,6 +269,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       let stop = null;
       let pongDue = null;
       let flushing = null;
+      link = 'socket';
       setStatus('syncing');
 
       const tick = clock.setTimeout(function every() {
@@ -308,6 +325,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
   }
 
   async function poll(g, api) {
+    link = 'polling';
     setStatus('syncing');
     const startedAt = clock.now();
     let flushedAt = startedAt;
@@ -359,6 +377,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
   /** Signed out or revoked: the token, vault keys, history cache and queue all go. */
   async function forget() {
     endConnection();
+    if (wsAuth) try { await wsAuth.clear(); } catch { /* the rule dies with the browser session anyway */ }
     session = null;
     vault = null;
     await store.clearAll();
@@ -491,11 +510,38 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     return written;
   }
 
+  /**
+   * What is on the clipboard right now, when it is a copy the engine doesn't know yet (the poller hasn't reported it), or
+   * null. Its first read only sets what the engine knows, like the poller's own first read.
+   */
+  async function unseenLocalCopy() {
+    if (typeof clipboard.readClipboard !== 'function') return null;
+    let item;
+    try { item = await clipboard.readClipboard(); } catch { return null; }
+    if (!item || (typeof item.text !== 'string' && !(item.png instanceof Uint8Array))) return null;
+    const inspected = await inspectLocal(item, limits(), kinds());
+    const known = inspected.skip ? inspected.fingerprint : inspected.contentHash;
+    if (!known) return null;   // whitespace or unreadable: nothing worth keeping
+    if (lastLocalHash === null) {
+      lastLocalHash = known;
+      return null;
+    }
+    return known === lastLocalHash || isEcho(known) ? null : item;
+  }
+
   /** Puts a clip from another device on the clipboard: text and links only (see the header). */
   async function applyRemote(wire) {
     const decoded = await decodeClip(wire, vault);
     if (decoded.kind !== 'text' && decoded.kind !== 'link') return false;
     if (state.paused) return false;
+    // A copy made here that the engine hasn't handled yet is newer than anything arriving now: never write over it.
+    // The incoming clip stays in the history.
+    if (pendingLocal > 0) return false;
+    const unseen = await unseenLocalCopy();
+    if (unseen) {
+      await captureLocal(unseen);
+      return false;
+    }
     if (!(await writeOwnText(decoded.text))) return false;
     lastApplied = { id: wire.id, seq: wire.seq };
     const at = time(wire.lastCopiedAt);
@@ -577,7 +623,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
           return;   // the rest waits for the next flush, in order
         } else {
           await store.dequeue(item.id);
-          notify(`Server rejected a queued clip (${e instanceof ApiError ? e.status : 0}); it was dropped.`);
+          notify(MESSAGES.queuedRejected);
         }
       }
     }
@@ -664,6 +710,11 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       }
       const name = String(deviceName ?? '').trim() || DEFAULT_DEVICE_NAME;
       const { deviceId, token } = await anonymous.login(username, password, name);
+      const previous = session;
+      if (previous) {
+        // A second sign-in replaces this device: revoke the old token rather than leave it valid on the server.
+        try { await makeApi({ serverUrl: previous.serverUrl, token: previous.token }).logout(); } catch { /* best effort */ }
+      }
       await forget();
       session = { serverUrl: url, token, deviceId, deviceName: name };
       await store.setSession(session);
@@ -700,8 +751,12 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       } catch (e) {
         throw new Error(e instanceof WrongPassphraseError ? MESSAGES.wrongPassphrase : MESSAGES.unsupportedWrap);
       }
-      if (vault && vault.keyId !== unwrapped.keyId) await relock('locked');
-      await store.setVault(unwrapped);   // wipes unwrapped.raw
+      try {
+        if (vault && vault.keyId !== unwrapped.keyId) await relock('locked');
+        await store.setVault(unwrapped);   // wipes unwrapped.raw
+      } finally {
+        unwrapped.raw?.fill(0);
+      }
       vault = await store.getVault();
       await saveState({ lockState: null, lockMessage: null });
       running = true;
@@ -736,10 +791,13 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
 
     /** A change the clipboard poller saw: {text} or {png}. Copies are handled one at a time, in order. */
     onLocalChange(item) {
-      return serial(() => captureLocal(item)).catch(e => {
-        const stop = stopOf(e);
-        if (stop) return handleStop(stop);
-      });
+      pendingLocal++;
+      return serial(() => captureLocal(item))
+        .catch(e => {
+          const stop = stopOf(e);
+          if (stop) return handleStop(stop);
+        })
+        .finally(() => { pendingLocal--; });
     },
 
     /**
