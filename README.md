@@ -91,10 +91,8 @@ Install an app, then enter your server URL, your name and password, and a name f
 The first time the owner signs in (in an app or the web UI), PrivatePaste asks you to **set up encryption**: choose a passphrase of at least 12 characters (a short sentence works well). It is separate from your password and the server never sees it. Every other device then unlocks once, by entering the passphrase or, on Android, by scanning a code from **Settings > Add a device** on a device that is already unlocked. From then on the device stays signed in, unlocked and in sync. Add the other people on the **People** page of the web UI, where you can also see and sign out devices; they unlock with the same passphrase.
 
 > [!WARNING]
-> **Upgrading from a version without end-to-end encryption deletes the whole history, pinned clips included.** The server can't encrypt clips it used to read, so it starts empty. Back up `/data` first. Apps from before this version stop syncing and show "Update PrivatePaste to keep syncing." until you update them; new apps tell you when the server needs updating. After the upgrade, set up encryption from an owner device or the web UI. [Details](docs/self-hosting.md#upgrading-to-end-to-end-encryption)
 
 > [!NOTE]
-> **Upgrading a server that several people already share?** First, right after upgrading, change the owner's password (**Settings > Change password**, or set a new `PP_PASSWORD` and restart): anyone who knew the old shared password may be signed in on the web as `owner`, and this ends those sessions. Every existing device becomes the owner's and keeps working. Sign the devices that belong to someone else out on the **People** page; each person then signs in again with their own account. Apps from before this version can't sign in until they are updated. Back up `/data` before upgrading. [Details](docs/self-hosting.md#upgrading-to-multiple-people)
 
 ## How it works
 
@@ -109,7 +107,7 @@ Each device signs in with a person's name and password once and gets its own dev
 
 ## Security
 
-- **Clips are end-to-end encrypted.** Your devices encrypt every clip (AES-256-GCM) before uploading it, with a vault key that the server never sees unwrapped. The server keeps that key only wrapped with your passphrase (Argon2id), which is separate from your password and never sent to it. Someone who steals the server, its disk or its backups made after the upgrade to end-to-end encryption, including its configuration and `PP_DB_KEY`, can't read your clips. Backups from before that upgrade still hold the old history, readable with `PP_DB_KEY` ([self-hosting](docs/self-hosting.md#upgrading-to-end-to-end-encryption)).
+- **Clips are end-to-end encrypted.** Your devices encrypt every clip (AES-256-GCM) before uploading it, with a vault key that the server never sees unwrapped. The server keeps that key only wrapped with your passphrase (Argon2id), which is separate from your password and never sent to it. Someone who steals the server, its disk or its backups, including its configuration and `PP_DB_KEY`, can't read your clips.
 - **What the server can see:** who copied a clip, from which device and platform, and when; its kind (text, link or image); its exact size; and whether it is pinned. It never sees a clip's content (text and images) or thumbnails.
 - **`PP_DB_KEY` still matters.** The database and stored files are also encrypted at rest with it, which hides that metadata from someone who takes the disk without the server's configuration.
 - **The web UI is the exception to keep in mind.** It decrypts in your browser with code the server sends. Someone who steals the server and keeps it running could serve altered page code to any browser that is unlocked, or unlocks, while it runs. An unlocked tab is exposed as soon as it loads another page, so use **Lock** (or close the tab) when you're done. The apps don't have this risk; if it worries you, use the apps.
@@ -125,7 +123,7 @@ Each device signs in with a person's name and password once and gets its own dev
 
 | Guide | What's in it |
 |---|---|
-| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, end-to-end encryption and its reset, upgrading, backups, clearing history and auto-delete, proxies, local development |
+| [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, end-to-end encryption and its reset, backups, clearing history and auto-delete, proxies, local development |
 | [Desktop app](docs/desktop.md) | Install, upgrade, unlocking, adding a device, hotkey, pause, pinned clips, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
 | [Android app](docs/android.md) | Install, unlocking by passphrase or code, adding a device, pinned clips, background delivery, battery settings by phone maker, building and releasing |
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules, end-to-end encryption formats and test vectors, and the content hash, for writing your own client |

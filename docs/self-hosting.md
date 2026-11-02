@@ -27,9 +27,9 @@ Use the output for `PP_DB_KEY` (and a strong, separate value for `PP_PASSWORD`).
 
 ## End-to-end encryption
 
-Clips are encrypted on the devices before they reach the server, with a vault key that is shared by everyone on the server and unlocked with a passphrase. The server stores the vault key only wrapped with that passphrase (Argon2id), so neither the server nor someone who steals it, its configuration and backups made since end-to-end encryption can read a clip (older backups: see [Upgrading to end-to-end encryption](#upgrading-to-end-to-end-encryption)). Details of the formats are in the [API reference](api.md#end-to-end-encryption).
+Clips are encrypted on the devices before they reach the server, with a vault key that is shared by everyone on the server and unlocked with a passphrase. The server stores the vault key only wrapped with that passphrase (Argon2id), so neither the server nor someone who steals it, its configuration and backups can read a clip. Details of the formats are in the [API reference](api.md#end-to-end-encryption).
 
-- **Setting it up**: on a new or upgraded server, the owner's first app or web session that opens the history asks to **Set up encryption**. Choose a passphrase twice: at least 12 characters, not a common one ("Use at least 12 characters. A short sentence works well."). It is separate from the login password. Other people's devices show "Ask the owner to set up encryption." until then, and don't sync.
+- **Setting it up**: on a new server, the owner's first app or web session that opens the history asks to **Set up encryption**. Choose a passphrase twice: at least 12 characters, not a common one ("Use at least 12 characters. A short sentence works well."). It is separate from the login password. Other people's devices show "Ask the owner to set up encryption." until then, and don't sync.
 - **Unlocking a device**: each device asks for the passphrase once after signing in. Android can instead scan a code from **Add a device** (in the Settings of the desktop app, the Android app or the web UI, on a device that is already unlocked); the code works once, for 10 minutes. The web UI keeps the key only for the browser tab and has a **Lock** button next to Sign out.
 - **Changing the passphrase**: the owner, in Settings on any unlocked device or in the web UI. The history stays and unlocked devices keep working; only devices that unlock later need the new one.
 - **What the server still sees**: who copied each clip, from which device and platform, and when; its kind, exact size and pin state. Never the content or thumbnails.
@@ -62,36 +62,16 @@ Anyone changes their own password under **Settings > Change password** (it signs
 
 ## Changing the password
 
-- **Your own password** (owner or anyone): **Settings > Change password** in the web UI. This signs you out of every other browser; the browser you changed it in and your devices stay signed in. When the owner does this, web sessions from before the upgrade to people end too. Attempts count against the sign-in limit (5 per minute per IP).
-- **Forgot the owner's password**: set a new `PP_PASSWORD` and redeploy. When the server starts with a different `PP_PASSWORD` than last time (it remembers a hash, never the value), it resets the owner's password to it. This signs the owner out of every browser, including web sessions from before the upgrade to people, but not out of their devices. If `PP_PASSWORD` is unchanged, a password the owner set on the web stays in force.
+- **Your own password** (owner or anyone): **Settings > Change password** in the web UI. This signs you out of every other browser; the browser you changed it in and your devices stay signed in. Attempts count against the sign-in limit (5 per minute per IP).
+- **Forgot the owner's password**: set a new `PP_PASSWORD` and redeploy. When the server starts with a different `PP_PASSWORD` than last time (it remembers a hash, never the value), it resets the owner's password to it. This signs the owner out of every browser, but not out of their devices. If `PP_PASSWORD` is unchanged, a password the owner set on the web stays in force.
 - **Another person's password**: the owner resets it on the People page.
 - If a password leaked, reset it: the person's devices are signed out. Passwords are hashed with Argon2id.
-
-## Upgrading to end-to-end encryption
-
-**Upgrading a server from a version without end-to-end encryption deletes the whole history, pinned clips included.** The server can't encrypt clips it used to store readable, so its first start drops every clip, thumbnail and image and starts empty. **Back up `/data` first** (see [Backups](#backups)) if you want to keep a copy. People, devices, passwords and settings stay.
-
-That backup, and any backup or snapshot from before the upgrade, still holds the old history, readable by anyone who has it and `PP_DB_KEY`. Keep those backups as carefully as before, or delete them once you no longer need them. Only backups made after the upgrade have end-to-end encrypted clips.
-
-- Update the server and the apps together. Apps from before this version stop syncing: the server answers them with "Update PrivatePaste to keep syncing." until they are updated. New apps on a server that isn't updated yet show "Update your PrivatePaste server to keep syncing."
-- After the upgrade, set up encryption from an owner device or the web UI (see [End-to-end encryption](#end-to-end-encryption)). Devices stay signed in; each one asks for the passphrase once.
-- When an updated app first meets the upgraded server, it deletes its local history cache, thumbnails and unsent clips, so no readable copy from before is left on the device either.
-
-## Upgrading to multiple people
-
-**Back up `/data` before upgrading**: the first start migrates the database.
-
-- **If the server was shared, change the owner's password first**, right after upgrading: **Settings > Change password**, or set a new `PP_PASSWORD` and restart. Everyone who knew the old shared password could sign in on the web as `owner`; changing it ends those web sessions. The owner's devices stay signed in.
-- The owner account is created from your existing setup (name `owner`, password `PP_PASSWORD`). Every existing device becomes the owner's and keeps working without signing in again; clips copied so far are the owner's.
-- On a server that several people already shared, the devices that belong to someone else are not moved. The owner signs them out on the People page; each person then signs in again with their own account, which the owner adds there.
-- Apps from before this version can't sign in. The server answers them with "Update PrivatePaste to sign in.", which the old Android app shows; the old desktop app shows "Can't reach the server." instead. Update them (release the server first, then the desktop and Android apps). Devices already signed in with an old app keep syncing.
-- New apps still sign in to an old server.
 
 ## Backups
 
 1. Get a consistent copy of `/data` (the `privatepaste-data` volume): either stop the container first (`docker compose stop`, copy, `docker compose start`), or take a snapshot of the volume. Copying the files of a running server can catch the database mid-write.
 2. Store `PP_DB_KEY` separately and safely (for example in a password manager), not next to the backup. The backup is encrypted with it: **without `PP_DB_KEY` a backup is useless**, and anyone who has both the backup and the key can read the metadata (people, devices, times, sizes).
-3. The clips in a backup made after the upgrade to end-to-end encryption are also end-to-end encrypted: after a restore, devices unlock them with the passphrase that was in use when the backup was taken. Backups from before that upgrade still contain the old history, readable with `PP_DB_KEY`: keep them as carefully as before, or delete them once you no longer need them.
+3. The clips in a backup are end-to-end encrypted: after a restore, devices unlock them with the passphrase that was in use when the backup was taken.
 
 ## Clearing history and auto-delete
 
@@ -100,7 +80,7 @@ Clips are kept until someone deletes them. The **Settings** page of the web UI h
 - **Clear history** deletes every clip that is not pinned, after a confirmation that says how many clips go. Devices that were offline remove them when they reconnect.
 - **Auto-delete history** (Off, or after 7, 30 or 90 days; off by default) deletes unpinned clips once they are that old. The server checks at startup and then every hour. A clip's age counts from the later of its last copy and its unpin.
 
-Pinned clips are never cleared or auto-deleted. Cleared stays cleared: a device that was offline during a clear and uploads old copies later is told "Cleared" (HTTP 410, see the [API](api.md)) and the copies are dropped, and the same goes for copies older than the auto-delete age. This is a change to the database, so back up `/data` before upgrading to the version that adds it.
+Pinned clips are never cleared or auto-deleted. Cleared stays cleared: a device that was offline during a clear and uploads old copies later is told "Cleared" (HTTP 410, see the [API](api.md)) and the copies are dropped, and the same goes for copies older than the auto-delete age.
 
 ## Proxy and forwarded headers
 
