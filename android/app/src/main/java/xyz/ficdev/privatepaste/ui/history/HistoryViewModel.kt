@@ -90,6 +90,8 @@ enum class HistoryTab { HISTORY, PINNED }
 data class HistoryState(
     val tab: HistoryTab = HistoryTab.HISTORY,
     val query: String = "",
+    /** The type chip in use; null is All. Unknown-kind clips show only under All. */
+    val filter: ClipKind? = null,
     val items: List<ClipDto> = emptyList(),
     /** The newest clip, when this phone applied it to its clipboard: it gets the live dot. */
     val liveClipId: String? = null,
@@ -130,6 +132,8 @@ class HistoryViewModel(
         val next: String? = null,
         val loaded: Boolean = false,
         val loading: Boolean = false,
+        /** The last page failed (or this phone is offline): a type filter stops filling itself up until it changes. */
+        val failed: Boolean = false,
     )
 
     /** Matches for [query] from paging through the whole tab on the server; [done] once the last page was read. */
@@ -147,6 +151,8 @@ class HistoryViewModel(
     private data class Local(val deleted: Set<String> = emptySet(), val updated: Map<String, ClipDto> = emptyMap())
 
     private val query = MutableStateFlow("")
+    /** The type chip in use; null is All. Applied to the merged list, so the older-clips search keeps every hit. */
+    private val kindFilter = MutableStateFlow<ClipKind?>(null)
     private val remotePages = MutableStateFlow(Remote())
     private val local = MutableStateFlow(Local())
     private val older = MutableStateFlow(Older())
@@ -164,7 +170,7 @@ class HistoryViewModel(
     val shares: Flow<Intent> = _shares.receiveAsFlow()
 
     val state: StateFlow<HistoryState> =
-        combine(cached, query, combine(remotePages, older, ::Pair), local, syncState) { cache, q, (page, old), changes, sync ->
+        combine(cached, query, combine(remotePages, older, kindFilter, ::Triple), local, syncState) { cache, q, (page, old, kind), changes, sync ->
             val needle = q.trim()
             val pinnedTab = page.pinned
             val search = old.takeIf { needle.isNotEmpty() && it.query == needle && it.pinned == pinnedTab }
@@ -174,21 +180,45 @@ class HistoryViewModel(
             val fromServer = (page.items + search?.items.orEmpty()).map { it.fresh() }
             val ids = base.mapTo(HashSet()) { it.id }
             val merged = (base + fromServer.filter { ids.add(it.id) })
-                .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) && it.matches(needle) }
+                .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) &&
+                        (kind == null || it.kind == kind) && it.matches(needle) }
             val items = if (pinnedTab) merged.sortedWith(PINNED_FIRST) else merged
             val newest = cache.firstOrNull()
             HistoryState(
                 tab = if (pinnedTab) HistoryTab.PINNED else HistoryTab.HISTORY,
                 query = q,
+                filter = kind,
                 items = items,
                 liveClipId = newest?.takeIf { it.id !in changes.deleted && it.hash == lastAppliedHash() }?.id,
                 syncState = sync,
-                loadingMore = page.loading,
+                // A type filter on a short list keeps paging in older clips before it says "No files yet".
+                loadingMore = page.loading || (kind != null && needle.isEmpty() && items.size < FILL_TARGET &&
+                    !page.failed && !(page.loaded && page.next == null)),
                 canSearchOlder = needle.isNotEmpty() && search?.searching != true && search?.done != true &&
                     (items.isEmpty() || search?.failed == true),
                 searchingOlder = search?.searching == true,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryState(syncState = syncState.value))
+
+    init {
+        // The list is composed only when it has rows, so nothing would scroll it to its end: page on from here.
+        viewModelScope.launch {
+            // The state alone would not wake it between two pages (loadingMore stays true), so each page counts too.
+            combine(state, remotePages) { s, _ -> s }.collect { s ->
+                // [s] can lag the page that just arrived, so the page's own flags decide too.
+                if (s.filter != null && s.loadingMore && !remotePages.value.failed && pageJob?.isActive != true) onNearEnd()
+            }
+        }
+    }
+
+    /**
+     * A type chip was tapped: select it, or go back to All when it is already the one in use (or [kind] is null). The
+     * filter lives as long as this view model, so rotation and Settings keep it and a fresh launch starts at All.
+     */
+    fun onFilter(kind: ClipKind?) {
+        remotePages.update { it.copy(failed = false) }
+        kindFilter.update { if (it == kind) null else kind }
+    }
 
     fun onQueryChange(value: String) {
         query.value = value
@@ -252,23 +282,27 @@ class HistoryViewModel(
     }
 
     private suspend fun load(cursor: String?) {
-        val api = remote() ?: return
         val pinned = remotePages.value.pinned
         // The tab may change while a page is in flight; only the tab that asked still wants the answer.
         fun Remote.mine() = this.pinned == pinned
+        val api = remote()
+        if (api == null) {
+            remotePages.update { if (it.mine()) it.copy(failed = true) else it }
+            return
+        }
         remotePages.update { if (it.mine()) it.copy(loading = true) else it }
         try {
             val result = withContext(io) { api.clips(cursor, PAGE_SIZE, pinned) }
             remotePages.update {
                 if (!it.mine()) it
-                else it.copy(items = it.items + result.items, next = result.nextCursor, loaded = true, loading = false)
+                else it.copy(items = it.items + result.items, next = result.nextCursor, loaded = true, loading = false, failed = false)
             }
         } catch (e: CancellationException) {
             remotePages.update { if (it.mine()) it.copy(loading = false) else it }
             throw e
         } catch (e: Exception) {
             // Offline or a server error: the cached hits stay; a later scroll or query retries.
-            remotePages.update { if (it.mine()) it.copy(loading = false) else it }
+            remotePages.update { if (it.mine()) it.copy(loading = false, failed = true) else it }
             if (e is ApiException.Unauthorized) onUnauthorized()
         }
     }
@@ -411,6 +445,8 @@ class HistoryViewModel(
 
     private companion object {
         const val PAGE_SIZE = 50
+        /** A type filter pages in older clips until this many match or the history ends. */
+        const val FILL_TARGET = 20
         const val OLDER_PAGE_SIZE = 200
         const val NOT_FOUND = 404
     }

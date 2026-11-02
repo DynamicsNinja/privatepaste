@@ -2,9 +2,14 @@ package xyz.ficdev.privatepaste.ui
 
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTouchHeightIsEqualTo
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -22,6 +27,7 @@ import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.ui.history.FILTER_CHIP_TAG
 import xyz.ficdev.privatepaste.ui.history.HistoryContent
 import xyz.ficdev.privatepaste.ui.history.HistoryState
 import xyz.ficdev.privatepaste.ui.history.HistoryTab
@@ -76,6 +82,68 @@ class HistoryScreenTest {
         compose.onNodeWithText("Search history").assertExists()
         compose.onNodeWithText("Connected").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings").assertIsDisplayed()
+    }
+
+    private val filters = mutableListOf<ClipKind?>()
+
+    private fun showFiltered(state: HistoryState) = compose.setContent {
+        PrivatePasteTheme {
+            HistoryContent(
+                state = state, relativeTime = time, onQueryChange = {}, onCopy = {}, onDelete = {},
+                onNearEnd = {}, onOpenSettings = {}, onFilter = { filters += it },
+            )
+        }
+    }
+
+    @Test
+    fun filterChipsAreAllShownAndTapsReportTheKind() {
+        showFiltered(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        for (label in listOf("All", "Text", "Links", "Images", "Files")) compose.onNodeWithText(label).assertIsDisplayed()
+        compose.onNodeWithText("All").assertIsSelected()
+        compose.onNodeWithText("Links").performClick()
+        compose.onNodeWithText("Files").performClick()
+        assertEquals(listOf(ClipKind.LINK, ClipKind.FILE), filters)
+    }
+
+    @Test
+    fun filterChipsKeepA48DpTouchTarget() {
+        showFiltered(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        for (label in listOf("All", "Text", "Links", "Images", "Files")) {
+            val chip = compose.onNodeWithText(label)
+            chip.assertTouchHeightIsEqualTo(48.dp)
+            val bounds = chip.getUnclippedBoundsInRoot()
+            assertTrue("$label is ${bounds.right - bounds.left} wide", bounds.right - bounds.left >= 48.dp)
+        }
+    }
+
+    @Test
+    fun filterRowStartsAtTheSameGutterAsTheTabs() {
+        showFiltered(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        // The visible chip, not its hit box: "All" is the first one.
+        val all = compose.onAllNodesWithTag(FILTER_CHIP_TAG, useUnmergedTree = true)[0].getUnclippedBoundsInRoot()
+        val history = compose.onNodeWithText("History").getUnclippedBoundsInRoot()
+        assertEquals(history.left.value, all.left.value, 0.5f)
+        assertTrue("the visible All chip is ${all.right - all.left} wide", all.right - all.left >= 48.dp)
+    }
+
+    @Test
+    fun theActiveFilterChipIsSelected() {
+        showFiltered(HistoryState(filter = ClipKind.IMAGE, items = listOf(clip), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("Images").assertIsSelected()
+        compose.onNodeWithText("All").assertIsNotSelected()
+    }
+
+    @Test
+    fun emptyFilteredResultNamesTheType() {
+        showFiltered(HistoryState(filter = ClipKind.TEXT, syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("No text yet").assertIsDisplayed()
+        compose.onNodeWithText("Files").assertIsDisplayed()   // every chip stays
+    }
+
+    @Test
+    fun emptyFilteredPinnedResultSaysNoPinned() {
+        showFiltered(HistoryState(filter = ClipKind.FILE, tab = HistoryTab.PINNED, syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("No pinned files").assertIsDisplayed()
     }
 
     @Test

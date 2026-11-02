@@ -299,6 +299,168 @@ class HistoryViewModelTest {
         assertEquals("no query, no button", false, vm.state.value.canSearchOlder)
     }
 
+    private fun mixed() = listOf(
+        clip("t", 6, "plain note"),
+        clip("l", 5, "https://example.com", ClipKind.LINK),
+        clip("i", 4, null, ClipKind.IMAGE),
+        fileClip("f").copy(seq = 3),
+        clip("u", 2, null, ClipKind.UNKNOWN),
+    )
+
+    @Test
+    fun filterShowsOneKindAndTappingAgainOrAllReturnsToAll() = runTest(dispatcher) {
+        cache.value = mixed()
+        val vm = collecting(vm())
+        advanceUntilIdle()
+        assertEquals(null, vm.state.value.filter)
+        assertEquals(listOf("t", "l", "i", "f", "u"), vm.ids())
+
+        vm.onFilter(ClipKind.LINK)
+        advanceUntilIdle()
+        assertEquals(ClipKind.LINK, vm.state.value.filter)
+        assertEquals(listOf("l"), vm.ids())
+
+        vm.onFilter(ClipKind.FILE)   // one at a time
+        advanceUntilIdle()
+        assertEquals(listOf("f"), vm.ids())
+
+        vm.onFilter(ClipKind.FILE)   // the active chip again: back to All
+        advanceUntilIdle()
+        assertEquals(null, vm.state.value.filter)
+        assertEquals(5, vm.ids().size)
+
+        vm.onFilter(ClipKind.IMAGE)
+        vm.onFilter(null)
+        advanceUntilIdle()
+        assertEquals(5, vm.ids().size)
+    }
+
+    @Test
+    fun unknownKindShowsOnlyUnderAll() = runTest(dispatcher) {
+        cache.value = mixed()
+        val vm = collecting(vm())
+        for (kind in listOf(ClipKind.TEXT, ClipKind.LINK, ClipKind.IMAGE, ClipKind.FILE)) {
+            vm.onFilter(kind)
+            advanceUntilIdle()
+            assertTrue(kind.name, "u" !in vm.ids())
+        }
+        vm.onFilter(null)
+        advanceUntilIdle()
+        assertTrue("u" in vm.ids())
+    }
+
+    @Test
+    fun filterCombinesWithThePinnedTabAndSearch() = runTest(dispatcher) {
+        cache.value = listOf(
+            pinned(clip("t1", 9, "report notes"), 3),
+            clip("t2", 8, "report draft"),
+            pinned(clip("l1", 7, "https://report.example", ClipKind.LINK), 4),
+            clip("l2", 6, "https://other.example", ClipKind.LINK),
+        )
+        val vm = collecting(vm())
+        vm.onFilter(ClipKind.LINK)
+        advanceUntilIdle()
+        assertEquals(listOf("l1", "l2"), vm.ids())
+
+        vm.onTab(HistoryTab.PINNED)
+        advanceUntilIdle()
+        assertEquals(ClipKind.LINK, vm.state.value.filter)   // the filter survives a tab switch
+        assertEquals(listOf("l1"), vm.ids())
+
+        vm.onTab(HistoryTab.HISTORY)
+        vm.onQueryChange("report")
+        advanceUntilIdle()
+        assertEquals("search runs inside the chosen type", listOf("l1"), vm.ids())
+
+        vm.onFilter(ClipKind.TEXT)
+        advanceUntilIdle()
+        assertEquals(listOf("t1", "t2"), vm.ids())
+    }
+
+    @Test
+    fun searchOlderKeepsTheFilter() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 30, "Hello"))
+        remote.pages["|"] = ClipPage(
+            listOf(clip("x", 5, "old invoice text"), clip("y", 4, "https://invoice.example", ClipKind.LINK)),
+            null,
+        )
+        val vm = collecting(vm())
+        vm.onFilter(ClipKind.LINK)
+        vm.onQueryChange("invoice")
+        advanceUntilIdle()
+        assertTrue(vm.state.value.canSearchOlder)
+
+        vm.searchOlder()
+        advanceUntilIdle()
+        assertEquals(listOf("y"), vm.ids())
+        assertEquals(false, vm.state.value.canSearchOlder)
+
+        vm.onFilter(null)   // the hits are kept: All shows both
+        advanceUntilIdle()
+        assertEquals(listOf("x", "y"), vm.ids())
+    }
+
+    @Test
+    fun aNewViewModelStartsAtAllAndTheFilterSurvivesTheScreenLeavingAndComingBack() = runTest(dispatcher) {
+        cache.value = mixed()
+        val vm = vm()
+        assertEquals(null, vm.state.value.filter)   // a fresh launch
+
+        val first = backgroundScope.launch { vm.state.collect {} }
+        vm.onFilter(ClipKind.IMAGE)
+        advanceUntilIdle()
+        first.cancel()   // rotation or Settings: the screen stops collecting, the view model stays
+        advanceUntilIdle()
+        collecting(vm)
+        advanceUntilIdle()
+        assertEquals(ClipKind.IMAGE, vm.state.value.filter)
+        assertEquals(listOf("i"), vm.ids())
+    }
+
+    @Test
+    fun aTypeFilterWithNoMatchKeepsPagingOlderClipsBeforeSayingNothing() = runTest(dispatcher) {
+        cache.value = listOf(clip("t", 9, "plain"))
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain"), clip("t2", 8, "more")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("t3", 7, "again")), "c2")
+        remote.pages["|c2"] = ClipPage(listOf(fileClip("f").copy(seq = 1)), null)
+        val vm = collecting(vm())
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), events)   // All: nothing is fetched by itself
+
+        val gate = CompletableDeferred<Unit>()
+        remote.gates["|c1"] = gate
+        vm.onFilter(ClipKind.FILE)
+        runCurrent()
+        assertEquals(emptyList<String>(), vm.ids())
+        assertTrue("the empty state waits behind the spinner", vm.state.value.loadingMore)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("clips:|", "clips:|c1", "clips:|c2"), events)
+        assertEquals(listOf("f"), vm.ids())
+    }
+
+    @Test
+    fun aTypeFilterStopsPagingAtTheEndOfTheHistoryAndOnAFailure() = runTest(dispatcher) {
+        cache.value = listOf(clip("t", 9, "plain"))
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("t2", 8, "more")), null)
+        val vm = collecting(vm())
+        vm.onFilter(ClipKind.IMAGE)
+        advanceUntilIdle()
+        assertEquals(listOf("clips:|", "clips:|c1"), events)   // the whole history was read: truly none
+        assertEquals(emptyList<String>(), vm.ids())
+        assertEquals(false, vm.state.value.loadingMore)
+
+        events.clear()
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain")), "c9")
+        remote.failPages += "|c9"
+        val failing = collecting(vm())
+        failing.onFilter(ClipKind.FILE)
+        advanceUntilIdle()
+        assertEquals("one try, no retry loop", listOf("clips:|", "clips:|c9"), events)
+        assertEquals(false, failing.state.value.loadingMore)
+    }
+
     @Test
     fun searchSkipsClipsWithoutText() = runTest(dispatcher) {
         cache.value = listOf(
