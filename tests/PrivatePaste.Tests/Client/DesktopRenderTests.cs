@@ -526,7 +526,7 @@ public class DesktopRenderTests
     /// <summary>
     /// The README hero's popup, from the demo history in scripts/readme/demo.json (see scripts/readme/README.md).
     /// Runs only when PP_README_DEMO names that file; saves readme-popup-{theme}.png into PP_SCREENSHOT_DIR at 2x
-    /// (840x960), so the homepage can show it sharp on high-density screens.
+    /// (840x1040), so the homepage can show it sharp on high-density screens.
     /// </summary>
     [Theory]
     [InlineData("dark")]

@@ -21,7 +21,7 @@ powershell -File scripts/readme/build.ps1
 It needs the .NET SDK, Node.js and a JDK 21 (`JAVA_HOME`, or Android Studio's / Microsoft's JDK, found automatically). It takes a few minutes and does this, all locally:
 
 1. Publishes the server into `scripts/readme/out/server` and starts it on http://localhost:5311 with a fresh, empty data directory; the owner is `owner` with the password `dev`. It never touches a real server.
-2. Renders the desktop popup from `demo.json` with the real Avalonia theme: the test `DesktopRenderTests.Readme_popup` writes `out/readme-popup-{dark,light}.png` at 2x (840×960), so it stays sharp where it is shown larger.
+2. Renders the desktop popup from `demo.json` with the real Avalonia theme: the test `DesktopRenderTests.Readme_popup` writes `out/readme-popup-{dark,light}.png` at 2x (840×1040), so it stays sharp where it is shown larger.
 3. Renders the Android history from `demo.json` with Robolectric: `ReadmeScreenshotTest` writes `out/readme-history-{dark,light}.png`. Image clips are left out there, because the test has no thumbnail to load.
 4. Runs `capture.mjs` (Playwright, using the installed Edge or Playwright's Chromium):
    - renders `photo.html` to `out/photo.png`, the picture used for the image clip, and lets the browser work out what a client uploads with it: the content hash of its pixels and a PNG thumbnail that fits 256×256;
@@ -42,7 +42,7 @@ Then look at both PNGs and commit them. The README shows the dark one in dark mo
 - **Demo content:** `demo.json`, newest first. `user` is the person who copied it (the first one named is the owner; each device belongs to one person, and the name chips only show because there are two people). `kind` is `text`, `link` or `image`; `platform` picks the icon. Keep it to 4 distinct devices: the server allows 5 sign-ins a minute and the web UI needs one. Keep it realistic and free of personal data.
 - **Layout:** `hero.html`. Positions are in CSS pixels on a 1600×1000 stage; the colors at the top are the `DESIGN.md` tokens.
 - **Picture in the image clip:** `photo.html` (an inline SVG).
-- **Sizes:** the web viewport and scale are in `capture.mjs`; the phone size comes from the Robolectric qualifiers in `ReadmeScreenshotTest`; the popup is its real window size (420×480), drawn at 2x.
+- **Sizes:** the web viewport and scale are in `capture.mjs`; the phone size comes from the Robolectric qualifiers in `ReadmeScreenshotTest`; the popup is its real window size (420×520), drawn at 2x.
 
 ### If a step fails
 
