@@ -770,6 +770,19 @@ for (const before of ['there before', null]) {
   });
 }
 
+test('a copy made right after resuming, before the poller reads again, is uploaded', async () => {
+  const env = await setup();
+  await connected(env);
+  await env.engine.setPaused(true);
+  env.clipboard.copyHere('copied while paused');
+  await env.engine.setPaused(false);
+  await until(() => env.engine.status().state === 'syncing', 'syncing');
+  env.clipboard.copyHere('copied right after');
+  await env.engine.setBaseline({ text: 'copied right after' });   // the poller's first read since the pause
+  assert.equal(env.server.uploads.length, 1);
+  assert.deepEqual(await e2e.openPayload(keys, env.server.uploads[0].meta.payload), { text: 'copied right after' });
+});
+
 test('a baseline read after the engine already knows the clipboard is a copy when it differs', async () => {
   const env = await setup();
   const socket = await connected(env);

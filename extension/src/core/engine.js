@@ -140,8 +140,12 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     const next = message ? { state: stateName, message } : { state: stateName };
     const shownLink = stateName === 'syncing' ? link : null;
     // Starting to capture again (after start, a pause, a lock, a server or app too old): whatever is on the clipboard
-    // now was copied while nothing was sent, so it is the new baseline, never a copy to upload.
-    if (!CAPTURING.includes(current.state) && CAPTURING.includes(stateName)) forgetClipboard();
+    // now was copied while nothing was sent, so it is the new baseline, never a copy to upload. Read here and now, not
+    // at the poller's next tick, so a copy made in the second after is still a copy.
+    if (!CAPTURING.includes(current.state) && CAPTURING.includes(stateName)) {
+      forgetClipboard();
+      serial(rebaseline).catch(() => {});
+    }
     if (current.state === next.state && current.message === next.message && current.link === shownLink) return;
     current = { ...next, link: shownLink };
     try { onStatus(status()); } catch { /* a listener must not break the engine */ }
@@ -547,6 +551,15 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     if (!hasContent(item)) return null;
     const inspected = await inspectLocal(item, limits(), kinds());
     return (inspected.skip ? inspected.fingerprint : inspected.contentHash) ?? null;
+  }
+
+  /** Reads what the clipboard holds as the baseline, unless something already set it. */
+  async function rebaseline() {
+    if (baselineKnown || typeof clipboard.readClipboard !== 'function') return;
+    let item;
+    try { item = await clipboard.readClipboard(); } catch { return; }
+    if (!item || baselineKnown) return;   // a failed read: the poller's first read sets it instead
+    know(await hashOf(item));
   }
 
   /**
