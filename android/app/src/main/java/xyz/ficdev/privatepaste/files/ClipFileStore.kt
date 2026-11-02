@@ -102,7 +102,12 @@ class ClipFileStore(private val root: File) {
      */
     fun prune(keep: Set<String>) {
         val kept = keep.mapTo(HashSet(), ::folderName)
-        val skip = synchronized(busy) { busy + inUse }
+        val skip = synchronized(busy) {
+            // Once the history holds a clip, it keeps it: the clip is no longer in use here, so deleting or clearing it
+            // later takes its files with it, as for any other clip.
+            inUse.removeAll { it in kept }
+            busy + inUse
+        }
         root.listFiles().orEmpty()
             .filter { it.name !in kept && it.name !in skip }
             .forEach { it.deleteRecursively() }

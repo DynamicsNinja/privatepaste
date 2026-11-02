@@ -119,6 +119,11 @@ public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 102
     /// </summary>
     public void Prune(IReadOnlySet<Guid> keep)
     {
+        // Once the history holds the clip on the clipboard, it keeps it: the mark goes, so deleting or clearing the clip
+        // later takes its files with it, as for any other clip.
+        lock (_inUse)
+            if (_onClipboard is { } shown && keep.Contains(shown)) _onClipboard = null;
+
         DirectoryInfo[] folders;
         try { folders = new DirectoryInfo(Root).GetDirectories(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
@@ -152,7 +157,7 @@ public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 102
 
     /// <summary>
     /// The clip whose files are on the clipboard now: <see cref="Prune"/> keeps its folder (a paste reads it later) even
-    /// when it isn't in the history, e.g. a pinned clip or an older search hit.
+    /// when it isn't in the history, e.g. a pinned clip or an older search hit, until a prune finds it in the history.
     /// </summary>
     public void MarkOnClipboard(Guid clipId)
     {

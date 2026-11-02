@@ -155,6 +155,12 @@ class ClipFileStoreTest {
         assertFalse("only the last ones in use stay", opened.getValue("a").exists())
         assertTrue(opened.getValue("b").exists())
         assertTrue(opened.getValue("c").exists())
+
+        // Once in the history, the history keeps it: deleting it there later takes its files, in use or not.
+        store.prune(setOf("c"))
+        store.prune(emptySet())
+        assertFalse(opened.getValue("c").exists())
+        assertTrue(opened.getValue("b").exists())
     }
 
     @Test

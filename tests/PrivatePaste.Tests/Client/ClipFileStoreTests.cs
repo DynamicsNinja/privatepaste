@@ -219,5 +219,10 @@ public sealed class ClipFileStoreTests : IDisposable
         store.Prune(new HashSet<Guid>());   // released: the held one goes; the clipboard's stays
         Assert.False(File.Exists(heldPaths[0]));
         Assert.True(File.Exists(clipboardPaths[0]));
+
+        // Once in the history, the history keeps it: deleting it there later takes its files, clipboard or not.
+        store.Prune(new HashSet<Guid> { onClipboard.Id });
+        store.Prune(new HashSet<Guid>());
+        Assert.False(File.Exists(clipboardPaths[0]));
     }
 }
