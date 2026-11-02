@@ -199,10 +199,12 @@ public class ClipboardSelectionTests
     }
 
     [Fact]
-    public void Files_win_over_text_and_png()
+    public void Files_win_over_text_but_not_over_png()
     {
-        var chosen = ClipboardSelection.Choose("report.pdf", () => [1], ["/home/a/report.pdf"]);
+        var chosen = ClipboardSelection.Choose("report.pdf", () => null, ["/home/a/report.pdf"]);
         Assert.Equal(["/home/a/report.pdf"], Assert.IsType<ClipboardContent.Files>(chosen).Paths);
+        // An app that puts a temp file next to a copied image: still an image.
+        Assert.Equal([9], Assert.IsType<ClipboardContent.Image>(ClipboardSelection.Choose("shot.png", () => [9], ["/tmp/shot.png"])).Png);
         Assert.Equal(new ClipboardContent.Text("x"), ClipboardSelection.Choose("x", () => null, []));
     }
 

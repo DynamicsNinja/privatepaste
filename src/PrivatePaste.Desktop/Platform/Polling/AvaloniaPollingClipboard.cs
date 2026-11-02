@@ -14,7 +14,8 @@ namespace PrivatePaste.Desktop.Platform.Polling;
 
 /// <summary>
 /// The <see cref="IClipboardAccess"/> for macOS and Linux: Avalonia's clipboard polled every 500 ms.
-/// Copied files win (file managers offer their names as text too), then text over an image. Text is compared by value; images are compared by their PNG bytes when the platform exposes <c>image/png</c> on the
+/// Copied files win over text (file managers offer their names as text too) but not over an image copied with a temp file;
+/// otherwise text wins over an image. Text is compared by value; images are compared by their PNG bytes when the platform exposes <c>image/png</c> on the
 /// clipboard (macOS and most X11 clients do); where it does not, the clipboard is text-only.
 /// </summary>
 public static class AvaloniaPollingClipboard
@@ -46,8 +47,8 @@ internal sealed class AvaloniaClipboardBackend(Action<string>? log = null) : ICl
             if (GetClipboard() is not { } clipboard) return null;
             var files = await TryReadFilesAsync(clipboard);
             var text = files.Count > 0 ? null : await clipboard.TryGetTextAsync();
-            // Text first (office apps put text plus a bitmap); the PNG is only fetched when there is no usable text.
-            var png = files.Count == 0 && string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(clipboard) : null;
+            // Text before the PNG (office apps put text plus a bitmap); with files the PNG decides (a temp file next to an image).
+            var png = files.Count > 0 || string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(clipboard) : null;
             return ClipboardSelection.Choose(text, () => png, files);
         });
 
@@ -68,7 +69,7 @@ internal sealed class AvaloniaClipboardBackend(Action<string>? log = null) : ICl
                 if (data is null) return (null, false);
                 var files = await TryReadFilesAsync(data);
                 var text = files.Count > 0 ? null : await data.TryGetTextAsync();
-                var png = files.Count == 0 && string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(data) : null;
+                var png = files.Count > 0 || string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(data) : null;
                 var chosen = ClipboardSelection.Choose(text, () => png, files);
                 return (chosen, chosen is not null && await IsPrivateAsync(data));
             }

@@ -989,7 +989,8 @@ public sealed class DesktopHost : IAsyncDisposable
 
     /// <summary>
     /// Every cache change (sync, local uploads, queue flushes, clears) becomes <see cref="HistoryChanged"/>, coalesced
-    /// and raised on the thread pool so a catch-up of hundreds of clips does not mean hundreds of UI refreshes.
+    /// and raised on the thread pool so a catch-up of hundreds of clips does not mean hundreds of UI refreshes. The received
+    /// files are pruned to the history first.
     /// </summary>
     private void OnCacheChanged(object? sender, EventArgs e)
     {
@@ -997,6 +998,8 @@ public sealed class DesktopHost : IAsyncDisposable
         _ = Task.Run(() =>
         {
             Volatile.Write(ref _historyPending, 0);
+            // Received files of clips that left the history (deleted or cleared on the server, trimmed) go with them.
+            _files.Prune(Cache.Items.Select(i => i.Clip.Id).ToHashSet());   // never throws
             try { HistoryChanged?.Invoke(this, EventArgs.Empty); }
             catch (Exception ex) { _log.Error("A history listener failed.", ex); }
         });
@@ -1089,7 +1092,6 @@ public sealed class DesktopHost : IAsyncDisposable
 
     // ======================================================================== Saving received files
 
-    public const string CouldNotSaveFiles = "Couldn't save the files.";
     public const string SaveWhilePaused = "Sync is paused. Resume it to save files.";
 
     /// <summary>A test seam: where <see cref="SaveFilesAsync"/> saves instead of the real Downloads folder.</summary>
@@ -1105,10 +1107,11 @@ public sealed class DesktopHost : IAsyncDisposable
     public async Task<string?> SaveFilesAsync(ClipDto clip, CancellationToken ct = default)
     {
         if (clip.Kind != ClipKind.File || clip.Files is not { Count: > 0 } described) return null;
-        if (_session is not { } session || Codec is not { } codec) return CouldNotSaveFiles;
+        if (_session is not { } session || Codec is not { } codec) return PopupViewModel.CouldNotSaveText;
+        var files = _files;
         try
         {
-            var paths = await _files.MaterializeAsync(clip, (n, t) =>
+            var paths = await files.MaterializeAsync(clip, (n, t) =>
                 // Pause means nothing enters the machine: files already here can still be saved.
                 _paused ? throw new PausedException() : session.Api.GetBlobAsync(clip.Id, n, t, described[n].Size), codec, ct);
             var saved = DownloadsOverride is { } folder
@@ -1121,7 +1124,17 @@ public sealed class DesktopHost : IAsyncDisposable
         catch (Exception e)
         {
             _log.Error($"Could not save received files ({e.GetType().Name}).");
-            return CouldNotSaveFiles;
+            return PopupViewModel.CouldNotSaveText;
+        }
+        finally
+        {
+            // A sign-out or an encryption reset ran meanwhile and cleared the received files: this save must not leave
+            // its own copy behind (it is not session work, so the wipe didn't wait for it).
+            if (_session != session)
+            {
+                try { Directory.Delete(Path.Combine(files.Root, clip.Id.ToString("N")), recursive: true); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
         }
     }
 

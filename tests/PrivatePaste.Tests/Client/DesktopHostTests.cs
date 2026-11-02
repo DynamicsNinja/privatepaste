@@ -1068,10 +1068,25 @@ public class DesktopHostTests : IAsyncLifetime
         host.DownloadsOverride = Path.Combine(blocker, "Downloads");   // a file where the folder should be
         var clip = await ReceiveFileAsync(host, "secret-name.pdf", "pdf bytes");
 
-        Assert.Equal(DesktopHost.CouldNotSaveFiles, await host.SaveFilesAsync(clip));
+        Assert.Equal(PopupViewModel.CouldNotSaveText, await host.SaveFilesAsync(clip));
         var log = File.ReadAllText(Path.Combine(_dir, "logs", "privatepaste.log"));
         Assert.DoesNotContain("secret-name", log);
     }
+
+    [Fact]
+    public async Task A_clip_deleted_on_the_server_takes_its_received_files_with_it()
+    {
+        var host = await SignedInHostAsync();
+        var clip = await ReceiveFileAsync(host, "report.pdf", "pdf bytes");
+        var folder = Path.Combine(FilesRoot, clip.Id.ToString("N"));
+        Assert.True(Directory.Exists(folder));
+
+        var web = await _server.LoginAsync("Web");
+        (await web.DeleteAsync($"/api/clips/{clip.Id}")).EnsureSuccessStatusCode();
+
+        await WaitUntilAsync(() => !host.Cache.Items.Any(i => i.Clip.Id == clip.Id) && !Directory.Exists(folder));
+    }
+
 
     private sealed class BlockedUiContext : SynchronizationContext
     {
