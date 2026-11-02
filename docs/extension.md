@@ -2,12 +2,12 @@
 
 Install and use the PrivatePaste extension for Microsoft Edge, for computers where the desktop app can't be installed.
 
-## Edge extension
+## What it does
 
 An extension (Manifest V3) that keeps the browser computer's clipboard in sync with your server, like the desktop app does, and shows the history in a toolbar window. It talks only to your server.
 
 - **What it does**: copies you make in any app are encrypted and sent on their own while Edge is running. Clips from your other devices arrive live: text and links go on the clipboard. Images and files go to the history only; **Copy** on an image row in the toolbar window puts it on the clipboard, and a file row has **Download**. Files are never put on the clipboard.
-- **Install**: download `privatepaste-extension-<version>.zip` from the latest GitHub Release and unzip it to a folder you will keep (Edge reads the extension from there). Open `edge://extensions`, turn on **Developer mode**, choose **Load unpacked** and pick the unzipped folder. Then pin PrivatePaste from the puzzle-piece menu so its icon sits on the toolbar. Edge Add-ons will be another way to install it later.
+- **Install**: download `privatepaste-extension-<version>.zip` from the newest `extension-v` release on GitHub (or use the Edge extension download on the homepage) and unzip it to a folder you will keep (Edge reads the extension from there). Open `edge://extensions`, turn on **Developer mode**, choose **Load unpacked** and pick the unzipped folder. Then pin PrivatePaste from the puzzle-piece menu so its icon sits on the toolbar. Edge Add-ons will be another way to install it later.
 - **Sign in**: click the toolbar icon and enter the server URL (`https://` only; plain `http://` works only for localhost, for development), your name, your password and a device name (default `Edge`; an extension can't read the computer's name, so change it if you have several). On a new server the owner is `owner`, with the server's `PP_PASSWORD`.
 - **Unlock**: clips are end-to-end encrypted (see [Self-hosting](self-hosting.md#end-to-end-encryption)), so after signing in the extension asks for the passphrase. Unlocking works with the passphrase only; there is no code to scan. It stays unlocked across Edge restarts: the key is kept in the browser as a key that can't be exported, not as readable bytes. Signing out, or the device being signed out from the People page, deletes the key, the sign-in, the cached history and unsent copies.
 - **Status**: the toolbar window shows `Syncing`, `Paused`, `Offline` or `Locked`. The **Pause syncing** switch stops sending and receiving; copies made while paused are never uploaded.
@@ -33,7 +33,3 @@ The one sentence for the `clipboardRead` permission:
 ## Build it yourself
 
 `node extension/build.mjs [--version X.Y.Z] [--out <dir>]` writes the unpacked extension to `extension/dist/` (see `extension/README.md`). Unit tests: `node --test "extension/test/*.test.mjs"`.
-
-## Release
-
-For the repository owner: push a tag such as `extension-v0.1.0`. `.github/workflows/extension.yml` runs the tests, builds with the version from the tag, zips the result as `privatepaste-extension-<version>.zip` and attaches it to a GitHub Release (a version with a `-`, like `0.2.0-rc1`, becomes a prerelease).

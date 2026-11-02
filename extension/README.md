@@ -61,3 +61,7 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   read waits ten times as long, keeping the poller near a tenth of a core at worst; small clips are read every second.
 - The poller keeps only SHA-256s of the last read (text and image hashed apart). The first read after start isn't
   reported, the same as the desktop app, which doesn't upload what was on the clipboard before it started.
+
+## Release
+
+For the repository owner: push a tag such as `extension-v0.1.0`. `.github/workflows/extension.yml` runs the tests, builds with the version from the tag, zips the result as `privatepaste-extension-<version>.zip` and attaches it to a GitHub Release (a version with a `-`, like `0.2.0-rc1`, becomes a prerelease).

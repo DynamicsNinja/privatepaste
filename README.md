@@ -37,13 +37,13 @@
 - **Copy here, paste there.** Text, links and images you copy show up on the clipboard of your other devices a moment later.
 - **Files too.** Copy files in Explorer (Finder and Linux file managers: best effort for now), or share them from the phone, and they arrive on your other devices as one clip: paste them on a computer or save them to Downloads, copy, save or share them on the phone, or download them from the web UI. Up to 25 MB per copy by default (`PP_MAX_FILE_MB`), end-to-end encrypted like every clip, file names included. [Details](docs/desktop.md#files)
 - **A history you can search.** Every clip is kept until you delete it (or clear the history), with the device it came from, so the thing you copied last Tuesday is still one search away. Search runs on your devices, which hold the key. Filter by type (All, Text, Links, Images, Files) on every device.
-- **Private copies stay private.** On the desktop apps, a copy that a password manager marks as private never leaves your computer: it isn't uploaded, cached or shown anywhere. The desktop app can also ignore copies from apps you name. Android only sends what you send or share yourself. [Details](docs/desktop.md#private-copies)
+- **Private copies stay private.** On the desktop apps, a copy that a password manager marks as private never leaves your computer: it isn't uploaded, cached or shown anywhere. The desktop app can also ignore copies from apps you name. Android only sends what you send or share yourself. The Edge extension can't see those marks, so copies from password managers sync too (encrypted like every clip); it has a Pause syncing switch. [Details](docs/desktop.md#private-copies)
 - **Pinned clips.** Pin the clips you reuse. They get their own tab on every device and survive clearing and auto-delete.
 - **Clear it when you want.** Clear the history from the web UI, or let the server delete clips older than 7, 30 or 90 days. Pinned clips stay. Off by default: otherwise clips are kept until you delete them.
 - **Multiple people, one shared history.** Add the people you share a server with (a household, a small team). Each signs in with their own name and password, everyone sees the same history, and each clip shows who copied it. The owner can sign someone out or remove them without changing a password for everyone. [Details](docs/self-hosting.md#people)
 - **Only on your server.** One small container. No cloud relay, no push service, no analytics, no third-party requests.
 - **End-to-end encrypted.** Clips are encrypted on your devices with a key that only they hold, unlocked with a passphrase. The server stores ciphertext: someone who steals it, its configuration and backups made since end-to-end encryption still can't read your clips. [Details](#security)
-- **Native on every device.** A tray app with a history popup (Ctrl+Shift+V) on Windows, macOS and Linux, an Android app with a Quick Settings tile and a Share target, and an Edge extension for computers where you can't install the app, and a web UI for everything else.
+- **Native on every device.** A tray app with a history popup (Ctrl+Shift+V) on Windows, macOS and Linux, an Android app with a Quick Settings tile and a Share target, an Edge extension for computers where you can't install the app, and a web UI for everything else.
 - **Knows where a clip came from.** Each clip carries its device's name and platform icon (and, once a second person is added, a chip with the name of who copied it), and the desktop app can show a small notification when a clip from another device lands.
 
 ## Apps
@@ -54,7 +54,7 @@
 | macOS | `osx-arm64` / `osx-x64` `.zip` | Apple Silicon and Intel. Not notarized yet. [Details](docs/desktop.md#macos-and-linux) |
 | Linux | `linux-x64.tar.gz` | Best on X11. [Details](docs/desktop.md#macos-and-linux) |
 | Android | `.apk` | Android 10 or newer, sideloaded. [Details](docs/android.md) |
-| Edge extension | `privatepaste-extension-<version>.zip` | Loaded unpacked in Edge (Developer mode). Syncs while Edge runs. [Details](docs/extension.md) |
+| Edge extension | `privatepaste-extension-<version>.zip` from the newest `extension-v` [release](https://github.com/DynamicsNinja/privatepaste/releases) | Loaded unpacked in Edge (Developer mode). Syncs while Edge runs. [Details](docs/extension.md) |
 | Web | Built into the server | Any modern browser. |
 
 ## Quick start
@@ -116,7 +116,7 @@ Each device signs in with a person's name and password once and gets its own dev
 - Every device has its own token. Sign out a lost device from the People page and it is out at once. Removing a person or resetting their password signs out all their devices and web sessions. Changing your own password signs you out of your other browsers and keeps your devices signed in.
 - Only the owner can add or remove people, clear the history, change auto-delete, set up encryption, change the passphrase or reset encryption.
 - Only HTTPS servers are accepted by the apps (plain HTTP only for localhost).
-- On the desktop apps, copies that password managers mark as private, and copies from apps on the blocklist, are never uploaded. This depends on the app marking its copies; see [Private copies](docs/desktop.md#private-copies) for what is covered. Android sends only what you send or share yourself.
+- On the desktop apps, copies that password managers mark as private, and copies from apps on the blocklist, are never uploaded. This depends on the app marking its copies; see [Private copies](docs/desktop.md#private-copies) for what is covered. Android sends only what you send or share yourself. The Edge extension can't tell password managers' copies apart, so they sync too (encrypted end to end); use its Pause syncing switch before copying a secret ([details](docs/extension.md#what-it-cant-do)).
 
 ## Documentation
 
