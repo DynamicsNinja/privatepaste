@@ -12,6 +12,9 @@
 // local change waits its turn, and not when the clipboard, read just before the write, holds a copy the poller hasn't
 // reported (that copy is taken as a local change instead).
 //
+// Copies are captured only while syncing or offline. Paused, locked, signed out or too old, the poller reads nothing,
+// and when capturing starts again what the clipboard holds is a fresh baseline: a copy made meanwhile is never uploaded.
+//
 // Echo and ordering rules:
 // - A clip this engine writes to the clipboard is remembered by content hash, so the poll reading it back isn't uploaded.
 // - A live clip is applied only when it is newer than the last applied clip and than the last local copy (the server
@@ -54,6 +57,7 @@ export const FLUSH_MS = 30000;
 export const ECHO_WINDOW_MS = 10000;
 export const DROP_AFTER_ATTEMPTS = 10;
 const SERVER_CURSOR = 'server:';
+const CAPTURING = Object.freeze(['syncing', 'offline']);
 const REVOKED_CLOSE = 1008;
 export const SOCKET_PROTOCOL = 'privatepaste.v2';
 export const SOCKET_AUTH_PREFIX = 'privatepaste.auth.';
@@ -102,8 +106,11 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
   let socket = null;
   const sleepers = new Set();
 
+  // What the clipboard held when the engine last looked (content hash, or the fingerprint of a skipped copy), and
+  // whether it has looked at all since it last started capturing: before that, the first read is a baseline, not a copy.
   let lastLocalHash = null;
-  let pendingLocal = 0;              // local changes waiting for their turn: an incoming clip must not overwrite them
+  let baselineKnown = false;
+  let pendingLocal = 0;             // local changes waiting for their turn: an incoming clip must not overwrite them
   let link = null;                   // 'socket' | 'polling' while connected
   const echoes = new Map();          // content hash -> when this engine wrote it
   let lastApplied = null;            // {id, seq}
@@ -132,6 +139,9 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
   function setStatus(stateName, message) {
     const next = message ? { state: stateName, message } : { state: stateName };
     const shownLink = stateName === 'syncing' ? link : null;
+    // Starting to capture again (after start, a pause, a lock, a server or app too old): whatever is on the clipboard
+    // now was copied while nothing was sent, so it is the new baseline, never a copy to upload.
+    if (!CAPTURING.includes(current.state) && CAPTURING.includes(stateName)) forgetClipboard();
     if (current.state === next.state && current.message === next.message && current.link === shownLink) return;
     current = { ...next, link: shownLink };
     try { onStatus(status()); } catch { /* a listener must not break the engine */ }
@@ -148,6 +158,9 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       paused: !!state?.paused,
     };
   }
+
+  /** True while copies are captured: the poller reads nothing otherwise (paused, locked, signed out, too old). */
+  const wantsClipboard = () => running && !!session && !!vault && !state?.paused && CAPTURING.includes(current.state);
 
   const currentApi = () => makeApi({ serverUrl: session.serverUrl, token: session.token });
   const limits = () => state?.serverInfo?.limits ?? DEFAULT_LIMITS;
@@ -393,7 +406,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     thumbs.clear();
     failedThumbs.clear();
     lastApplied = null;
-    lastLocalHash = null;
+    forgetClipboard();
     echoes.clear();
     setStatus('signedOut');
   }
@@ -502,35 +515,65 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
 
   const isEcho = hash => echoes.has(hash) && clock.now() - echoes.get(hash) <= ECHO_WINDOW_MS;
 
+  const know = hash => {
+    lastLocalHash = hash;
+    baselineKnown = true;
+  };
+
+  function forgetClipboard() {
+    lastLocalHash = null;
+    baselineKnown = false;
+  }
+
   /** Writes text to the clipboard as this engine's own write: the poll reading it back is not a copy. */
   async function writeOwnText(text) {
     const hash = await contentHashText(text);
-    const previous = lastLocalHash;
+    const previous = [lastLocalHash, baselineKnown];
     rememberEcho(hash);
-    lastLocalHash = hash;
+    know(hash);
     let written = false;
     try { written = await clipboard.writeText(text); } catch { written = false; }
     if (!written) {
       echoes.delete(hash);
-      lastLocalHash = previous;
+      [lastLocalHash, baselineKnown] = previous;
     }
     return written;
   }
 
+  const hasContent = item => !!item && (typeof item.text === 'string' || item.png instanceof Uint8Array);
+
+  /** What the engine remembers a clipboard item by: its content hash, or a skipped copy's fingerprint; null if neither. */
+  async function hashOf(item) {
+    if (!hasContent(item)) return null;
+    const inspected = await inspectLocal(item, limits(), kinds());
+    return (inspected.skip ? inspected.fingerprint : inspected.contentHash) ?? null;
+  }
+
+  /**
+   * The poller's first read since capturing started: what was there is known, not a copy. When the engine has already
+   * looked (a clip arrived first) and the clipboard has changed since, that change is a copy like any other.
+   */
+  async function takeBaseline(item) {
+    if (!wantsClipboard()) return;
+    if (baselineKnown) {
+      if (hasContent(item)) await captureLocal(item);
+      return;
+    }
+    know(await hashOf(item));
+  }
+
   /**
    * What is on the clipboard right now, when it is a copy the engine doesn't know yet (the poller hasn't reported it), or
-   * null. Its first read only sets what the engine knows, like the poller's own first read.
+   * null. Before the poller's first read, this read only sets what the engine knows, as that read would.
    */
   async function unseenLocalCopy() {
     if (typeof clipboard.readClipboard !== 'function') return null;
     let item;
     try { item = await clipboard.readClipboard(); } catch { return null; }
-    if (!item || (typeof item.text !== 'string' && !(item.png instanceof Uint8Array))) return null;
-    const inspected = await inspectLocal(item, limits(), kinds());
-    const known = inspected.skip ? inspected.fingerprint : inspected.contentHash;
-    if (!known) return null;   // whitespace or unreadable: nothing worth keeping
-    if (lastLocalHash === null) {
-      lastLocalHash = known;
+    const known = await hashOf(item);
+    if (!known) return null;   // empty, whitespace or unreadable: nothing worth keeping
+    if (!baselineKnown) {
+      know(known);
       return null;
     }
     return known === lastLocalHash || isEcho(known) ? null : item;
@@ -557,25 +600,26 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
   }
 
   async function captureLocal(item) {
-    if (!running || !session || !vault || state.paused) return;
-    if (!['syncing', 'offline'].includes(current.state)) return;
+    // Not capturing: nothing is remembered either. Capturing starts again from a fresh baseline (setStatus), so a copy
+    // made meanwhile is never uploaded later.
+    if (!wantsClipboard()) return;
     const prepared = await inspectLocal(item, limits(), kinds());
     if (prepared.skip) {
       // Remembered, so the same content read again is neither checked nor reported again.
       if (!prepared.fingerprint || prepared.fingerprint === lastLocalHash) return;
-      lastLocalHash = prepared.fingerprint;
+      know(prepared.fingerprint);
       if (prepared.message) notify(prepared.message);
       return;
     }
     const hash = prepared.contentHash;
     if (hash === lastLocalHash) return;
     if (isEcho(hash)) {
-      lastLocalHash = hash;
+      know(hash);
       return;
     }
 
     const copiedAt = clock.now();
-    lastLocalHash = hash;
+    know(hash);
     try {
       const stored = await currentApi().upload(await sealLocal(prepared, vault, { copiedAt, backfill: false }));
       const at = time(stored?.lastCopiedAt);
@@ -683,6 +727,17 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
 
   async function findClip(id) {
     return (await store.getCache()).find(c => c.id === id) ?? extra.get(id) ?? null;
+  }
+
+  /** Runs a step on what the clipboard holds after everything before it; an incoming clip waits for it. */
+  function handleLocal(step) {
+    pendingLocal++;
+    return serial(step)
+      .catch(e => {
+        const stop = stopOf(e);
+        if (stop) return handleStop(stop);
+      })
+      .finally(() => { pendingLocal--; });
   }
 
   // ---- the public interface ----
@@ -802,14 +857,15 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
 
     /** A change the clipboard poller saw: {text} or {png}. Copies are handled one at a time, in order. */
     onLocalChange(item) {
-      pendingLocal++;
-      return serial(() => captureLocal(item))
-        .catch(e => {
-          const stop = stopOf(e);
-          if (stop) return handleStop(stop);
-        })
-        .finally(() => { pendingLocal--; });
+      return handleLocal(() => captureLocal(item));
     },
+
+    /** The poller's first read since it (re)started reading: {text}, {png}, or {} for nothing usable. */
+    setBaseline(item) {
+      return handleLocal(() => takeBaseline(item));
+    },
+
+    wantsClipboard,
 
     /**
      * Decrypted history rows for the popup. Without a cursor: the local cache (newest first, or pinned ones most recently
@@ -856,7 +912,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
           const png = await decryptBlob(vault, await currentApi().blob(id, 0));
           const { rgba, width, height } = await pngToRgba(png);
           const hash = await contentHashPixels(rgba, width, height);
-          await serial(() => { rememberEcho(hash); lastLocalHash = hash; });
+          await serial(() => { rememberEcho(hash); know(hash); });
         } catch { /* the popup's own write still works; it may come back as a new copy */ }
       }
       return false;

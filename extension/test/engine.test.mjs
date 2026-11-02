@@ -703,6 +703,84 @@ test('the clipboard as it was at start is the baseline, not a new copy', async (
   assert.equal(env.server.uploads.length, 0);
 });
 
+// ---- copies made while not syncing, and the poller's baseline ----
+
+for (const reported of [true, false]) {
+  test(`a copy made while paused is never uploaded (${reported ? 'reported by the poller' : 'never read'})`, async () => {
+    const env = await setup();
+    await connected(env);
+    await userCopies(env, 'before');
+    await env.engine.setPaused(true);
+    env.clipboard.copyHere('secret');
+    if (reported) await env.engine.onLocalChange({ text: 'secret' });
+    await env.engine.setPaused(false);
+    await until(() => env.engine.status().state === 'syncing' && env.ws.open().length === 1, 'syncing');
+    await live(env.ws.open()[0], await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+    assert.equal(env.server.uploads.length, 1);
+    assert.deepEqual(await e2e.openPayload(keys, env.server.uploads[0].meta.payload), { text: 'before' });
+    // Newest wins, as after the first catch-up: the incoming clip goes on the clipboard.
+    assert.deepEqual(env.clipboard.written, ['incoming']);
+  });
+}
+
+test('a copy made while locked is never uploaded after unlocking', async () => {
+  const wrapCase = vectors.passphraseWrap[0];
+  const env = await setup({ wrap: wrapCase.wrap });
+  const socket = await connected(env);
+  await userCopies(env, 'before');
+  socket.receive({ type: 'vault.reset' });
+  await until(() => env.engine.status().state === 'locked', 'locked');
+  await userCopies(env, 'secret');
+  await env.engine.unlock(wrapCase.passphrase);
+  await until(() => env.engine.status().state === 'syncing' && env.ws.open().length === 1, 'syncing');
+  await live(env.ws.open()[0], await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+  assert.equal(env.server.uploads.length, 1);
+  assert.deepEqual(env.clipboard.written, ['incoming']);
+});
+
+test('the clipboard is wanted only while syncing or offline', async () => {
+  const env = await setup();
+  assert.equal(env.engine.wantsClipboard(), false, 'before start');
+  await connected(env);
+  assert.equal(env.engine.wantsClipboard(), true);
+  await env.engine.setPaused(true);
+  assert.equal(env.engine.wantsClipboard(), false, 'paused');
+  await env.engine.setPaused(false);
+  assert.equal(env.engine.wantsClipboard(), true);
+  await until(() => env.ws.open().length === 1, 'the socket');
+  env.ws.open()[0].receive({ type: 'vault.reset' });
+  await until(() => env.engine.status().state === 'locked', 'locked');
+  assert.equal(env.engine.wantsClipboard(), false, 'locked');
+  await env.engine.signOut();
+  assert.equal(env.engine.wantsClipboard(), false, 'signed out');
+});
+
+for (const before of ['there before', null]) {
+  test(`a copy made before the first poll after start is not overwritten (${before ? 'text' : 'empty'} at start)`, async () => {
+    const env = await setup();
+    if (before) env.clipboard.copyHere(before);
+    const socket = await connected(env);
+    await env.engine.setBaseline(before ? { text: before } : {});   // the poller's first read
+    env.clipboard.copyHere('copied right after start');
+    await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+    assert.deepEqual(env.clipboard.written, []);
+    assert.equal(env.server.uploads.length, 1);
+    assert.deepEqual(await e2e.openPayload(keys, env.server.uploads[0].meta.payload), { text: 'copied right after start' });
+  });
+}
+
+test('a baseline read after the engine already knows the clipboard is a copy when it differs', async () => {
+  const env = await setup();
+  const socket = await connected(env);
+  await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+  assert.deepEqual(env.clipboard.written, ['incoming']);
+  await env.engine.setBaseline({ text: 'incoming' });
+  assert.equal(env.server.uploads.length, 0);
+  env.clipboard.copyHere('copied before the poll');
+  await env.engine.setBaseline({ text: 'copied before the poll' });
+  assert.equal(env.server.uploads.length, 1);
+});
+
 test('catch-up applies only the newest (poll)', async () => {
   const env = await setup();
   await connectedIn(env, 'poll');

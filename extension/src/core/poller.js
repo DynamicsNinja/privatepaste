@@ -19,14 +19,25 @@ async function fingerprint(item, digest) {
  * the read itself failed. The first good read only sets the baseline: what was on the clipboard before the extension
  * started isn't a new copy (the desktop app doesn't upload it either). A failed read keeps the baseline; unusable
  * content moves it without a report, so copying the same text again afterwards counts as a copy.
+ *
+ * `onBaseline(item)` hears each baseline read, so the engine knows what was there (an empty `{}` included). While
+ * `wants()` is false (paused, locked, signed out) the clipboard isn't read at all, and the first read after is a new
+ * baseline: what was copied meanwhile is never reported as a copy.
  */
-export function createPoller({ read, onChange, digest = b => crypto.subtle.digest('SHA-256', b), now = () => performance.now() }) {
+export function createPoller({
+  read, onChange, onBaseline = () => {}, wants = () => true,
+  digest = b => crypto.subtle.digest('SHA-256', b), now = () => performance.now(),
+}) {
   let last;
   let reads = 0;
   let busyMs = 0;
   return {
     /** @returns {Promise<number>} The ms spent reading and hashing (not in `onChange`, which is the engine's cost). */
     async poll() {
+      if (!wants()) {
+        last = undefined;
+        return 0;
+      }
       const started = now();
       let item;
       let hash;
@@ -43,9 +54,9 @@ export function createPoller({ read, onChange, digest = b => crypto.subtle.diges
       const first = last === undefined;
       const changed = hash !== last;
       last = hash;
-      if (first || !changed || hash === 'none') return costMs;
+      if (!first && (!changed || hash === 'none')) return costMs;
       try {
-        await onChange(item);
+        await (first ? onBaseline(item) : onChange(item));
       } catch {
         // The engine reports its own errors; a throw here must not stop the next poll.
       }
@@ -62,8 +73,10 @@ export const nextDelay = (intervalMs, costMs) => Math.max(intervalMs, costMs * 1
  * Polls until `stop()`. A new read starts only after the previous one finished. Small clips are read every
  * `intervalMs`; a big image on the clipboard (each read pulls the whole PNG) backs the poller off to about 10% of a core.
  */
-export function startPollingWith({ read, onChange, intervalMs = 1000, now = () => performance.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
-  const poller = createPoller({ read, onChange, now });
+export function startPollingWith({
+  read, onChange, onBaseline, wants, intervalMs = 1000, now = () => performance.now(), setTimer = setTimeout, clearTimer = clearTimeout,
+}) {
+  const poller = createPoller({ read, onChange, onBaseline, wants, now });
   let timer;
   let stopped = false;
   const loop = async () => {

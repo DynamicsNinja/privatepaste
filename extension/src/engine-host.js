@@ -11,7 +11,7 @@ import { createEngine } from './core/engine.js';
 export const STATUS_MESSAGE = 'engine.statusChanged';
 
 /**
- * @param {{clipboard: {readClipboard, writeText, writeImage}, startPolling: (onChange: (item) => void, intervalMs?: number) => void}} platform
+ * @param {{clipboard: {readClipboard, writeText, writeImage}, startPolling: (onChange: (item) => void, intervalMs?: number, options?: {wants, onBaseline}) => void}} platform
  * @returns the engine (see core/engine.js), with `ready`: a promise that settles once the stored state is loaded.
  */
 export function startEngine({ clipboard, startPolling }) {
@@ -30,6 +30,11 @@ export function startEngine({ clipboard, startPolling }) {
   });
   // A store that can't be opened leaves the engine signed out; copies are then ignored rather than failing each poll.
   const ready = engine.start().catch(() => {});
-  startPolling(item => { ready.then(() => engine.onLocalChange(item)); });
+  // The poller reads nothing while the engine doesn't capture (paused, locked, signed out), and its first read after is a
+  // baseline the engine keeps, so nothing copied meanwhile is uploaded later.
+  startPolling(item => { ready.then(() => engine.onLocalChange(item)); }, undefined, {
+    wants: () => engine.wantsClipboard(),
+    onBaseline: item => ready.then(() => engine.setBaseline(item)),
+  });
   return Object.assign(engine, { ready });
 }

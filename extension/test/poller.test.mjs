@@ -133,6 +133,41 @@ test('a read that throws is retried on the next tick', async () => {
   assert.deepEqual(delays, [1000, 1000]);
 });
 
+test('while not wanted it reads nothing, and the first read after is a new baseline', async () => {
+  const clip = { value: { text: 'a' } };
+  let reads = 0;
+  let wanted = true;
+  const changes = [];
+  const baselines = [];
+  const poller = createPoller({
+    read: async () => { reads++; return clip.value; },
+    onChange: item => changes.push(item),
+    onBaseline: item => baselines.push(item),
+    wants: () => wanted,
+  });
+  await poller.poll();
+  assert.deepEqual(baselines, [{ text: 'a' }]);
+  wanted = false;
+  clip.value = { text: 'copied while paused' };
+  await poller.poll();
+  await poller.poll();
+  assert.equal(reads, 1);
+  wanted = true;
+  await poller.poll();
+  assert.deepEqual(changes, []);
+  assert.deepEqual(baselines, [{ text: 'a' }, { text: 'copied while paused' }]);
+  clip.value = { text: 'b' };
+  await poller.poll();
+  assert.deepEqual(changes, [{ text: 'b' }]);
+});
+
+test('an empty clipboard at the first read is a baseline too', async () => {
+  const baselines = [];
+  const poller = createPoller({ read: async () => ({}), onChange: () => {}, onBaseline: item => baselines.push(item) });
+  await poller.poll();
+  assert.deepEqual(baselines, [{}]);
+});
+
 test('nextDelay keeps the interval for fast reads', () => {
   assert.equal(nextDelay(1000, 5), 1000);
   assert.equal(nextDelay(1000, 250), 2500);
