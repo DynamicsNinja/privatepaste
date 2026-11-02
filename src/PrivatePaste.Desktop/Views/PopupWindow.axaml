@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:PrivatePaste.Desktop.ViewModels"
         xmlns:views="using:PrivatePaste.Desktop.Views"
@@ -6,7 +6,7 @@
         x:DataType="vm:PopupViewModel"
         Title="PrivatePaste history"
         WindowDecorations="None" Topmost="True" ShowInTaskbar="False" CanResize="False"
-        Width="420" Height="480"
+        Width="420" Height="520"
         Background="Transparent" TransparencyLevelHint="Transparent">
   <Window.Resources>
     <ResourceDictionary>
@@ -90,6 +90,40 @@
     <Style Selector="Border.tab.active TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource PpText}" />
     </Style>
+    <!-- Type filter chips: plain borders like the tabs. The active one gets the accent border, a raised fill and primary label. -->
+    <Style Selector="Border.chip">
+      <Setter Property="Padding" Value="10,4" />
+      <Setter Property="CornerRadius" Value="{StaticResource PpControlRadius}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource PpLine}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Border.chip TextBlock">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource PpMuted}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.chip Path, Border.chip Rectangle, Border.chip Ellipse">
+      <Setter Property="Stroke" Value="{DynamicResource PpMuted}" />
+      <Setter Property="StrokeThickness" Value="2" />
+      <Setter Property="StrokeLineCap" Value="Round" />
+      <Setter Property="StrokeJoin" Value="Round" />
+    </Style>
+    <Style Selector="Border.chip:pointerover">
+      <Setter Property="Background" Value="{DynamicResource PpSurface}" />
+    </Style>
+    <Style Selector="Border.chip.active">
+      <Setter Property="Background" Value="{DynamicResource PpRaised}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource PpAccent}" />
+    </Style>
+    <Style Selector="Border.chip.active TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource PpText}" />
+    </Style>
+    <Style Selector="Border.chip.active Path, Border.chip.active Rectangle, Border.chip.active Ellipse">
+      <Setter Property="Stroke" Value="{DynamicResource PpAccent}" />
+    </Style>
     <Style Selector="Button.pin">
       <Setter Property="Padding" Value="0" />
       <Setter Property="Width" Value="30" />
@@ -122,7 +156,7 @@
 
   <Border Background="{DynamicResource PpNight}" BorderBrush="{DynamicResource PpLine}" BorderThickness="1"
           CornerRadius="{StaticResource PpPanelRadius}" Padding="12">
-    <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="10">
       <!-- A stack, not a grid row: a hidden banner takes no space or spacing. -->
       <StackPanel Spacing="10">
         <!-- Why sync isn't running (an old app or server, a reset): the history below is what this computer still holds. -->
@@ -143,7 +177,51 @@
         </Border>
       </StackPanel>
 
-      <ListBox x:Name="ItemsList" Grid.Row="2" ItemsSource="{Binding Items}" SelectedIndex="{Binding SelectedIndex}"
+      <!-- Type filter (Alt+1 to Alt+5): All, Text, Links, Images, Files. Icons as in the rows. -->
+      <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="6">
+        <Border x:Name="FilterAllChip" Classes="chip" Classes.active="{Binding IsAllFilter}" Focusable="False">
+          <TextBlock Text="All" />
+        </Border>
+        <Border x:Name="FilterTextChip" Classes="chip" Classes.active="{Binding IsTextFilter}" Focusable="False">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Viewbox Width="13" Height="13"><Canvas Width="24" Height="24"><Path Data="M5 6h14M5 12h14M5 18h9" /></Canvas></Viewbox>
+            <TextBlock Text="Text" />
+          </StackPanel>
+        </Border>
+        <Border x:Name="FilterLinkChip" Classes="chip" Classes.active="{Binding IsLinkFilter}" Focusable="False">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Viewbox Width="13" Height="13">
+              <Canvas Width="24" Height="24">
+                <Path Data="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1" />
+                <Path Data="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" />
+              </Canvas>
+            </Viewbox>
+            <TextBlock Text="Links" />
+          </StackPanel>
+        </Border>
+        <Border x:Name="FilterImageChip" Classes="chip" Classes.active="{Binding IsImageFilter}" Focusable="False">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Viewbox Width="13" Height="13">
+              <Canvas Width="24" Height="24">
+                <Rectangle Canvas.Left="3" Canvas.Top="4" Width="18" Height="16" RadiusX="3" RadiusY="3" />
+                <Ellipse Canvas.Left="7" Canvas.Top="8" Width="4" Height="4" />
+                <Path Data="M21 16l-5-5-9 9" />
+              </Canvas>
+            </Viewbox>
+            <TextBlock Text="Images" />
+          </StackPanel>
+        </Border>
+        <Border x:Name="FilterFileChip" Classes="chip" Classes.active="{Binding IsFileFilter}" Focusable="False">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Viewbox Width="13" Height="13">
+              <Canvas Width="24" Height="24"><Path Data="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5" /></Canvas>
+            </Viewbox>
+            <TextBlock Text="Files" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+
+      <ListBox x:Name="ItemsList" Grid.Row="3" ItemsSource="{Binding Items}" SelectedIndex="{Binding SelectedIndex}"
                Background="Transparent" BorderThickness="0" Padding="0" Focusable="False"
                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
         <ListBox.ItemTemplate>
@@ -229,11 +307,11 @@
         </ListBox.ItemTemplate>
       </ListBox>
 
-      <TextBlock x:Name="EmptyText" Grid.Row="2" Text="Nothing to paste yet." IsVisible="False"
+      <TextBlock x:Name="EmptyText" Grid.Row="3" Text="Nothing to paste yet." IsVisible="False"
                  HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource PpMuted}" />
 
-      <TextBlock Grid.Row="3" Text="{Binding FooterHint}" FontSize="12" Foreground="{DynamicResource PpMuted}"
-                 HorizontalAlignment="Center" />
+      <TextBlock x:Name="FooterText" Grid.Row="4" Text="{Binding FooterHint}" FontSize="12" Foreground="{DynamicResource PpMuted}"
+                 HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" />
     </Grid>
   </Border>
 </Window>

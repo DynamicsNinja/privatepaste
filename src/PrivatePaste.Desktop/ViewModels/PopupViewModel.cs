@@ -9,6 +9,9 @@ namespace PrivatePaste.Desktop.ViewModels;
 
 public enum PopupTab { History, Pinned }
 
+/// <summary>The type chips under the tabs, in their order (Alt+1 to Alt+5). One at a time; clips of an unknown kind show under All only.</summary>
+public enum PopupFilter { All, Text, Link, Image, File }
+
 /// <summary>A server lookup that needs the vault key was asked for while locked or signed out.</summary>
 public sealed class VaultLockedException() : InvalidOperationException("Locked or signed out.");
 
@@ -132,8 +135,63 @@ public sealed partial class PopupViewModel : ObservableObject
     public bool IsHistoryTab => Tab == PopupTab.History;
     public bool IsPinnedTab => Tab == PopupTab.Pinned;
 
+    /// <summary>The type chip in force; it starts at All each time the popup opens (a new view model per opening) and survives tab switches.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsAllFilter), nameof(IsTextFilter), nameof(IsLinkFilter), nameof(IsImageFilter), nameof(IsFileFilter), nameof(EmptyText))]
+    private PopupFilter _filter = PopupFilter.All;
+
+    public bool IsAllFilter => Filter == PopupFilter.All;
+    public bool IsTextFilter => Filter == PopupFilter.Text;
+    public bool IsLinkFilter => Filter == PopupFilter.Link;
+    public bool IsImageFilter => Filter == PopupFilter.Image;
+    public bool IsFileFilter => Filter == PopupFilter.File;
+
+    /// <summary>A chip click or Alt+digit: picks the type, or returns to All when it is already the active one (or is All).</summary>
+    public void SetFilter(PopupFilter filter)
+    {
+        if (filter == Filter) filter = PopupFilter.All;
+        if (filter == Filter) return;
+        Filter = filter;
+        Refilter();
+    }
+
+    /// <summary>Alt+1 to Alt+5, the chips in order; anything else is ignored.</summary>
+    public void SetFilterByIndex(int index)
+    {
+        if (index is >= 1 and <= 5) SetFilter((PopupFilter)(index - 1));
+    }
+
+    private bool PassesFilter(ClipDto clip) => Filter switch
+    {
+        PopupFilter.Text => clip.Kind == ClipKind.Text,
+        PopupFilter.Link => clip.Kind == ClipKind.Link,
+        PopupFilter.Image => clip.Kind == ClipKind.Image,
+        PopupFilter.File => clip.Kind == ClipKind.File,
+        _ => true,
+    };
+
+    /// <summary>What the list says when it has no rows (and no search row).</summary>
+    public string EmptyText
+    {
+        get
+        {
+            if (IsSearchingOlder) return SearchingOlderText;
+            if (Query.Trim().Length > 0) return "No matches.";
+            var pinned = Tab == PopupTab.Pinned;
+            return Filter switch
+            {
+                PopupFilter.Text => pinned ? "No pinned text" : "No text yet",
+                PopupFilter.Link => pinned ? "No pinned links" : "No links yet",
+                PopupFilter.Image => pinned ? "No pinned images" : "No images yet",
+                PopupFilter.File => pinned ? "No pinned files" : "No files yet",
+                _ => pinned ? "Nothing pinned yet." : "Nothing to paste yet.",
+            };
+        }
+    }
+
     public string FooterHint => $"Enter to paste   Tab for {(Tab == PopupTab.History ? "Pinned" : "History")}   Ctrl+P to pin"
-        + (Selected is { IsFile: true } ? "   Ctrl+S to save" : "");
+        + (Selected is { IsFile: true } ? "   Ctrl+S to save" : "")
+        + "   Alt+1–5 to filter";
 
     private PopupItem? Selected => SelectedIndex >= 0 && SelectedIndex < Items.Count ? Items[SelectedIndex] : null;
 
@@ -220,10 +278,15 @@ public sealed partial class PopupViewModel : ObservableObject
         AddSearchOlderRow();
     }
 
+    /// <remarks>
+    /// Only the local cache (about 500 clips) is listed for a filter alone: the popup has no paging, and the server can't
+    /// search, so "Search older clips" (which keeps the filter) is the only way to older ones.
+    /// </remarks>
     private IReadOnlyList<CachedClip> CachedFor(string query) =>
-        Tab == PopupTab.History
+        (Tab == PopupTab.History
             ? _cache.Search(query)
-            : _cache.Pinned.Where(c => Matches(c.Clip, query)).ToArray();
+            : _cache.Pinned.Where(c => Matches(c.Clip, query)))
+        .Where(c => PassesFilter(c.Clip)).ToArray();
 
     /// <summary>Whether a clip matches a search: its text, or any of its file names.</summary>
     public static bool Matches(ClipDto clip, string query) =>
@@ -260,7 +323,7 @@ public sealed partial class PopupViewModel : ObservableObject
     {
         var known = Items.Select(i => i.Clip.Id).ToHashSet();
         foreach (var clip in results.Take(ServerLimit))
-            if (known.Add(clip.Id)) Items.Add(ToItem(clip, null, newest: false));
+            if (PassesFilter(clip) && known.Add(clip.Id)) Items.Add(ToItem(clip, null, newest: false));
     }
 
     private PopupItem ToItem(ClipDto clip, byte[]? thumbnail, bool newest) =>
