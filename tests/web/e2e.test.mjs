@@ -242,3 +242,30 @@ test('formatSize reproduces every fileSize vector', () => {
 test('fileRowText reproduces every vector', () => {
   for (const { files, text } of vectors.fileRowText) assert.equal(e2e.fileRowText(files), text);
 });
+
+test('matchesFilter: All shows every kind, a type shows only its own, an unknown kind only under All', () => {
+  for (const kind of ['text', 'link', 'image', 'file', 'hologram']) assert.equal(e2e.matchesFilter(kind, 'all'), true);
+  for (const filter of ['text', 'link', 'image', 'file']) {
+    for (const kind of ['text', 'link', 'image', 'file']) assert.equal(e2e.matchesFilter(kind, filter), kind === filter);
+    assert.equal(e2e.matchesFilter('hologram', filter), false);
+  }
+});
+
+test('nextFilter: tapping a type selects it, tapping it again or All returns to All', () => {
+  assert.equal(e2e.nextFilter('all', 'link'), 'link');
+  assert.equal(e2e.nextFilter('link', 'file'), 'file');
+  assert.equal(e2e.nextFilter('link', 'link'), 'all');
+  assert.equal(e2e.nextFilter('link', 'all'), 'all');
+  assert.equal(e2e.nextFilter('all', 'all'), 'all');
+});
+
+test('filterEmptyText names the type, and says pinned in the Pinned tab', () => {
+  assert.equal(e2e.filterEmptyText('text', false), 'No text yet');
+  assert.equal(e2e.filterEmptyText('link', false), 'No links yet');
+  assert.equal(e2e.filterEmptyText('image', false), 'No images yet');
+  assert.equal(e2e.filterEmptyText('file', false), 'No files yet');
+  assert.equal(e2e.filterEmptyText('text', true), 'No pinned text');
+  assert.equal(e2e.filterEmptyText('link', true), 'No pinned links');
+  assert.equal(e2e.filterEmptyText('image', true), 'No pinned images');
+  assert.equal(e2e.filterEmptyText('file', true), 'No pinned files');
+});

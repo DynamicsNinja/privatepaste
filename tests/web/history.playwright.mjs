@@ -335,6 +335,53 @@ try {
     assert.equal(text, i === 0 ? 'first file' : 'second file');
   }
 
+  step('type chips: one at a time, inside search and the tab, search older keeps the type, a reload starts at All');
+  const chip = kind => page.locator(`#filters .chip[data-filter="${kind}"]`);
+  const pressed = async () => page.locator('#filters .chip[aria-pressed="true"]').evaluateAll(els => els.map(e => e.dataset.filter));
+  assert.deepEqual(await page.locator('#filters .chip').evaluateAll(els => els.map(e => e.textContent.trim())),
+    ['All', 'Text', 'Links', 'Images', 'Files']);
+  assert.equal(await page.locator('#filters .chip svg').count(), 4);
+  assert.deepEqual(await pressed(), ['all']);
+  await chip('file').click();
+  assert.deepEqual(await pressed(), ['file']);
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  assert.equal(await fileRow.isVisible(), true);
+  await page.fill('#search-input', 'notes');
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  await page.fill('#search-input', 'filler');
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  assert.equal(await text('#history-empty'), 'No clips match that search.');
+  await page.fill('#search-input', 'needle');
+  await page.click('#search-older');
+  await page.waitForSelector('#search-older', { state: 'hidden' });
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  await chip('text').click();
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  await page.fill('#search-input', '');
+  await chip('text').click();
+  assert.deepEqual(await pressed(), ['all']);
+  for (const kind of ['text', 'link', 'image', 'file']) {
+    await chip(kind).click();
+    const kinds = await page.locator('.clip:visible').evaluateAll(els => [...new Set(els.map(e => e.dataset.kind))]);
+    assert.deepEqual(kinds, [kind]);
+  }
+  await chip('all').click();
+  assert.deepEqual(await pressed(), ['all']);
+  assert.ok(await page.locator('.clip:visible').count() > 50);
+  await chip('link').focus();
+  await page.keyboard.press('Enter');
+  assert.deepEqual(await pressed(), ['link']);
+  await shoot('history-filter');
+  await page.click('.tabs a:has-text("Pinned")');
+  await page.waitForSelector('#clips-view:not([hidden])');
+  assert.deepEqual(await pressed(), ['all']);
+  await chip('file').click();
+  await page.waitForSelector('#history-empty:not([hidden])');
+  assert.equal(await text('#history-empty'), 'No pinned files');
+  await page.goto(`${url}/`);
+  await row(fileId).waitFor();
+  assert.deepEqual(await pressed(), ['all']);
+
   step('a loaded clip under another key means encryption was reset in another tab: the key goes');
   await page.route('**/api/clips?*', async route => {
     const response = await route.fetch();

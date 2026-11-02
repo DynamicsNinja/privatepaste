@@ -297,6 +297,20 @@ export function fileRowText(files) {
   return `${files[0].name}${more} · ${formatSize(files.reduce((sum, f) => sum + f.size, 0))}`;
 }
 
+// ---- the type filter of the history page ----
+
+const FILTER_NOUNS = { text: 'text', link: 'links', image: 'images', file: 'files' };
+
+/** True when a clip of this kind shows under the filter ('all' or a kind); a kind this page doesn't know only under All. */
+export const matchesFilter = (kind, filter) => filter === 'all' || kind === filter;
+
+/** The filter after the chip `clicked` is tapped: The active chip again, or All, returns to All. */
+export const nextFilter = (current, clicked) => (clicked === current ? 'all' : clicked);
+
+/** The empty-state text of a type filter with nothing to show: "No files yet", or "No pinned files" in Pinned. */
+export const filterEmptyText = (filter, pinned) =>
+  pinned ? `No pinned ${FILTER_NOUNS[filter]}` : `No ${FILTER_NOUNS[filter]} yet`;
+
 // ---- payload: base64 of a small item holding UTF-8 JSON ----
 
 export async function sealPayload(vault, obj) {
