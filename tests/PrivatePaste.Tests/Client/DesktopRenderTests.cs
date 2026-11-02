@@ -138,6 +138,15 @@ public class DesktopRenderTests
             Assert.Equal("Image 1280×720", Find<TextBlock>(w, "ClipPreview").Text);
             Assert.Equal("Web", Avalonia.Automation.AutomationProperties.GetName(Find<Viewbox>(w, "ClipPlatformIcon")));
         });
+
+        // A clip from the browser extension gets its own icon, not the unknown-device monitor.
+        var fromExtension = new ToastWindow();
+        fromExtension.ShowClip(PrivatePaste.Desktop.Tray.ClipToast.For(ToastClip(PrivatePaste.Protocol.ClipKind.Text, "https://example.com/article", "Firefox", "extension")));
+        Render(fromExtension, theme, "toast-clip-extension", w =>
+        {
+            Assert.Equal("Browser extension", Avalonia.Automation.AutomationProperties.GetName(Find<Viewbox>(w, "ClipPlatformIcon")));
+            Assert.IsType<StreamGeometry>(Find<Avalonia.Controls.Shapes.Path>(w, "ClipPlatformPath").Data);
+        });
     }, CancellationToken.None);
 
     private static PrivatePaste.Protocol.ClipDto FileClip(int seq, int minutes, string device, string platform,
@@ -338,13 +347,13 @@ public class DesktopRenderTests
             {
                 SourceDevicePlatform = platform,
             };
-        // One row per platform icon, plus an unrecognized and a missing platform (both "Unknown device").
+        // One row per platform icon, plus an unrecognized platform ("Unknown device"; a missing one is covered by the mapping test).
         cache.Upsert(Clip(7, PrivatePaste.Protocol.ClipKind.Text, "git commit -m \"fix(client): sync engine resume\"\nsecond line", 0, "PC-work", "windows"));
         cache.Upsert(Clip(6, PrivatePaste.Protocol.ClipKind.Link, "https://paste.example.com/some/long/path?with=query&and=more", 4, "MacBook", "macos"));
         cache.Upsert(Clip(5, PrivatePaste.Protocol.ClipKind.Image, null, 35, "ThinkPad", "linux", 1280, 720));
         cache.Upsert(Clip(4, PrivatePaste.Protocol.ClipKind.Text, new string('x', 200), 190, "Phone", "android"));
         cache.Upsert(Clip(3, PrivatePaste.Protocol.ClipKind.Text, "Copied from the browser", 600, "Web", "web"));
-        cache.Upsert(Clip(2, PrivatePaste.Protocol.ClipKind.Text, "Meeting notes", 3000, "Old laptop", null));
+        cache.Upsert(Clip(2, PrivatePaste.Protocol.ClipKind.Text, "Copied in the browser extension", 3000, "Firefox", "extension"));
         cache.Upsert(Clip(1, PrivatePaste.Protocol.ClipKind.Text, "Fridge shopping list", 4000, "Fridge", "tizen"));
         var vm = new PopupViewModel(cache, null,
             _ => Task.CompletedTask, TimeProvider.System);
@@ -354,7 +363,7 @@ public class DesktopRenderTests
         {
             var icons = w.GetVisualDescendants().OfType<Viewbox>().Where(v => v.Name == "PlatformIcon").ToList();
             Assert.True(icons.Count >= 6, $"only {icons.Count} platform icons realized");
-            Assert.Equal(["Windows", "macOS", "Linux", "Android", "Web", "Unknown device"],
+            Assert.Equal(["Windows", "macOS", "Linux", "Android", "Web", "Browser extension"],
                 icons.Take(6).Select(v => Avalonia.Automation.AutomationProperties.GetName(v)));
             foreach (var icon in icons)
             {
@@ -599,6 +608,8 @@ public class DesktopRenderTests
     [InlineData("linux", "linux", "Linux")]
     [InlineData("android", "android", "Android")]
     [InlineData("web", "web", "Web")]
+    [InlineData("extension", "extension", "Browser extension")]
+    [InlineData("Extension", "extension", "Browser extension")]
     [InlineData("MacOS", "macos", "macOS")]
     [InlineData("haiku", "unknown", "Unknown device")]
     [InlineData(null, "unknown", "Unknown device")]

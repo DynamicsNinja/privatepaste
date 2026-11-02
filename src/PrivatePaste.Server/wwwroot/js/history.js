@@ -10,7 +10,7 @@ const { startVault } = await import(shell.dataset.vaultUi);
 const PAGE_SIZE = 50;
 const PREVIEW_LENGTH = 200;
 const KINDS = new Set(['text', 'link', 'image', 'file']);
-const PLATFORMS = new Set(['windows', 'macos', 'linux', 'android', 'web']);
+const PLATFORMS = new Set(['windows', 'macos', 'linux', 'android', 'web', 'extension']);
 
 const EMPTY_HISTORY = 'Nothing here yet. Copy something on a signed-in device and it shows up here.';
 const EMPTY_PINNED = 'No pinned clips. Pin a clip to keep it through Clear history and auto-delete.';

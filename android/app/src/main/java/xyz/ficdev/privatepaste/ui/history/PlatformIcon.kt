@@ -11,6 +11,7 @@ enum class PlatformIcon(@param:DrawableRes val drawable: Int, @param:StringRes v
     LINUX(R.drawable.ic_platform_linux, R.string.platform_linux),
     ANDROID(R.drawable.ic_platform_android, R.string.platform_android),
     WEB(R.drawable.ic_platform_web, R.string.platform_web),
+    EXTENSION(R.drawable.ic_platform_extension, R.string.platform_extension),
     UNKNOWN(R.drawable.ic_platform_unknown, R.string.platform_unknown),
     ;
 
@@ -22,6 +23,7 @@ enum class PlatformIcon(@param:DrawableRes val drawable: Int, @param:StringRes v
             "linux" -> LINUX
             "android" -> ANDROID
             "web" -> WEB
+            "extension" -> EXTENSION
             else -> UNKNOWN
         }
     }
