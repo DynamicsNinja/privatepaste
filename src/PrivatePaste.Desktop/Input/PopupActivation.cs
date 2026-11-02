@@ -15,7 +15,7 @@ namespace PrivatePaste.Desktop.Input;
 /// <para>
 /// Offline (HttpRequestException on restore): the cached clip is used without the restore. Paused: pause means nothing
 /// leaves or enters the machine, so text/links are copied and pasted locally with no restore call and no coordinator
-/// (which ignores clips while paused); images need a download and are refused with a toast.
+/// (which ignores clips while paused); images and files need a download and are refused with a toast.
 /// </para>
 /// </summary>
 public sealed class PopupActivation(
@@ -50,9 +50,9 @@ public sealed class PopupActivation(
 
             if (isPaused())
             {
-                if (clip.Kind == ClipKind.Image || clip.Text is null)
+                if (clip.Kind is ClipKind.Image or ClipKind.File || clip.Text is null)
                 {
-                    toast("Sync is paused. Resume it to paste images.");
+                    toast(clip.Kind == ClipKind.File ? "Sync is paused. Resume it to paste files." : "Sync is paused. Resume it to paste images.");
                     return;
                 }
                 await writeLocalText(clip.Text, ct);

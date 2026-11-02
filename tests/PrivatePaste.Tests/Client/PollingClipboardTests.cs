@@ -100,6 +100,20 @@ public class PollingClipboardTests
     }
 
     [Fact]
+    public async Task Detects_file_list_changes()
+    {
+        var backend = new FakeBackend { Current = new ClipboardContent.Files(["/home/a/one.pdf"]) };
+        var (clip, count) = Create(backend);
+        await clip.TickAsync();
+        backend.Current = new ClipboardContent.Files(["/home/a/one.pdf"]);   // the same list: no event
+        await clip.TickAsync();
+        Assert.Equal(0, count());
+        backend.Current = new ClipboardContent.Files(["/home/a/one.pdf", "/home/a/two.pdf"]);
+        await clip.TickAsync();
+        Assert.Equal(1, count());
+    }
+
+    [Fact]
     public async Task Clearing_the_clipboard_does_not_raise_Changed()
     {
         var backend = new FakeBackend { Current = new ClipboardContent.Text("a") };
@@ -184,10 +198,52 @@ public class ClipboardSelectionTests
         Assert.False(read);
     }
 
+    [Fact]
+    public void Files_win_over_text_but_not_over_png()
+    {
+        var chosen = ClipboardSelection.Choose("report.pdf", () => null, ["/home/a/report.pdf"]);
+        Assert.Equal(["/home/a/report.pdf"], Assert.IsType<ClipboardContent.Files>(chosen).Paths);
+        // An app that puts a temp file next to a copied image: still an image.
+        Assert.Equal([9], Assert.IsType<ClipboardContent.Image>(ClipboardSelection.Choose("shot.png", () => [9], ["/tmp/shot.png"])).Png);
+        Assert.Equal(new ClipboardContent.Text("x"), ClipboardSelection.Choose("x", () => null, []));
+    }
+
     private sealed class ContentComparer : IEqualityComparer<ClipboardContent?>
     {
         public bool Equals(ClipboardContent? a, ClipboardContent? b) =>
             a is ClipboardContent.Image x && b is ClipboardContent.Image y && x.Png.SequenceEqual(y.Png);
         public int GetHashCode(ClipboardContent? c) => 0;
+    }
+}
+
+/// <summary>File lists on macOS and Linux clipboards: file:// URIs (text/uri-list, x-special/gnome-copied-files, public.file-url).</summary>
+public class FileUrisTests
+{
+    [Fact]
+    public void Uri_list_gives_decoded_paths_and_skips_comments_and_other_uris()
+    {
+        const string list = "# copied from Files\r\nfile:///home/a/r%C3%A9sum%C3%A9.pdf\r\nhttps://example.com/x.pdf\r\n"
+                          + "file://localhost/home/a/two%20words.txt\r\nfile://otherhost/share/x.txt\r\n\r\n";
+        Assert.Equal(["/home/a/résumé.pdf", "/home/a/two words.txt"], FileUris.ParseUriList(list));
+    }
+
+    [Fact]
+    public void Gnome_copied_files_reads_copy_and_cut()
+    {
+        Assert.Equal(["/home/a/report.pdf", "/home/a/b c.txt"],
+            FileUris.ParseGnomeCopiedFiles("copy\nfile:///home/a/report.pdf\nfile:///home/a/b%20c.txt"));
+        Assert.Equal(["/home/a/x"], FileUris.ParseGnomeCopiedFiles("cut\nfile:///home/a/x\n"));
+        Assert.Empty(FileUris.ParseGnomeCopiedFiles("file:///home/a/x"));   // no operation line: not this format
+        Assert.Empty(FileUris.ParseGnomeCopiedFiles(""));
+    }
+
+    [Fact]
+    public void Written_lists_read_back_to_the_same_paths()
+    {
+        string[] paths = ["/home/a/résumé.pdf", "/tmp/50% off #1?.txt"];
+        Assert.Equal("file:///home/a/r%C3%A9sum%C3%A9.pdf", FileUris.ToUri(paths[0]));
+        Assert.Equal(paths, FileUris.ParseUriList(FileUris.ToUriList(paths)));
+        Assert.StartsWith("copy\n", FileUris.ToGnomeCopiedFiles(paths));
+        Assert.Equal(paths, FileUris.ParseGnomeCopiedFiles(FileUris.ToGnomeCopiedFiles(paths)));
     }
 }

@@ -6,7 +6,8 @@ namespace PrivatePaste.Desktop.Platform.Windows;
 
 /// <summary>
 /// The Windows clipboard. A dedicated background thread polls <c>GetClipboardSequenceNumber</c> every 250 ms and raises
-/// <see cref="Changed"/> from that thread (never the UI thread). Reads prefer PNG, then DIB, then text.
+/// <see cref="Changed"/> from that thread (never the UI thread). Reads prefer a file list, then text, then PNG, then DIB
+/// (see <see cref="ClipboardSelector"/>).
 /// <para>
 /// A read only copies raw bytes while the clipboard is open (other applications are locked out meanwhile); DIB to PNG
 /// conversion runs after it is closed. A read that gives up because another application keeps the clipboard busy re-arms
@@ -119,7 +120,7 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
 
     public async Task WriteAsync(ClipboardContent content, CancellationToken ct)
     {
-        if (content is not (ClipboardContent.Text or ClipboardContent.Image))
+        if (content is not (ClipboardContent.Text or ClipboardContent.Image or ClipboardContent.Files))
             throw new ArgumentException("Unsupported clipboard content.", nameof(content));
         // Decoding/conversion happens off the caller's thread, and before the clipboard is touched so a bad image never leaves it emptied.
         var ok = await Task.Run(async () =>
@@ -128,6 +129,9 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
             {
                 ClipboardContent.Text t => new WritePlan(Utf16Z(ToCrlf(t.Value)), null, null),
                 ClipboardContent.Image i => new WritePlan(null, i.Png, DibConverter.FromPng(i.Png)),
+                // A copy, not a cut: Explorer pastes copies and leaves the received files where they are.
+                ClipboardContent.Files f => new WritePlan(null, null, null, DropFiles.Build(f.Paths),
+                    BitConverter.GetBytes(Win32Clipboard.DROPEFFECT_COPY)),
                 _ => throw new ArgumentException("Unsupported clipboard content.", nameof(content)),
             };
             return await ClipboardRetry.RunAsync(() => WriteOnce(plan), log: _log, ct: ct);
@@ -135,8 +139,9 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
         if (!ok) throw new IOException("The clipboard is in use by another application.");
     }
 
-    private sealed record WritePlan(byte[]? Text, byte[]? Png, byte[]? Dib);
+    private sealed record WritePlan(byte[]? Text, byte[]? Png, byte[]? Dib, byte[]? Drop = null, byte[]? DropEffect = null);
 
+    // Nothing written here carries a path in an error: Win32 errors and the busy IOException name no file.
     private bool WriteOnce(WritePlan plan)
     {
         lock (_writeLock)
@@ -147,6 +152,9 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
                 if (plan.Text is not null) session.Set(Win32Clipboard.CF_UNICODETEXT, plan.Text);
                 if (plan.Png is not null) session.Set(Win32Clipboard.PngFormat, plan.Png);
                 if (plan.Dib is not null) session.Set(Win32Clipboard.CF_DIB, plan.Dib);
+                if (plan.Drop is not null) session.Set(Win32Clipboard.CF_HDROP, plan.Drop);
+                if (plan.DropEffect is not null && Win32Clipboard.PreferredDropEffectFormat != 0)
+                    session.Set(Win32Clipboard.PreferredDropEffectFormat, plan.DropEffect);
             }
             return true;
         }
@@ -161,6 +169,7 @@ public sealed class WindowsClipboard : IClipboardAccess, IDisposable
             ClipboardFormat.Png => Win32Clipboard.PngFormat,
             ClipboardFormat.DibV5 => Win32Clipboard.CF_DIBV5,
             ClipboardFormat.Dib => Win32Clipboard.CF_DIB,
+            ClipboardFormat.HDrop => Win32Clipboard.CF_HDROP,
             _ => Win32Clipboard.CF_UNICODETEXT,
         }));
 

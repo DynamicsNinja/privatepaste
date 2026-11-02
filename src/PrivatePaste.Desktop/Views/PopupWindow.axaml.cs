@@ -126,6 +126,7 @@ public partial class PopupWindow : Window
             case Key.Enter: _ = vm.ActivateSelectedAsync(); break;
             case Key.Tab: vm.SwitchTab(); break;
             case Key.P when e.KeyModifiers == KeyModifiers.Control: _ = vm.TogglePinSelectedAsync(); break;
+            case Key.S when e.KeyModifiers == KeyModifiers.Control: _ = vm.SaveSelectedAsync(); break;
             case Key.Escape:
                 Input.PopupTrace.Write("Esc");
                 Close();
@@ -220,6 +221,8 @@ public partial class PopupWindow : Window
             case Input.PopupKeyAction.Paste: _ = vm.ActivateSelectedAsync(); break;
             case Input.PopupKeyAction.SwitchTab: vm.SwitchTab(); break;
             case Input.PopupKeyAction.TogglePin: _ = vm.TogglePinSelectedAsync(); break;
+            // The popup stays open and keeps the focus where it was; a toast says where the files went.
+            case Input.PopupKeyAction.Save: _ = vm.SaveSelectedAsync(); break;
             case Input.PopupKeyAction.Close:
                 Input.PopupTrace.Write("Esc");
                 Close();

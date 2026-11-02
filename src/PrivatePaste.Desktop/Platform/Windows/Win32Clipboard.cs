@@ -12,11 +12,16 @@ namespace PrivatePaste.Desktop.Platform.Windows;
 [SupportedOSPlatform("windows")]
 internal static class Win32Clipboard
 {
-    public const uint CF_DIB = 8, CF_UNICODETEXT = 13, CF_DIBV5 = 17;
+    public const uint CF_DIB = 8, CF_UNICODETEXT = 13, CF_HDROP = 15, CF_DIBV5 = 17;
+    /// <summary>The <c>Preferred DropEffect</c> value that makes a paste in Explorer copy the files (not move them).</summary>
+    public const int DROPEFFECT_COPY = 1;
     private const uint GMEM_MOVEABLE = 0x0002;
 
     /// <summary>The registered clipboard format named "PNG" (used by browsers, Office, Paint.NET, ...).</summary>
     public static readonly uint PngFormat = RegisterClipboardFormat("PNG");
+
+    /// <summary>Explorer's "Preferred DropEffect": a DWORD saying whether pasted files are copied or moved.</summary>
+    public static readonly uint PreferredDropEffectFormat = RegisterClipboardFormat("Preferred DropEffect");
 
     [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool OpenClipboard(IntPtr hWndNewOwner);

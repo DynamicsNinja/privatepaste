@@ -18,7 +18,8 @@ public interface IClipboardBackend
 
 /// <summary>
 /// macOS/Linux have no cheap "clipboard changed" signal in Avalonia, so this polls (default every 500 ms) and raises
-/// <see cref="Changed"/> when the content differs from the last seen: text by value, images by a hash of the PNG bytes.
+/// <see cref="Changed"/> when the content differs from the last seen: text by value, images by a hash of the PNG bytes,
+/// file lists by their paths.
 /// The first read is the baseline (no event), an emptied clipboard is not a change, and a failing read is skipped.
 /// </summary>
 public sealed class PollingClipboard(IClipboardBackend backend, TimeSpan? interval = null, TimeProvider? time = null) : IClipboardAccess, IDisposable
@@ -80,6 +81,7 @@ public sealed class PollingClipboard(IClipboardBackend backend, TimeSpan? interv
     {
         ClipboardContent.Text t => "t:" + t.Value,
         ClipboardContent.Image i => "i:" + Convert.ToHexString(SHA256.HashData(i.Png)),
+        ClipboardContent.Files f => "f:" + string.Join('\0', f.Paths),
         _ => "?",
     };
 

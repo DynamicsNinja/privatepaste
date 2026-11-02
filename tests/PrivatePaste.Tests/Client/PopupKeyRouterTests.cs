@@ -92,6 +92,16 @@ public class PopupKeyRouterTests
         Assert.Equal(new PopupKey(PopupKeyAction.TogglePin), Route(KeyCode.VcP, EventMask.LeftCtrl, ""));
 
     [Fact]
+    public void Ctrl_S_saves() =>
+        Assert.Equal(new PopupKey(PopupKeyAction.Save), Route(KeyCode.VcS, EventMask.LeftCtrl, "\u0013"));
+
+    [Theory]
+    [InlineData(EventMask.LeftCtrl | EventMask.LeftShift)]
+    [InlineData(EventMask.RightCtrl | EventMask.RightShift)]
+    public void Ctrl_Shift_S_is_swallowed(EventMask mask) =>
+        Assert.Equal(new PopupKey(PopupKeyAction.Swallow), Route(KeyCode.VcS, mask, "\u0013"));
+
+    [Fact]
     public void Plain_p_still_types() =>
         Assert.Equal(new PopupKey(PopupKeyAction.Type, "p"), Route(KeyCode.VcP, EventMask.None, "p"));
 }
