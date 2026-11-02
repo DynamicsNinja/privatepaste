@@ -4,7 +4,7 @@ The HTTP and WebSocket API the apps use. Everything here is enough to write your
 
 This is protocol 2: clips are end-to-end encrypted, and the server stores and serves only ciphertext (see [End-to-end encryption](#end-to-end-encryption)). A client encrypts before it uploads and decrypts after it downloads; the server checks only what it can see: the kind, the keyed hash, the key id and the sizes.
 
-All JSON is camelCase; enums are lowercase strings (`kind` is `text`, `link` or `image`, and later releases add more). Errors with a message are RFC 7807 problem responses. Binary values in JSON are standard base64 with padding, unless a field says otherwise.
+All JSON is camelCase; enums are lowercase strings (`kind` is `text`, `link`, `image` or `file`, and later releases add more). Errors with a message are RFC 7807 problem responses. Binary values in JSON are standard base64 with padding, unless a field says otherwise.
 
 ## Protocol version
 
@@ -29,7 +29,7 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`PUT`/`DEL
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/health` | none | Health check. |
-| `GET` | `/api/server-info` | none | `{"protocol":2,"kinds":["text","link","image"],"limits":{"textKb":<PP_MAX_TEXT_KB>,"imageMb":<PP_MAX_IMAGE_MB>}}`. Only create kinds listed in `kinds`, and use `limits` for every size check and size message. |
+| `GET` | `/api/server-info` | none | `{"protocol":2,"kinds":["text","link","image","file"],"limits":{"textKb":<PP_MAX_TEXT_KB>,"imageMb":<PP_MAX_IMAGE_MB>,"fileMb":<PP_MAX_FILE_MB>}}` (`fileMb` may be missing on an older server: assume 25). Only create kinds listed in `kinds`, and use `limits` for every size check and size message. |
 | `POST` | `/api/auth/login` | none | Body `{username, password, deviceName, platform}` (device name 1-50 chars; `username` is matched case-insensitively). Returns `{deviceId, token}`. 400 with detail `Update PrivatePaste to sign in.` when `username` is missing or blank (apps from before there were people), 401 with detail `Wrong name or password.` for an unknown name or a wrong password, 429 when rate-limited or too many logins are being checked at once. |
 | `POST` | `/api/auth/logout` | bearer | Revokes the calling device's token and closes its WebSockets. 204. |
 | `GET` | `/api/me` | bearer | `{name, isOwner}` for the person signed in. |
@@ -60,7 +60,7 @@ Everything marked bearer also accepts the web UI's session cookie, except `/ws`.
 A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId, sourceDeviceName, sourceDevicePlatform, lastCopiedAt, pinnedAt, sourceUserName, payload, keyId, hasThumb, blobCount}`:
 
 - `payload` is the clip's content, sealed (see [The clip payload](#the-clip-payload)); `keyId` is the vault key that sealed it.
-- `hasThumb` says whether `GET /api/clips/{id}/thumb` has a thumbnail, and `blobCount` how many blobs `GET /api/clips/{id}/blobs/{n}` has (1 for an image, 0 for text and links).
+- `hasThumb` says whether `GET /api/clips/{id}/thumb` has a thumbnail, and `blobCount` how many blobs `GET /api/clips/{id}/blobs/{n}` has (1 for an image, one per file for a file clip, 0 for text and links).
 - `text`, `width` and `height` are always null: the text and the image size are inside the payload. They stay in the JSON so the DTO only ever grows.
 - `hash` is the keyed hash (see [Keyed hash](#keyed-hash)), and `sizeBytes` the plaintext size the uploader declared.
 - `pinnedAt` is always present: the time the clip was pinned, or null when it isn't pinned.
@@ -75,23 +75,24 @@ Uploading content that already exists (same `hash`) does not create a duplicate:
 `POST /api/clips` takes `multipart/form-data` with these parts, in any order. Each part is read into memory up to its own limit and answered with 413 as soon as it goes over; other part names are ignored.
 
 - `meta` (required): JSON `{kind, keyId, hash, payload, sizeBytes, copiedAt?, backfill}`.
-  - `kind`: `text`, `link` or `image`; anything else is 400.
+  - `kind`: `text`, `link`, `image` or `file`; anything else is 400.
   - `keyId`: the vault key the clip is sealed with. Without a vault the upload is 409 with detail `Set up encryption first.`; when it isn't the current vault's `keyId`, 409 with title `Encryption was reset` and detail `Encryption was reset. Enter the new passphrase.`
   - `hash`: the keyed hash, 64 lowercase hex characters.
   - `payload`: the sealed payload, base64.
-  - `sizeBytes`: the plaintext size: the UTF-8 byte length of the text, or the byte length of the image's PNG. Not negative.
+  - `sizeBytes`: the plaintext size: the UTF-8 byte length of the text, the byte length of the image's PNG, or the total byte length of the files. Not negative.
   - `copiedAt` (optional): ISO 8601 time the clip was copied. Only used with `backfill`.
   - `backfill`: `true` for a clip queued while offline.
 - `thumb` (optional, images only): the sealed thumbnail, at most 1 MiB (1048576 bytes).
-- `blob0`, `blob1`, ... : the encrypted blobs, numbered from 0 without gaps. An image has exactly one, `blob0`, the encrypted PNG.
+- `blob0`, `blob1`, ... : the encrypted blobs, numbered from 0 without gaps. An image has exactly one, `blob0`, the encrypted PNG. A file clip has one per file, 1 to 100, in the order of the payload's `files`.
 
-Limits, with `PP_MAX_TEXT_KB` and `PP_MAX_IMAGE_MB` (as `limits` in server info) in bytes:
+Limits, with `PP_MAX_TEXT_KB`, `PP_MAX_IMAGE_MB` and `PP_MAX_FILE_MB` (as `limits` in server info) in bytes:
 
 - **Text and link:** no thumbnail and no blobs (400 otherwise). The declared `sizeBytes` may be at most `PP_MAX_TEXT_KB` × 1024, which is the limit users see; the sealed payload may be up to 6 × that + 4096 bytes, because the payload's JSON can escape one UTF-8 byte into six (`\uXXXX`). Over either is 413 with detail `Text exceeds the <n> byte limit.`
 - **Image:** the blob may be at most `PP_MAX_IMAGE_MB` × 1 MiB plus the blob header (9 bytes) and a 16-byte tag per 1 MiB chunk; over is 413. The sealed payload (which holds only the size) may be at most 4096 bytes. Clients check the plaintext before uploading: images over 50 megapixels or over `imageMb` are refused on the device, since the server can't decode them.
-- The whole request is capped at the larger of the two cases plus some framing.
+- **File:** no thumbnail (400 `A file clip has no thumbnail.`) and 1 to 100 blobs (400 `A file clip has at least one blob.` or `A file clip has at most 100 files.`). The declared `sizeBytes` may be at most `PP_MAX_FILE_MB` × 1 MiB, the blobs together at most that limit plus, for `n` blobs, `25 × n` bytes and a 16-byte tag per 1 MiB chunk of the limit and per blob, and the sealed payload at most 64 KiB (65536 bytes). Over any of them is 413 with detail `Files over <PP_MAX_FILE_MB> MB aren't synced.` An empty file is one blob holding a single empty final chunk. Clients check the plaintext before uploading.
+- The whole request is capped at the largest of the cases plus some framing.
 
-Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers, an image clip without exactly one blob (`An image clip has exactly one blob.`), or a text or link clip with a thumbnail or blobs; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists as an image and the upload is text or link, or the other way round. A text upload onto a stored link (or a link onto a stored text) is a bump that keeps the stored kind, since platforms may disagree on whether some content is a link.
+Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers, an image clip without exactly one blob (`An image clip has exactly one blob.`), or a text or link clip with a thumbnail or blobs; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists with a different blob shape: as an image and the upload is text, link or file, as a file and the upload is text, link or image, or as text or link and the upload is an image or file. A text upload onto a stored link (or a link onto a stored text) is a bump that keeps the stored kind, since platforms may disagree on whether some content is a link.
 
 Live uploads always get the server's time. Backfilled uploads keep `copiedAt`, clamped to no later than the server's time, and are never applied to other devices' clipboards.
 
@@ -131,7 +132,7 @@ The server only holds ciphertext, so it can't search. Apps search the clips they
 
 ## End-to-end encryption
 
-The server stores clips it can't read. It still sees who copied a clip, from which device and platform, and when; the clip's kind, pin state and order; and its exact sizes (`sizeBytes` and the ciphertext lengths). It never sees content or thumbnails. At-rest encryption with `PP_DB_KEY` stays and hides that metadata from someone who takes the disk without the server's configuration.
+The server stores clips it can't read. It still sees who copied a clip, from which device and platform, and when; the clip's kind, pin state and order; and its exact sizes (`sizeBytes` and the ciphertext lengths; for a file clip, `blobCount` and each blob's length give the number of files and about how big each one is). It never sees content, file names or thumbnails. At-rest encryption with `PP_DB_KEY` stays and hides that metadata from someone who takes the disk without the server's configuration.
 
 The reference implementation is in `src/PrivatePaste.Protocol/Crypto/`; the browser port is `src/PrivatePaste.Server/wwwroot/js/e2e.js` and the Android one `core/crypto/VaultCrypto.kt` under `android/app/src/main/java/xyz/ficdev/privatepaste/`.
 
@@ -161,7 +162,7 @@ A clip's payload and its thumbnail are sealed as one small item each: `0x01 || n
 
 ### Blobs
 
-A full image is a blob, encrypted in chunks so neither side has to hold it twice:
+A full image is a blob, and so is each file of a file clip, encrypted in chunks so neither side has to hold it twice:
 
 - A 9-byte header `0x02 || noncePrefix (8 random bytes)`, then chunks of 1 MiB (1048576 bytes) of plaintext, the last one shorter or equal.
 - Chunk `i` is `ciphertext || tag`: AES-256-GCM under `encKey` with nonce `noncePrefix || uint32 big-endian i` and associated data `privatepaste v1 blob || uint32 big-endian i || isFinal byte` (1 on the last chunk, 0 on the others). The final flag stops truncation.
@@ -173,8 +174,18 @@ A UTF-8 JSON object (camelCase), sealed as a `payload` small item and sent as ba
 
 - Text and link: `{"text":"…"}`.
 - Image: `{"width":1600,"height":900}`. The picture itself is blob 0: a PNG, upright (EXIF orientation applied), at most 50 megapixels. The thumbnail is a PNG that fits 256x256, sealed as a `thumb` small item.
+- File: `{"files":[{"name":"report.pdf","size":3565158,"mime":"application/pdf"},…]}`, one entry per file in blob order (file `i` is blob `i`), so `files` has `blobCount` entries; no `text` and no thumbnail. `name` is the file's leaf name as the sender has it, `size` its byte count. `mime` comes from the operating system when it has one (Android's `ContentResolver.getType`), else from the extension: `pdf` `application/pdf`, `txt` `text/plain`, `csv` `text/csv`, `json` `application/json`, `zip` `application/zip`, `png` `image/png`, `jpg`/`jpeg` `image/jpeg`, `gif` `image/gif`, `webp` `image/webp`, `svg` `image/svg+xml`, `mp4` `video/mp4`, `mp3` `audio/mpeg`, `doc` `application/msword`, `docx` `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `xls` `application/vnd.ms-excel`, `xlsx` `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `ppt` `application/vnd.ms-powerpoint`, `pptx` `application/vnd.openxmlformats-officedocument.presentationml.presentation`, anything else `application/octet-stream`. Receivers use `mime` only as a label (the web UI downloads every file as `application/octet-stream`). A file clip whose list is empty, doesn't match `blobCount`, or has a missing name or a negative size is shown as unknown.
 
 Readers ignore fields they don't know: later releases add more.
+
+### File clips
+
+- **Sending**: at most 100 files, and at most `limits.fileMb` MiB in total, checked on the device before anything is uploaded. Folders are skipped; a copy of only folders sends nothing. Only send files when server-info's `kinds` lists `file`. The texts the apps show: `Folders aren't synced.`, `Too many files. Copy at most 100 at once.` (Android: `Share at most 100`), `Files over <fileMb> MB aren't synced.`, `Update your PrivatePaste server to sync files.`
+- **Never queued**: a file clip that can't be uploaded (offline, a 5xx) is dropped, not kept for later: `Couldn't send the files. Copy them again when you're online.` (Android: `Share them again`).
+- **Names are untrusted.** Before writing a received file, turn its payload name into a safe leaf name, the same way on every platform: take the part after the last `/` or `\`; drop control characters (below 0x20, and 0x7F) and `<>:"|?*`; trim trailing dots and spaces; if the result is empty, `.` or `..`, use `file`; if the part before the first dot is a Windows reserved name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, any case), put `_` in front; cut it to 200 UTF-16 units keeping the extension (from the last dot, not at the start), stepping back rather than splitting a surrogate pair, and trim trailing dots and spaces from the stem again (an empty stem becomes `file`). Then, when the name is over 200 UTF-8 bytes, cut the stem by whole code points to fit 200 bytes with the extension (an extension over 32 bytes is cut with the stem as one), counting a surrogate pair as 4 bytes and a lone surrogate as 3, and trim again. Names that clash within one clip, or with a file already in the target folder, get ` (2)`, ` (3)`, … before the extension.
+- **Decrypt to a temporary name** (`<name>.part`) and rename only after the final chunk authenticates, so a failed or tampered download leaves no file.
+- **Row text**: the first file's safe name (as above, so a newline or a path in a payload name can't break a row), then ` +N more` when there are more, then ` · ` and the total size: `0 B`, `12 KB`, `3.4 MB` (1 KB = 1024 B; one decimal only below 10 and not `.0`, rounded half up; nothing above MB). For example `report.pdf +2 more · 3.4 MB`. Search matches every file name.
+- The `safeFileName`, `fileSize` and `fileRowText` groups of the [test vectors](#test-vectors) pin these rules.
 
 ### Keyed hash
 
@@ -192,7 +203,7 @@ The server never sees `otk`. A code works once and only for 10 minutes, so a pho
 
 ### Test vectors
 
-[`e2e-test-vectors.json`](e2e-test-vectors.json) holds the vectors every client must reproduce: the subkeys and `keyId` of a fixed VK, Argon2id outputs (including the NFC and NFD spellings of the same passphrase), a passphrase wrap, a sealed payload and thumbnail, a two-chunk blob and an empty one, a keyed hash and two handovers with their QR text. They are written by `tests/PrivatePaste.Tests/Protocol/VaultCryptoTests.cs` (with `PP_WRITE_VECTORS=1`) and checked by the .NET tests, the Android JVM tests and the browser module's Node test (`tests/web/e2e.test.mjs`).
+[`e2e-test-vectors.json`](e2e-test-vectors.json) holds the vectors every client must reproduce: the subkeys and `keyId` of a fixed VK, Argon2id outputs (including the NFC and NFD spellings of the same passphrase), a passphrase wrap, a sealed payload and thumbnail, a two-chunk blob and an empty one, a keyed hash, the content hash of two files, the safe-name, size and row-text rules of [file clips](#file-clips), and two handovers with their QR text. They are written by `tests/PrivatePaste.Tests/Protocol/VaultCryptoTests.cs` (with `PP_WRITE_VECTORS=1`) and checked by the .NET tests, the Android JVM tests and the browser module's Node test (`tests/web/e2e.test.mjs`).
 
 [`classifier-test-vectors.json`](classifier-test-vectors.json) lists texts and whether a client uploads each as `link` or `text` (one absolute http or https URL, no whitespace, with the host and port rules of .NET's `System.Uri`). The .NET and Android tests check it.
 
@@ -202,6 +213,7 @@ The content hash is computed the same way on every client so that echo preventio
 
 - Text: lowercase hex of `SHA-256(UTF-8("t:" + text))`, where `text` has CRLF and lone CR converted to LF (nothing else changes).
 - Image: lowercase hex of `SHA-256(UTF-8("i:{width}x{height}:") ++ pixels)`, where `pixels` is the decoded image as RGBA8888, unpremultiplied, row-major, with no row padding.
+- Files: lowercase hex of `SHA-256(UTF-8("f:") ++ entries)`, where each file in order adds `UTF-8(name + "\0" + size + "\0" + sha256hex + "\n")`: `name` is the file name as sent in the payload, `size` the decimal byte count, `sha256hex` the lowercase hex SHA-256 of the file's content.
 
 Ports must reproduce these test vectors:
 
@@ -211,3 +223,4 @@ Ports must reproduce these test vectors:
 | text `a\nb` (and `a\r\nb`) | `b77cc1fcd69063256ffc07884bde76c875b73e56a786925feedd7ba881f0616c` |
 | text `šećer 🚀` | `812328f074c3d5a025a329dd4674a676d83d5f926bd79af643a51e783ed3ac39` |
 | 1x1 image, RGBA `[255, 0, 0, 255]` | `8d833d22068fdf91eecbd0d310208548d1f9418c6513c572a7c7d01fc696c49a` |
+| files `a.txt` (5 bytes, content `hello`) and `b.bin` (0 bytes, empty) | `0baeacb0a540c7f644e57744ae15f6df06f21ba4cdacf1444cec972fe60f4940` |

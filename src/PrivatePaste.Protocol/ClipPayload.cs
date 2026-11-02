@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PrivatePaste.Protocol.Crypto;
 
 namespace PrivatePaste.Protocol;
@@ -12,6 +13,10 @@ public sealed record ClipPayload
     public string? Text { get; init; }
     public int? Width { get; init; }
     public int? Height { get; init; }
+
+    /// <summary>The files of a file clip, in blob order. No <see cref="Text"/> for those.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ClipFileInfo>? Files { get; init; }
 
     /// <summary>Seals the payload as standard base64 (with padding) for the wire.</summary>
     public static string Seal(VaultKey key, ClipPayload p) =>

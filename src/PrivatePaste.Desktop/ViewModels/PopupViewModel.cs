@@ -9,6 +9,9 @@ namespace PrivatePaste.Desktop.ViewModels;
 
 public enum PopupTab { History, Pinned }
 
+/// <summary>The type chips under the tabs, in their order (Ctrl+1 to Ctrl+5). One at a time; clips of an unknown kind show under All only.</summary>
+public enum PopupFilter { All, Text, Link, Image, File }
+
 /// <summary>A server lookup that needs the vault key was asked for while locked or signed out.</summary>
 public sealed class VaultLockedException() : InvalidOperationException("Locked or signed out.");
 
@@ -41,6 +44,7 @@ public sealed record PopupItem(ClipDto Clip, string Preview, string Meta, byte[]
     public bool IsImage => Clip.Kind == ClipKind.Image;
     public bool IsLink => Clip.Kind == ClipKind.Link;
     public bool IsText => Clip.Kind == ClipKind.Text;
+    public bool IsFile => Clip.Kind == ClipKind.File;
     public bool IsPinned => Clip.PinnedAt is not null;
 
     /// <summary>Tooltip and screen-reader name of the row's pin button.</summary>
@@ -64,6 +68,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private const int ServerLimit = 50;
     public const string SearchingOlderText = "Searching older clips…";
     public const string UnreachableText = "Can't reach the server.";
+    public const string CouldNotSaveText = "Couldn't save the files.";
 
     private readonly HistoryCache _cache;
     private readonly Func<string, CancellationToken, IAsyncEnumerable<ClipDto>>? _searchOlder;
@@ -72,6 +77,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private readonly Func<Guid, bool, Task<ClipDto>>? _setPinned;
     private readonly Func<string, CancellationToken, Task<IReadOnlyList<ClipDto>>>? _serverPinned;
     private readonly Action<string>? _notify;
+    private readonly Func<ClipDto, Task<string?>>? _save;
     private CancellationTokenSource? _search;
     /// <summary>The query an older-clip search ran for (or runs for), and whether it reached the end.</summary>
     private string? _olderQuery;
@@ -80,6 +86,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private bool _olderUnavailable;
 
     /// <param name="searchOlder">(query, ct) → the server's older clips that match, newest first; null: no such search.</param>
+    /// <param name="save">Saves a file clip's files to Downloads and returns what to tell the user (null: nothing).</param>
     public PopupViewModel(
         HistoryCache cache,
         Func<string, CancellationToken, IAsyncEnumerable<ClipDto>>? searchOlder,
@@ -87,15 +94,19 @@ public sealed partial class PopupViewModel : ObservableObject
         TimeProvider time,
         Func<Guid, bool, Task<ClipDto>>? setPinned = null,
         Func<string, CancellationToken, Task<IReadOnlyList<ClipDto>>>? serverPinned = null,
-        Action<string>? notify = null)
+        Action<string>? notify = null,
+        Func<ClipDto, Task<string?>>? save = null)
     {
         _setPinned = setPinned;
         _serverPinned = serverPinned;
         _notify = notify;
+        _save = save;
         _cache = cache;
         _searchOlder = searchOlder;
         _activate = activate;
         _time = time;
+        // The footer follows the selected row, which can change kind under the same index when the list changes.
+        Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(FooterHint));
         Reset(cache.Search(""), highlightNewest: true);
     }
 
@@ -103,6 +114,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private string _query = "";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FooterHint))]
     private int _selectedIndex;
 
     public ObservableCollection<PopupItem> Items { get; } = [];
@@ -123,7 +135,65 @@ public sealed partial class PopupViewModel : ObservableObject
     public bool IsHistoryTab => Tab == PopupTab.History;
     public bool IsPinnedTab => Tab == PopupTab.Pinned;
 
-    public string FooterHint => $"Enter to paste   Tab for {(Tab == PopupTab.History ? "Pinned" : "History")}   Ctrl+P to pin";
+    /// <summary>The type chip in force; it starts at All each time the popup opens (a new view model per opening) and survives tab switches.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsAllFilter), nameof(IsTextFilter), nameof(IsLinkFilter), nameof(IsImageFilter), nameof(IsFileFilter))]
+    private PopupFilter _filter = PopupFilter.All;
+
+    public bool IsAllFilter => Filter == PopupFilter.All;
+    public bool IsTextFilter => Filter == PopupFilter.Text;
+    public bool IsLinkFilter => Filter == PopupFilter.Link;
+    public bool IsImageFilter => Filter == PopupFilter.Image;
+    public bool IsFileFilter => Filter == PopupFilter.File;
+
+    /// <summary>A chip click or Ctrl+digit: picks the type, or returns to All when it is already the active one (or is All).</summary>
+    public void SetFilter(PopupFilter filter)
+    {
+        if (filter == Filter) filter = PopupFilter.All;
+        if (filter == Filter) return;
+        Filter = filter;
+        Refilter();
+    }
+
+    /// <summary>Ctrl+1 to Ctrl+5, the chips in order; anything else is ignored.</summary>
+    public void SetFilterByIndex(int index)
+    {
+        if (index is >= 1 and <= 5) SetFilter((PopupFilter)(index - 1));
+    }
+
+    private bool PassesFilter(ClipDto clip) => Filter switch
+    {
+        PopupFilter.Text => clip.Kind == ClipKind.Text,
+        PopupFilter.Link => clip.Kind == ClipKind.Link,
+        PopupFilter.Image => clip.Kind == ClipKind.Image,
+        PopupFilter.File => clip.Kind == ClipKind.File,
+        _ => true,
+    };
+
+    /// <summary>What the list says when it has no rows (and no search row).</summary>
+    public string EmptyText
+    {
+        get
+        {
+            if (IsSearchingOlder) return SearchingOlderText;
+            if (Query.Trim().Length > 0) return "No matches.";
+            var pinned = Tab == PopupTab.Pinned;
+            return Filter switch
+            {
+                PopupFilter.Text => pinned ? "No pinned text" : "No text yet",
+                PopupFilter.Link => pinned ? "No pinned links" : "No links yet",
+                PopupFilter.Image => pinned ? "No pinned images" : "No images yet",
+                PopupFilter.File => pinned ? "No pinned files" : "No files yet",
+                _ => pinned ? "Nothing pinned yet." : "Nothing to paste yet.",
+            };
+        }
+    }
+
+    public string FooterHint => $"Enter to paste   Tab for {(Tab == PopupTab.History ? "Pinned" : "History")}   Ctrl+P to pin"
+        + (Selected is { IsFile: true } ? "   Ctrl+S to save" : "")
+        + "   Ctrl+1–5 to filter";
+
+    private PopupItem? Selected => SelectedIndex >= 0 && SelectedIndex < Items.Count ? Items[SelectedIndex] : null;
 
     public void SwitchTab() => ShowTab(Tab == PopupTab.History ? PopupTab.Pinned : PopupTab.History);
 
@@ -208,11 +278,21 @@ public sealed partial class PopupViewModel : ObservableObject
         AddSearchOlderRow();
     }
 
+    /// <remarks>
+    /// Only the local cache (about 500 clips) is listed for a filter alone: the popup has no paging, and the server can't
+    /// search, so "Search older clips" (which keeps the filter) is the only way to older ones.
+    /// </remarks>
     private IReadOnlyList<CachedClip> CachedFor(string query) =>
-        Tab == PopupTab.History
+        (Tab == PopupTab.History
             ? _cache.Search(query)
-            : _cache.Pinned.Where(c => query.Length == 0
-                || c.Clip.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase)).ToArray();
+            : _cache.Pinned.Where(c => Matches(c.Clip, query)))
+        .Where(c => PassesFilter(c.Clip)).ToArray();
+
+    /// <summary>Whether a clip matches a search: its text, or any of its file names.</summary>
+    public static bool Matches(ClipDto clip, string query) =>
+        query.Length == 0
+        || clip.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || clip.Files is { } files && files.Any(f => f.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
 
     private async Task ListServerPinsAsync(string query, CancellationToken ct)
     {
@@ -243,7 +323,7 @@ public sealed partial class PopupViewModel : ObservableObject
     {
         var known = Items.Select(i => i.Clip.Id).ToHashSet();
         foreach (var clip in results.Take(ServerLimit))
-            if (known.Add(clip.Id)) Items.Add(ToItem(clip, null, newest: false));
+            if (PassesFilter(clip) && known.Add(clip.Id)) Items.Add(ToItem(clip, null, newest: false));
     }
 
     private PopupItem ToItem(ClipDto clip, byte[]? thumbnail, bool newest) =>
@@ -253,6 +333,7 @@ public sealed partial class PopupViewModel : ObservableObject
     {
         if (clip.Kind == ClipKind.Image) return $"Image {clip.Width}×{clip.Height}";
         if (clip.Kind == ClipKind.Unknown) return PopupItem.UnknownText;
+        if (clip.Kind == ClipKind.File) return FileNames.RowText(clip.Files ?? []);
         var line = (clip.Text ?? "")
             .Split('\n')
             .Select(l => l.Trim())
@@ -335,6 +416,19 @@ public sealed partial class PopupViewModel : ObservableObject
         for (var i = 0; i < Items.Count; i++)
             if (Items[i].Clip.Id == id) return i;
         return -1;
+    }
+
+    /// <summary>
+    /// Ctrl+S: saves the selected file clip's files to Downloads (downloading them if needed) and says where. Does nothing on
+    /// any other row. Never throws, and never pastes.
+    /// </summary>
+    public async Task SaveSelectedAsync()
+    {
+        if (_save is null || Selected is not { IsFile: true } item) return;
+        string? message;
+        try { message = await _save(item.Clip); }
+        catch (Exception) { message = CouldNotSaveText; }   // the error may name a file: never shown or logged
+        if (message is not null) _notify?.Invoke(message);
     }
 
     /// <summary>Enter or a click: pastes the selected clip, or runs the older-clip search on that row. An unknown clip does nothing.</summary>

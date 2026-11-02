@@ -332,14 +332,14 @@ public class PopupViewModelTests
         var vm = CreatePins(CacheWith(
             Text("plain", 1, 5), Pin(Text("pin alpha", 30, 1), 10), Pin(Text("pin beta", 20, 2), 20), Text("other", 5, 3)));
         Assert.Equal(PopupTab.History, vm.Tab);
-        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin", vm.FooterHint);
+        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+1–5 to filter", vm.FooterHint);
 
         vm.SwitchTab();
         Assert.Equal(PopupTab.Pinned, vm.Tab);
         Assert.Equal(["pin beta", "pin alpha"], vm.Items.Select(i => i.Clip.Text));
         Assert.All(vm.Items, i => Assert.True(i.IsPinned));
         Assert.All(vm.Items, i => Assert.False(i.IsNewest));
-        Assert.Equal("Enter to paste   Tab for History   Ctrl+P to pin", vm.FooterHint);
+        Assert.Equal("Enter to paste   Tab for History   Ctrl+P to pin   Ctrl+1–5 to filter", vm.FooterHint);
 
         vm.Query = "alpha";   // search filters the open tab
         Assert.Equal(["pin alpha"], vm.Items.Select(i => i.Clip.Text));
@@ -447,5 +447,230 @@ public class PopupViewModelTests
         vm.Query = "";
         Assert.Equal("Ana", vm.Items.Single(i => i.Clip.Text == "a").Person);
         Assert.Null(vm.Items.Single(i => i.Clip.Text == "b").Person);
+    }
+
+    // ---- File clips ----
+
+    private readonly List<ClipDto> _saved = [];
+    private string? _saveReply = "Saved report.pdf to Downloads";
+
+    private static ClipDto FileClip(int minutesAgo, long seq, params (string Name, long Size)[] files) =>
+        new(Guid.NewGuid(), seq, ClipKind.File, null, "filehash" + seq, null, null, files.Sum(f => f.Size), null, "PC-work",
+            Now.AddMinutes(-minutesAgo))
+        {
+            Files = files.Select(f => new ClipFileInfo(f.Name, f.Size, "application/octet-stream")).ToList(),
+            BlobCount = files.Length,
+        };
+
+    private PopupViewModel CreateWithSave(HistoryCache cache) => new(
+        cache,
+        Older,
+        clip => { _activated.Add(clip); return Task.CompletedTask; },
+        _time,
+        notify: _toasts.Add,
+        save: clip => { _saved.Add(clip); return Task.FromResult(_saveReply); });
+
+    [Fact]
+    public void File_rows_show_the_first_name_the_count_and_the_total_size()
+    {
+        var vm = Create(CacheWith(FileClip(1, 1, ("report.pdf", 3_000_000), ("a.txt", 300_000), ("b.txt", 265_000))));
+        var row = Assert.Single(vm.Items);
+        Assert.True(row.IsFile);
+        Assert.False(row.IsText || row.IsImage || row.IsLink || row.IsUnknown);
+        Assert.Equal("report.pdf +2 more · 3.4 MB", row.Preview);
+        Assert.Equal("one.txt · 12 B", PopupViewModel.FormatPreview(FileClip(1, 2, ("one.txt", 12))));
+        // Names come from another device: shown safe, so a newline or a path can't break the row (or the toast).
+        var hostile = FileClip(1, 3, ("../secret\nplan.pdf", 12));
+        Assert.Equal("secretplan.pdf · 12 B", PopupViewModel.FormatPreview(hostile));
+        Assert.Equal("secretplan.pdf · 12 B", PrivatePaste.Desktop.Tray.ClipToast.FormatPreview(hostile));
+    }
+
+    [Fact]
+    public void Footer_offers_save_only_while_a_file_row_is_selected()
+    {
+        const string plain = "Enter to paste   Tab for Pinned   Ctrl+P to pin";
+        const string filter = "   Ctrl+1–5 to filter";
+        var vm = CreateWithSave(CacheWith(Text("text", 1, 2), FileClip(2, 1, ("report.pdf", 10))));
+        Assert.Equal(plain + filter, vm.FooterHint);
+        var changes = new List<string?>();
+        vm.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+
+        vm.MoveSelection(1);
+        Assert.Equal(plain + "   Ctrl+S to save" + filter, vm.FooterHint);
+        Assert.Contains(nameof(PopupViewModel.FooterHint), changes);
+
+        changes.Clear();
+        vm.Query = "text";   // the list changes under the same index
+        Assert.Equal(plain + filter, vm.FooterHint);
+        Assert.Contains(nameof(PopupViewModel.FooterHint), changes);
+    }
+
+    [Fact]
+    public async Task Save_runs_only_on_a_file_row_and_shows_the_reply()
+    {
+        var file = FileClip(2, 1, ("report.pdf", 10));
+        var vm = CreateWithSave(CacheWith(Text("text", 1, 2), file));
+
+        await vm.SaveSelectedAsync();   // a text row: nothing happens
+        Assert.Empty(_saved);
+        Assert.Empty(_toasts);
+
+        vm.MoveSelection(1);
+        await vm.SaveSelectedAsync();
+        Assert.Equal(file.Id, Assert.Single(_saved).Id);
+        Assert.Equal(["Saved report.pdf to Downloads"], _toasts);
+        Assert.Empty(_activated);   // saving never pastes
+
+        _saveReply = null;          // nothing to say
+        await vm.SaveSelectedAsync();
+        Assert.Single(_toasts);
+    }
+
+    [Fact]
+    public async Task Save_without_a_save_delegate_or_a_failing_one_never_throws()
+    {
+        var file = FileClip(2, 1, ("report.pdf", 10));
+        await Create(CacheWith(file)).SaveSelectedAsync();
+        Assert.Empty(_toasts);
+
+        var failing = new PopupViewModel(CacheWith(file), null, _ => Task.CompletedTask, _time, notify: _toasts.Add,
+            save: _ => throw new IOException("C:\\secret\\report.pdf"));
+        await failing.SaveSelectedAsync();
+        Assert.Equal([PopupViewModel.CouldNotSaveText], _toasts);
+    }
+
+    private static ClipDto Link(string url, int minutesAgo, long seq) =>
+        Text(url, minutesAgo, seq) with { Kind = ClipKind.Link };
+
+    private static ClipDto Unknown(int minutesAgo, long seq) =>
+        Text("future", minutesAgo, seq) with { Kind = ClipKind.Unknown };
+
+    private static HistoryCache MixedCache() => CacheWith(
+        Text("alpha note", 1, 7), Link("https://a.example/alpha", 2, 6), Image(10, 10, 3, 5),
+        FileClip(4, 4, ("alpha.pdf", 10)), Unknown(5, 3), Text("beta note", 6, 2),
+        Text("pinned text", 7, 1) with { PinnedAt = Now }, FileClip(8, 0, ("pinned.zip", 10)) with { PinnedAt = Now });
+
+    [Fact]
+    public void The_filter_starts_at_All_and_each_type_lists_only_its_kind()
+    {
+        var vm = Create(MixedCache());
+        Assert.Equal(PopupFilter.All, vm.Filter);
+        Assert.Equal(8, vm.Items.Count);   // unknown kinds show under All
+
+        vm.SetFilter(PopupFilter.Link);
+        Assert.Equal(["https://a.example/alpha"], vm.Items.Select(i => i.Clip.Text));
+        vm.SetFilter(PopupFilter.Image);
+        Assert.Equal([ClipKind.Image], vm.Items.Select(i => i.Clip.Kind));
+        vm.SetFilter(PopupFilter.File);
+        Assert.Equal(["alpha.pdf", "pinned.zip"], vm.Items.Select(i => i.Clip.Files![0].Name));
+        vm.SetFilter(PopupFilter.Text);
+        Assert.All(vm.Items, i => Assert.Equal(ClipKind.Text, i.Clip.Kind));
+        Assert.DoesNotContain(vm.Items, i => i.IsUnknown);
+    }
+
+    [Fact]
+    public void Choosing_the_active_chip_or_All_returns_to_All()
+    {
+        var vm = Create(MixedCache());
+        vm.SetFilter(PopupFilter.File);
+        vm.SetFilter(PopupFilter.File);
+        Assert.Equal(PopupFilter.All, vm.Filter);
+        Assert.Equal(8, vm.Items.Count);
+
+        vm.SetFilter(PopupFilter.Text);
+        vm.SetFilter(PopupFilter.All);
+        Assert.Equal(PopupFilter.All, vm.Filter);
+        vm.SetFilter(PopupFilter.All);   // All stays All
+        Assert.Equal(PopupFilter.All, vm.Filter);
+    }
+
+    [Theory]
+    [InlineData(1, PopupFilter.All)]
+    [InlineData(2, PopupFilter.Text)]
+    [InlineData(3, PopupFilter.Link)]
+    [InlineData(4, PopupFilter.Image)]
+    [InlineData(5, PopupFilter.File)]
+    public void Ctrl_digits_pick_the_chips_in_order(int index, PopupFilter expected)
+    {
+        var vm = Create(MixedCache());
+        vm.SetFilterByIndex(index);
+        Assert.Equal(expected, vm.Filter);
+        vm.SetFilterByIndex(0);   // out of range: ignored
+        vm.SetFilterByIndex(6);
+        Assert.Equal(expected, vm.Filter);
+    }
+
+    [Fact]
+    public void The_filter_combines_with_the_tab_and_the_search()
+    {
+        var vm = Create(MixedCache());
+        vm.SetFilter(PopupFilter.Text);
+        vm.Query = "alpha";
+        Assert.Equal(["alpha note"], vm.Items.Select(i => i.Clip.Text));
+
+        vm.Query = "";
+        vm.ShowTab(PopupTab.Pinned);   // the filter survives a tab switch
+        Assert.Equal(["pinned text"], vm.Items.Select(i => i.Clip.Text));
+        vm.SetFilter(PopupFilter.File);
+        Assert.Equal(["pinned.zip"], vm.Items.Select(i => i.Clip.Files![0].Name));
+    }
+
+    [Fact]
+    public async Task Search_older_keeps_the_filter()
+    {
+        var vm = Create(CacheWith(Text("zeta", 1, 1)));
+        vm.SetFilter(PopupFilter.Link);
+        vm.Query = "invoice";
+        Assert.True(Assert.Single(vm.Items).IsSearchOlder);   // no local link matches: offered, as without a filter
+        _olderResults = [Text("invoice text", 50, 2), Link("https://invoice.example", 60, 3)];
+        await vm.SearchOlderAsync();
+        Assert.Equal(["https://invoice.example"], vm.Items.Select(i => i.Clip.Text));
+    }
+
+    [Fact]
+    public void A_clip_that_arrives_while_the_popup_is_open_respects_the_filter()
+    {
+        var cache = CacheWith(Text("one", 5, 1), Link("https://x.example", 4, 2));
+        var vm = Create(cache);
+        vm.SetFilter(PopupFilter.Link);
+        cache.Upsert(Text("two", 0, 3));
+        cache.Upsert(Link("https://y.example", 0, 4));
+        vm.RefreshFromCache();
+        Assert.Equal(["https://y.example", "https://x.example"], vm.Items.Select(i => i.Clip.Text));
+    }
+
+    [Theory]
+    [InlineData(PopupFilter.All, false, "Nothing to paste yet.")]
+    [InlineData(PopupFilter.Text, false, "No text yet")]
+    [InlineData(PopupFilter.Link, false, "No links yet")]
+    [InlineData(PopupFilter.Image, false, "No images yet")]
+    [InlineData(PopupFilter.File, false, "No files yet")]
+    [InlineData(PopupFilter.All, true, "Nothing pinned yet.")]
+    [InlineData(PopupFilter.File, true, "No pinned files")]
+    [InlineData(PopupFilter.Link, true, "No pinned links")]
+    public void Empty_text_names_the_type(PopupFilter filter, bool pinned, string expected)
+    {
+        var vm = Create(CacheWith());
+        if (pinned) vm.ShowTab(PopupTab.Pinned);
+        vm.SetFilter(filter);
+        Assert.Equal(expected, vm.EmptyText);
+    }
+
+    [Fact]
+    public void Footer_always_offers_the_filter_keys_and_save_only_on_files()
+    {
+        var vm = CreateWithSave(CacheWith(Text("text", 1, 2), FileClip(2, 1, ("report.pdf", 10))));
+        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+1–5 to filter", vm.FooterHint);
+        vm.MoveSelection(1);
+        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save   Ctrl+1–5 to filter", vm.FooterHint);
+    }
+
+    [Fact]
+    public async Task Enter_on_a_file_row_pastes_it()
+    {
+        var file = FileClip(2, 1, ("report.pdf", 10));
+        var vm = Create(CacheWith(file));
+        await vm.ActivateSelectedAsync();
+        Assert.Equal(file.Id, Assert.Single(_activated).Id);
     }
 }

@@ -267,6 +267,8 @@ public class VaultCryptoTests
                 "blob: chunked format 0x02 || noncePrefix, then 1 MiB chunks; plaintext byte i = i % 251 for plaintextLength bytes; only SHA-256 digests and the length of the output are stored.",
                 "emptyBlob: the full output for an empty plaintext (one final chunk).",
                 "keyedHash: text -> contentHash (ContentHash.ForText) -> keyedHash = HMAC-SHA256(hashKey, UTF-8 of contentHash).",
+                "fileHash: ContentHash.ForFiles: SHA-256 over UTF-8 'f:' then per file name + NUL + decimal size + NUL + sha256Hex(content) + LF; expected is lowercase hex.",
+                "safeFileName: FileNames.Safe(in) = out (untrusted payload name -> safe leaf name). fileSize: FileNames.FormatSize(bytes) = text (integer half-up rounding: tenths = (bytes*10 + unit/2) / unit; one decimal only below 10 and not .0; a KB value rounding to 1024 is shown as MB). fileRowText: FileNames.RowText(files) = text (the first name is shown as its safeFileName). Safe: the 200-unit cut steps back one unit rather than split a surrogate pair, then trims trailing dots and spaces from the stem (empty stem -> file). Then, if the UTF-8 length is over 200 bytes, the stem is cut to fit 200 bytes with the extension by whole code points (a surrogate pair counts 4 bytes, a lone surrogate 3); an extension over 32 bytes is cut with the stem as one; trailing dots and spaces are trimmed again (empty stem -> file).",
                 "handover: blob is otk-sealed small item with AAD 'privatepaste v1 handover' and plaintext vk; qrText uses id, base64url otk without padding, and keyId.",
                 "handoverUrlSafe: a second handover whose otk text contains - and _. thumb: a small item with purpose thumb; plaintext is hex.",
                 "argon2: passphrase (NFC-normalised, UTF-8) -> 32-byte key with the given salt and cost; the NFC and NFD spellings of the same text give the same key.",
@@ -305,6 +307,62 @@ public class VaultCryptoTests
             w.WriteString("contentHash", contentHash);
             w.WriteString("keyedHash", KeyedHash.For(key, contentHash));
             w.WriteEndObject();
+
+            var hashFiles = new[] { ("a.txt", 5L, Hex(SHA256.HashData("hello"u8))), ("b.bin", 0L, Hex(SHA256.HashData([]))) };
+            w.WriteStartObject("fileHash");
+            w.WriteStartArray("files");
+            foreach (var (name, size, sha) in hashFiles)
+            {
+                w.WriteStartObject();
+                w.WriteString("name", name);
+                w.WriteNumber("size", size);
+                w.WriteString("sha256Hex", sha);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteString("expected", ContentHash.ForFiles(hashFiles));
+            w.WriteEndObject();
+
+            w.WriteStartArray("safeFileName");
+            foreach (var (input, output) in FileNamesTests.SafeCases)
+            {
+                Assert.Equal(output, FileNames.Safe(input));
+                w.WriteStartObject();
+                w.WriteString("in", input);
+                w.WriteString("out", output);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            w.WriteStartArray("fileSize");
+            foreach (var (bytes, text) in FileNamesTests.SizeCases)
+            {
+                Assert.Equal(text, FileNames.FormatSize(bytes));
+                w.WriteStartObject();
+                w.WriteNumber("bytes", bytes);
+                w.WriteString("text", text);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            w.WriteStartArray("fileRowText");
+            foreach (var (files, text) in FileNamesTests.RowCases)
+            {
+                w.WriteStartObject();
+                w.WriteStartArray("files");
+                foreach (var f in files)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("name", f.Name);
+                    w.WriteNumber("size", f.Size);
+                    w.WriteString("mime", f.Mime);
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+                w.WriteString("text", text);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
 
             w.WriteStartObject("handover");
             w.WriteString("otk", Hex(otk));

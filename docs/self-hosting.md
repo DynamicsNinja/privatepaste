@@ -8,7 +8,7 @@ Running the PrivatePaste server: deployment, configuration, keys, backups and lo
 2. Set the environment variables:
    - `PP_DB_KEY` (required, at least 16 characters): encryption key for the database and blobs. It must be a high-entropy random value (see [Generating keys](#generating-keys)), not a memorable passphrase.
    - `PP_PASSWORD` (required): the owner's password. It creates the owner (named `owner`) on first start; changing it later resets the owner's password, see [Changing the password](#changing-the-password).
-   - `PP_MAX_IMAGE_MB` (optional, default 20) and `PP_MAX_TEXT_KB` (optional, default 1024).
+   - `PP_MAX_IMAGE_MB` (optional, default 20), `PP_MAX_FILE_MB` (optional, default 25: the most one copy of files may hold in total) and `PP_MAX_TEXT_KB` (optional, default 1024).
    - `PP_TRUST_CLOUDFLARE` (optional, default false). Set to `true` when the server sits behind a Cloudflare tunnel, so the login limit uses the visitor IP from `CF-Connecting-IP` and session cookies are marked Secure (scheme from `Cf-Visitor`). Only enable it if the server is reachable exclusively through Cloudflare; otherwise anyone can set these headers.
 3. Add a domain pointing to service `privatepaste`, port **8080**, with HTTPS enabled. Traefik passes WebSockets through by default.
 4. Optionally point Dokploy's health check at `/health`. The image has no `curl`, so there is no built-in `HEALTHCHECK`.

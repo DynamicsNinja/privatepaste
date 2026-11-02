@@ -197,6 +197,133 @@ export const contentHashText = text => sha256Hex(enc.encode('t:' + text.replace(
 /** ContentHash.ForPixels: SHA256(UTF8("i:{w}x{h}:") ++ rgba), rgba being unpremultiplied RGBA8888 with no row padding. */
 export const contentHashPixels = (rgba, width, height) => sha256Hex(concat(enc.encode(`i:${width}x${height}:`), rgba));
 
+/**
+ * ContentHash.ForFiles: SHA256(UTF8("f:") ++ per file in order UTF8(name + NUL + size + NUL + sha256hex + "\n")), where
+ * sha256hex is the lowercase hex SHA-256 of the file's content. entries: [{ name, size, sha256Hex }].
+ */
+export const contentHashFiles = entries =>
+  sha256Hex(enc.encode('f:' + entries.map(f => `${f.name}\0${f.size}\0${f.sha256Hex}\n`).join('')));
+
+// ---- file names and sizes: the same rules as FileNames.cs on every platform (see "safeFileName" in the vectors) ----
+
+const FILE_NAME_MAX = 200;
+const FILE_NAME_MAX_BYTES = 200;
+const FILE_EXT_MAX_BYTES = 32;
+const RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|(?:COM|LPT)[1-9])$/i;
+// Ends with the last dot unless the dot starts the name (".bashrc" has no extension).
+const extensionOf = name => { const dot = name.lastIndexOf('.'); return dot > 0 ? name.slice(dot) : ''; };
+const trimDotsAndSpaces = s => s.replace(/[. ]+$/, '');
+
+/**
+ * A name from a payload comes from another device, so it is untrusted: the leaf after the last / or \, without control
+ * characters or <>:"|?*, without trailing dots and spaces, never empty or a reserved Windows device name, at most 200 UTF-16 units and 200 UTF-8 bytes.
+ */
+export function safeFileName(name) {
+  let s = trimDotsAndSpaces(name.slice(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1)
+    .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, ''));
+  if (s === '' || s === '.' || s === '..') return 'file';
+
+  const dot = s.indexOf('.');
+  if (RESERVED_NAME.test(dot < 0 ? s : s.slice(0, dot))) s = '_' + s;
+
+  if (s.length > FILE_NAME_MAX) {
+    let ext = extensionOf(s);
+    if (ext.length >= FILE_NAME_MAX) ext = '';
+    let keep = FILE_NAME_MAX - ext.length;
+    // Never end the cut stem on the first half of a surrogate pair; then trim the stem again.
+    const last = s.charCodeAt(keep - 1), next = s.charCodeAt(keep);
+    if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) keep--;
+    const stem = trimDotsAndSpaces(s.slice(0, keep));
+    s = (stem === '' ? 'file' : stem) + ext;
+  }
+
+  // ext4, f2fs and APFS allow 255 bytes per name: cap the UTF-8 length at 200 bytes too, cutting the stem by whole code
+  // points; an extension over 32 bytes is cut with it as one stem.
+  if (utf8Length(s) > FILE_NAME_MAX_BYTES) {
+    let ext = extensionOf(s);
+    if (utf8Length(ext) > FILE_EXT_MAX_BYTES) ext = '';
+    const stemEnd = s.length - ext.length, budget = FILE_NAME_MAX_BYTES - utf8Length(ext);
+    let keep = 0, bytes = 0;
+    while (keep < stemEnd) {
+      const [units, size] = codePointAt(s, keep);
+      if (bytes + size > budget) break;
+      keep += units;
+      bytes += size;
+    }
+    const stem = trimDotsAndSpaces(s.slice(0, keep));
+    s = (stem === '' ? 'file' : stem) + ext;
+  }
+  return s;
+}
+
+// [UTF-16 units, UTF-8 bytes] of the code point at i, counted as FileNames.cs does: a pair is 4 bytes, a lone surrogate 3.
+function codePointAt(s, i) {
+  const c = s.charCodeAt(i);
+  if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+    const next = s.charCodeAt(i + 1);
+    if (next >= 0xdc00 && next <= 0xdfff) return [2, 4];
+  }
+  return [1, c < 0x80 ? 1 : c < 0x800 ? 2 : 3];
+}
+
+function utf8Length(s) {
+  let bytes = 0;
+  for (let i = 0; i < s.length;) {
+    const [units, size] = codePointAt(s, i);
+    i += units;
+    bytes += size;
+  }
+  return bytes;
+}
+
+function scaled(bytes, unit, label) {
+  const tenths = Math.floor((bytes * 10 + unit / 2) / unit);
+  if (tenths < 100) return { text: tenths % 10 === 0 ? `${tenths / 10} ${label}` : `${Math.floor(tenths / 10)}.${tenths % 10} ${label}`, overflow: false };
+  const whole = Math.floor((bytes + unit / 2) / unit);
+  return { text: `${whole} ${label}`, overflow: label === 'KB' && whole >= 1024 };
+}
+
+/** "0 B", "12 KB", "3.4 MB": 1 KB = 1024 B, half-up integer arithmetic, one decimal only below 10 and never ".0". */
+export function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = scaled(bytes, 1024, 'KB');
+  return kb.overflow ? scaled(bytes, 1024 * 1024, 'MB').text : kb.text;
+}
+
+/**
+ * The files of an opened file-clip payload as [{ name, size }] with safe names, in blob order; null when the clip can't be
+ * opened as files: no files, or not exactly one per blob (blobCount from the server), as the .NET and Kotlin clients decide.
+ */
+export function payloadFiles(payload, blobCount) {
+  const files = payload?.files;
+  if (!Array.isArray(files) || files.length === 0 || files.length !== blobCount) return null;
+  return files.map(f => ({
+    name: safeFileName(typeof f?.name === 'string' ? f.name : ''),
+    size: Number.isSafeInteger(f?.size) && f.size >= 0 ? f.size : 0,
+  }));
+}
+
+/** The row text of a file clip: "report.pdf +2 more · 3.4 MB", with the first name shown safe. files: [{ name, size }]. */
+export function fileRowText(files) {
+  if (files.length === 0) return '';
+  const more = files.length > 1 ? ` +${files.length - 1} more` : '';
+  return `${safeFileName(files[0].name)}${more} · ${formatSize(files.reduce((sum, f) => sum + f.size, 0))}`;
+}
+
+// ---- the type filter of the history page ----
+
+const FILTER_NOUNS = { text: 'text', link: 'links', image: 'images', file: 'files' };
+
+/** True when a clip of this kind shows under the filter ('all' or a kind); a kind this page doesn't know only under All. */
+export const matchesFilter = (kind, filter) => filter === 'all' || kind === filter;
+
+/** The filter after the chip `clicked` is tapped: The active chip again, or All, returns to All. */
+export const nextFilter = (current, clicked) => (clicked === current ? 'all' : clicked);
+
+/** The empty-state text of a type filter with nothing to show: "No files yet", or "No pinned files" in Pinned. */
+export const filterEmptyText = (filter, pinned) =>
+  pinned ? `No pinned ${FILTER_NOUNS[filter]}` : `No ${FILTER_NOUNS[filter]} yet`;
+
 // ---- payload: base64 of a small item holding UTF-8 JSON ----
 
 export async function sealPayload(vault, obj) {

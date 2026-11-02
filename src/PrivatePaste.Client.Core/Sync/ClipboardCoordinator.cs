@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Cache;
+using PrivatePaste.Client.Core.Files;
 using PrivatePaste.Client.Core.Images;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Vault;
@@ -22,17 +24,19 @@ namespace PrivatePaste.Client.Core.Sync;
 /// reset wiped), <see cref="KeyReset"/> is raised once, and nothing is sent under that key again.
 /// No codec (locked), a refused key, a key disposed mid-encode or a 426: nothing is sent; a live copy is queued and a flush
 /// stops without counting an attempt (a 426 in a flush is rethrown after that, so the sync engine stops).
-/// The server's limits are asked once per session: not while locked, and after a failed ask not again for
+/// The server's limits are asked once per connection of the sync link: not while locked, and after a failed ask not again for
 /// <see cref="LimitsRetryDelay"/> on the copy path. While they are unknown, text or an image over the default limit is queued (the
 /// server's own limit may be higher) instead of being refused for good.
 /// <see cref="UnauthorizedApiException"/> is NOT swallowed, queued or dropped: it propagates to the caller (sync engine/host),
 /// which signs out. A queued item stays queued; a live copy that hit it is not retained.
 /// A copy marked private, or from an app <c>isBlockedApp</c> names, is ignored (see <see cref="OnClipboardChangedAsync"/>).
+/// Copied files are sent as one file clip and are never queued: offline, the user is told to copy them again. File clips
+/// from other devices are written to <c>files</c> before they go on the clipboard; without a store they are not applied.
 /// </summary>
 public sealed class ClipboardCoordinator(
     IClipboardAccess clipboard, PrivatePasteApi api, Func<ClipCodec?> codec, HistoryCache cache, OutboundQueue queue,
     EchoGuard echo, INotifier notifier, TimeProvider time, Func<bool> isPaused, Func<string, bool>? isBlockedApp = null,
-    Action<string>? log = null)
+    Action<string>? log = null, ClipFileStore? files = null)
 {
     /// <summary>How many source apps <see cref="RecentSourceApps"/> remembers.</summary>
     public const int RecentSourceAppCount = 10;
@@ -46,6 +50,14 @@ public sealed class ClipboardCoordinator(
     public const int RotateAfterAttempts = 5;
     /// <summary>A queued clip that failed this many times is dropped.</summary>
     public const int DropAfterAttempts = 10;
+    /// <summary>At most this many files go in one clip.</summary>
+    public const int MaxFiles = 100;
+    public const string FoldersNotSynced = "Folders aren't synced.";
+    public const string TooManyFiles = "Too many files. Copy at most 100 at once.";
+    public const string ServerLacksFiles = "Update your PrivatePaste server to sync files.";
+    public const string FilesNotSent = "Couldn't send the files. Copy them again when you're online.";
+    /// <summary>"Files over 25 MB aren't synced.", with the server's limit.</summary>
+    public static string FilesTooLargeMessage(int fileMb) => $"Files over {fileMb} MB aren't synced.";
     /// <summary>After a failed ask for the server's limits, copies don't ask again for this long (offline, every copy would).</summary>
     public static readonly TimeSpan LimitsRetryDelay = TimeSpan.FromSeconds(30);
 
@@ -60,7 +72,11 @@ public sealed class ClipboardCoordinator(
     private readonly List<string> _recentApps = [];
     private readonly Func<string, bool> _isBlockedApp = isBlockedApp ?? (_ => false);
     private volatile ServerLimitsDto? _limits;
+    /// <summary>The kinds the server takes, asked with <see cref="_limits"/>; null while unknown or when it didn't say.</summary>
+    private volatile IReadOnlyList<string>? _kinds;
     private long _limitsRetryAtTicks;   // UTC ticks; 0 = ask at once
+    /// <summary>Set on each reconnect: the known limits and kinds are asked again on next use.</summary>
+    private volatile bool _serverInfoStale;
     /// <summary>The key id the server refused as reset: nothing is sent under it again.</summary>
     private volatile string? _refusedKeyId;
 
@@ -112,6 +128,12 @@ public sealed class ClipboardCoordinator(
                 RecordLocalCapture(readAt);
                 _lastLocalHash = null;
                 _ownWriteAt = null;   // our own write is no longer on the clipboard
+                return;
+            }
+
+            if (content is ClipboardContent.Files copied)
+            {
+                await SendFilesAsync(copied, ct).ConfigureAwait(false);
                 return;
             }
 
@@ -218,6 +240,15 @@ public sealed class ClipboardCoordinator(
         try
         {
             _lastLocalHash = null;
+            if (content is ClipboardContent.Files copied && !IsPrivateOrBlocked(content))
+            {
+                // What a copy of these files would be remembered as: their notice's fingerprint, or their hash.
+                var existing = ExistingFiles(copied);
+                _lastLocalHash = FilesNotice(copied, existing, _limits, _kinds) is { } notice
+                    ? notice.Fingerprint
+                    : await TryHashFilesAsync(existing.Select(f => f.FullName), ct).ConfigureAwait(false);
+                return;
+            }
             try
             {
                 _lastLocalHash = content switch
@@ -332,6 +363,8 @@ public sealed class ClipboardCoordinator(
         ClipboardContent content;
         // The echo guard works on plain content hashes (what a copy here hashes to), not on the server's keyed hash.
         string contentHash;
+        // Received files stay through the write: a prune between writing them and the clipboard taking them would empty the paste.
+        using var held = clip.Kind == ClipKind.File ? files?.Hold(clip.Id) : null;
         if (clip.Kind == ClipKind.Image)
         {
             if (codec() is not { } c) return false;
@@ -345,6 +378,28 @@ public sealed class ClipboardCoordinator(
             // e.g. a captive-portal page: transient, skip without side effects
             catch (Exception e) when (e is CryptographicException or InvalidDataException) { return false; }
             content = new ClipboardContent.Image(png);
+        }
+        else if (clip.Kind == ClipKind.File)
+        {
+            if (files is null || codec() is not { } c || clip.Files is not { } described) return false;
+            IReadOnlyList<string> paths;
+            try
+            {
+                paths = await files.MaterializeAsync(clip, (n, t) => api.GetBlobAsync(clip.Id, n, t, described[n].Size), c, ct)
+                    .ConfigureAwait(false);
+            }
+            // A blob that doesn't open: nothing is left of that file, and nothing goes on the clipboard.
+            catch (Exception e) when (e is CryptographicException or InvalidDataException) { return false; }
+            // Locked, disk full, ...: handled here (the message names no file), so no path with a received name reaches a log.
+            catch (ClipFileWriteException e)
+            {
+                log?.Invoke(e.Message);
+                return false;
+            }
+            // Hashed as written (safe, numbered names), which is what this clipboard reads back: the echo guard knows it.
+            if (await TryHashFilesAsync(paths, ct).ConfigureAwait(false) is not { } written) return false;
+            contentHash = written;
+            content = new ClipboardContent.Files(paths);
         }
         else
         {
@@ -373,12 +428,135 @@ public sealed class ClipboardCoordinator(
                 _ownWriteAt = null;
                 throw;
             }
+            // Marked before anything can raise a cache change: the clip may not be in the history (pinned, an older search
+            // hit), and the files must outlive the prune that follows until something else is on the clipboard.
+            if (content is ClipboardContent.Files) files?.MarkOnClipboard(clip.Id);
             cache.MarkApplied(clip);
             TrySaveCache();
+            PruneFiles();
             return true;
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>
+    /// Sends copied files as one clip. Folders are skipped; a selection that can't be sent (only folders, a server without
+    /// file clips, too many, too large) is said once per selection. Never queued: offline, the user is told to copy them
+    /// again. Caller holds the gate.
+    /// </summary>
+    private async Task SendFilesAsync(ClipboardContent.Files copied, CancellationToken ct)
+    {
+        var existing = ExistingFiles(copied);
+        var known = await LimitsAsync(force: false, ct).ConfigureAwait(false);
+        if (FilesNotice(copied, existing, known, _kinds) is { } notice)
+        {
+            if (notice.Fingerprint == _lastLocalHash) return;   // the same selection again: already said
+            _lastLocalHash = notice.Fingerprint;
+            notifier.Notify(notice.Message);
+            return;
+        }
+
+        var local = new List<LocalFile>(existing.Count);
+        try
+        {
+            foreach (var f in existing) local.Add(await LocalFile.ReadAsync(f.FullName, ct).ConfigureAwait(false));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke("Skipped a file copy that could not be read.");   // never the names
+            return;
+        }
+        var hash = LocalFile.HashOf(local);
+        if (hash == _lastLocalHash) return;
+        if (echo.IsEcho(hash)) { _lastLocalHash = hash; return; }   // files this app just put on the clipboard
+
+        var copiedAt = time.GetUtcNow();
+        var c = UsableCodec();
+        try
+        {
+            if (c is null) throw new VaultKeyUnavailableException();
+            var upload = await c.EncodeFilesAsync(local, copiedAt, ct).ConfigureAwait(false);
+            var stored = await api.UploadClipAsync(upload, ct).ConfigureAwait(false);
+            _lastLocalHash = hash;
+            RecordLocalCapture(stored.LastCopiedAt);
+            CacheUploaded(c, stored);
+        }
+        catch (KeyResetException)
+        {
+            OnKeyRefused(c!);
+        }
+        catch (Exception e) when (IsTransient(e) || e is VaultKeyUnavailableException or VaultKeyClosedException or UpdateRequiredException)
+        {
+            // Not remembered as sent, so copying them again sends them; still the newest thing on this clipboard.
+            RecordLocalCapture(copiedAt);
+            notifier.Notify(FilesNotSent);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke("Skipped a file copy that could not be read.");   // gone or locked between hashing and sending
+        }
+        catch (ApiException e) when (e is not UnauthorizedApiException)
+        {
+            notifier.Notify($"Server rejected the clip ({(int)e.Status}).");
+        }
+    }
+
+    /// <summary>The files of a copied selection (folders and paths that are gone left out), in order.</summary>
+    private static List<FileInfo> ExistingFiles(ClipboardContent.Files copied)
+    {
+        var existing = new List<FileInfo>(copied.Paths.Count);
+        foreach (var path in copied.Paths)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Exists) existing.Add(info);   // false for a folder
+            }
+            catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException) { }
+        }
+        return existing;
+    }
+
+    /// <summary>
+    /// Why a selection can't be sent, with a fingerprint of the selection (its paths and sizes, nothing read), or null when
+    /// it can. With unknown limits the default ones apply and the server is assumed to take files (the upload finds out).
+    /// </summary>
+    private static (string Fingerprint, string Message)? FilesNotice(ClipboardContent.Files copied, List<FileInfo> existing,
+        ServerLimitsDto? limits, IReadOnlyList<string>? kinds)
+    {
+        string? message = null;
+        if (existing.Count == 0) message = FoldersNotSynced;
+        else if (limits is not null && kinds?.Contains("file") != true) message = ServerLacksFiles;
+        else if (existing.Count > MaxFiles) message = TooManyFiles;
+        else
+        {
+            var fileMb = (limits ?? DefaultLimits).FileMb;
+            if (existing.Sum(f => f.Length) > fileMb * 1024L * 1024) message = FilesTooLargeMessage(fileMb);
+        }
+        if (message is null) return null;
+        var selection = new StringBuilder("files:");
+        foreach (var path in copied.Paths) selection.Append(path).Append('\0');
+        foreach (var f in existing) selection.Append(f.Length.ToString(CultureInfo.InvariantCulture)).Append('\0');
+        return ("notice:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.ToString()))), message);
+    }
+
+    /// <summary>The <see cref="ContentHash.ForFiles"/> of these files as they are on disk; null when one can't be read.</summary>
+    private static async Task<string?> TryHashFilesAsync(IEnumerable<string> paths, CancellationToken ct)
+    {
+        var local = new List<LocalFile>();
+        try
+        {
+            foreach (var path in paths) local.Add(await LocalFile.ReadAsync(path, ct).ConfigureAwait(false));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        return LocalFile.HashOf(local);
+    }
+
+    /// <summary>
+    /// Keeps the received files to the clips still in the history and under the store's size cap; the store itself keeps
+    /// those in use (the clip on the clipboard, writes and saves in flight).
+    /// </summary>
+    private void PruneFiles() => files?.Prune(cache.Items.Select(i => i.Clip.Id).ToHashSet());
 
     /// <summary>Over a limit only the server sets (size), not the fixed 50-megapixel one every client applies.</summary>
     private static bool IsOnlyOverServerLimit(ClipboardContent content) =>
@@ -463,27 +641,42 @@ public sealed class ClipboardCoordinator(
     }
 
     /// <summary>
-    /// The server's limits, fetched once per session (one coordinator); null while unknown. Not asked while there is no
-    /// usable key (nothing is sent then anyway). After a failure, only a <paramref name="force"/>d ask (a flush, which the
-    /// engine paces itself) tries again before <see cref="LimitsRetryDelay"/> has passed.
+    /// The server's limits, fetched once per connection (see <see cref="OnReconnected"/>); null while unknown. Not asked
+    /// while there is no usable key (nothing is sent then anyway). After a failure, only a <paramref name="force"/>d ask (a
+    /// flush, which the engine paces itself) tries again before <see cref="LimitsRetryDelay"/> has passed; meanwhile the
+    /// last known limits, if any, stay in force.
     /// </summary>
     private async Task<ServerLimitsDto?> LimitsAsync(bool force, CancellationToken ct)
     {
-        if (_limits is { } known) return known;
-        if (UsableCodec() is null) return null;
-        if (!force && time.GetUtcNow().UtcTicks < Interlocked.Read(ref _limitsRetryAtTicks)) return null;
+        var known = _limits;
+        if (known is not null && !_serverInfoStale) return known;
+        if (UsableCodec() is null) return known;
+        if (!force && time.GetUtcNow().UtcTicks < Interlocked.Read(ref _limitsRetryAtTicks)) return known;
         try
         {
-            var limits = (await api.GetServerInfoAsync(ct).ConfigureAwait(false))?.Limits ?? DefaultLimits;
+            var info = await api.GetServerInfoAsync(ct).ConfigureAwait(false);
+            var limits = info?.Limits ?? DefaultLimits;
+            _kinds = info?.Kinds;   // a server from before encryption (no info) takes no files
             _limits = limits;
+            _serverInfoStale = false;
             return limits;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception)
         {
             Interlocked.Exchange(ref _limitsRetryAtTicks, (time.GetUtcNow() + LimitsRetryDelay).UtcTicks);
-            return null;
+            return known;
         }
+    }
+
+    /// <summary>
+    /// The sync link (re)connected, perhaps to an upgraded server: its kinds and limits are asked again on next use. Until
+    /// that ask succeeds the last known ones stay in force.
+    /// </summary>
+    public void OnReconnected()
+    {
+        _serverInfoStale = true;
+        Interlocked.Exchange(ref _limitsRetryAtTicks, 0);
     }
 
     /// <summary>The current codec, unless there is none (locked) or the server refused its key as reset.</summary>
@@ -510,6 +703,7 @@ public sealed class ClipboardCoordinator(
         if (_refusedKeyId == c.KeyId) return;
         _refusedKeyId = c.KeyId;
         queue.Clear();
+        files?.Clear();   // received under the reset key, for the history the reset wiped
         log?.Invoke("Encryption was reset; dropped the clips waiting to be sent.");
         try { KeyReset?.Invoke(this, EventArgs.Empty); }
         catch (Exception) { }   // a throwing handler must not fail the copy or the flush

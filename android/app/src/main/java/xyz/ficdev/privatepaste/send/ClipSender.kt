@@ -11,8 +11,10 @@ import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.KeyResetException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.api.UpdateRequiredException
+import xyz.ficdev.privatepaste.core.FileNames
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.crypto.ClipTooLargeException
+import xyz.ficdev.privatepaste.core.crypto.OutgoingFile
 import xyz.ficdev.privatepaste.core.crypto.UnreadableImageException
 import xyz.ficdev.privatepaste.core.crypto.VaultKeyClosedException
 import xyz.ficdev.privatepaste.core.model.ClipDto
@@ -22,10 +24,14 @@ import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.OutboundQueue
 import xyz.ficdev.privatepaste.sync.LocalCaptureClock
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
+import java.security.MessageDigest
 import java.time.Clock
 import java.time.Instant
+import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 
 sealed interface SendResult {
@@ -75,6 +81,18 @@ fun Uri.isSendable(): Boolean {
     return !authority.substringAfterLast('@').equals(OWN_FILE_AUTHORITY, ignoreCase = true)
 }
 
+/** One shared stream for a file clip: its name (display name, else the URI's last segment) and the OS's MIME type if any. */
+class SharedFile(val name: String, val mime: String?, val open: () -> InputStream)
+
+/** Outcome of copying shared files to this app's cache (done inside the activity, while the URI grant lasts). */
+sealed interface FilesRead {
+    /** Copied into [dir], hashed and within the limit; [ClipSender.sendFiles] removes [dir] when done. */
+    class Ready(val dir: File, val files: List<OutgoingFile>) : FilesRead
+
+    /** Nothing was kept; [result] says why. */
+    class Failed(val result: SendResult) : FilesRead
+}
+
 internal fun ImageRead.toFailure(): SendResult? = when (this) {
     is ImageRead.Bytes -> null
     ImageRead.TooLarge -> SendResult.TooLarge(ClipSender.IMAGE_TOO_LARGE)
@@ -89,6 +107,8 @@ internal fun ImageRead.toFailure(): SendResult? = when (this) {
  * clip queued while locked or offline goes out under whatever key is current when it is sent. Without a codec a send
  * is queued and a flush waits. [limits] gives the server's limits (text is checked against `textKb`, images against
  * `imageMb`).
+ * File clips are never queued: [readFiles] copies them to [outgoing] while the share's grant lasts, checked against
+ * the server's [kinds] and `fileMb`, and [sendFiles] uploads them now or says why it couldn't.
  * [onKeyReset] gets the id of the key the server refused as reset (409): queued clips are dropped then, since they
  * were meant for the history that the reset wiped. A key closed mid-send (sign-out, or a reset handled meanwhile)
  * never seals anything: the clip is queued instead, or dropped once the session is ending. [notifier] gets messages about queued clips only (live results
@@ -105,6 +125,8 @@ class ClipSender(
     private val clock: Clock,
     private val onKeyReset: (keyId: String) -> Unit = {},
     private val isEnding: () -> Boolean = { false },
+    private val kinds: suspend () -> List<String>,
+    private val outgoing: File,
 ) {
     private val flushLock = Mutex()
 
@@ -182,10 +204,82 @@ class ClipSender(
     }
 
     /**
+     * Copies [sources] into a new folder under [outgoing], hashing each file as it is copied and stopping as soon as
+     * the total passes the server's `fileMb`. Call it while the share's URI grant lasts. Checks first that the server
+     * takes file clips; its limits need the server, so offline nothing is read.
+     */
+    suspend fun readFiles(sources: List<SharedFile>): FilesRead = withContext(Dispatchers.IO) {
+        if (sources.isEmpty()) return@withContext FilesRead.Failed(SendResult.Rejected(NOTHING_TO_SEND))
+        if (sources.size > MAX_FILES) return@withContext FilesRead.Failed(SendResult.Rejected(TOO_MANY_FILES))
+        val maxBytes = try {
+            if (FILE_KIND !in kinds()) return@withContext FilesRead.Failed(SendResult.Rejected(SERVER_TOO_OLD_FOR_FILES))
+            limits().fileMb.toLong() * 1024 * 1024
+        } catch (e: ApiException.Unauthorized) {
+            return@withContext FilesRead.Failed(SendResult.SignedOut)
+        } catch (e: ApiException) {
+            return@withContext FilesRead.Failed(SendResult.Rejected(FILES_OFFLINE))
+        }
+        val dir = File(outgoing, UUID.randomUUID().toString())
+        try {
+            dir.mkdirs()
+            var total = 0L
+            val files = sources.mapIndexed { i, source ->
+                val target = File(dir, "$i")
+                val digest = MessageDigest.getInstance("SHA-256")
+                val size = source.open().use { input ->
+                    target.outputStream().use { out -> copyCounting(input, out, digest, maxBytes - total) }
+                }
+                if (size < 0) {
+                    dir.deleteRecursively()
+                    return@withContext FilesRead.Failed(SendResult.TooLarge(filesTooLarge(maxBytes)))
+                }
+                total += size
+                val name = source.name.ifBlank { "file" }
+                OutgoingFile(target, name, size, source.mime ?: FileNames.mimeFor(name), hex(digest.digest()))
+            }
+            FilesRead.Ready(dir, files)
+        } catch (e: CancellationException) {
+            dir.deleteRecursively()
+            throw e
+        } catch (e: Exception) {
+            // IOException, SecurityException, or whatever a foreign ContentProvider throws: never strand the activity.
+            Log.w(TAG, "File read failed (${e.javaClass.simpleName})")
+            dir.deleteRecursively()
+            FilesRead.Failed(SendResult.Rejected(UNREADABLE_FILES))
+        }
+    }
+
+    /**
+     * Seals and uploads the files [readFiles] copied, as one file clip, then removes the copies. Never queued: without
+     * the key, or on a transient failure, it says so and the user shares them again.
+     */
+    suspend fun sendFiles(read: FilesRead.Ready): SendResult = withContext(Dispatchers.IO) {
+        try {
+            val c = codec() ?: return@withContext SendResult.Rejected(FILES_LOCKED)
+            val encoded = try {
+                c.encodeFiles(read.files, File(read.dir, "sealed"), copiedAt = null, backfill = false)
+            } catch (e: VaultKeyClosedException) {
+                return@withContext SendResult.Rejected(FILES_LOCKED)
+            } catch (e: IOException) {
+                Log.w(TAG, "Cannot seal the files (${e.javaClass.simpleName})")
+                return@withContext SendResult.Rejected(UNREADABLE_FILES)
+            }
+            if (encoded.meta.hash == cache.lastAppliedHash) return@withContext SendResult.AlreadySynced
+            live(c, onTransient = { SendResult.Rejected(FILES_OFFLINE) }) { api.uploadFileClip(encoded.meta, encoded.blobs) }
+        } finally {
+            read.dir.deleteRecursively()
+        }
+    }
+
+    /**
      * Uploads now; on a transient failure queues instead. Once the session is ending ([isEnding]) the outcome is not
      * recorded: no cache upsert or save, no enqueue, so a send still in flight never reaches the next session.
      */
     private suspend fun live(c: ClipCodec, copiedAt: Instant, enqueue: () -> Unit, upload: suspend () -> ClipDto): SendResult =
+        live(c, onTransient = { queueOnly(copiedAt, enqueue) }, upload)
+
+    /** [live] with what a transient failure (offline, 5xx, rate limited) does instead of queueing. */
+    private suspend fun live(c: ClipCodec, onTransient: () -> SendResult, upload: suspend () -> ClipDto): SendResult =
         try {
             val uploaded = upload()
             synchronized(commitLock) {
@@ -209,7 +303,7 @@ class ClipSender(
         } catch (e: ApiException.Rejected) {
             SendResult.Rejected(e.message ?: "The server refused the clip")
         } catch (e: ApiException) { // Transient, RateLimited
-            queueOnly(copiedAt, enqueue)
+            onTransient()
         }
 
     /** Keeps the clip for [flushQueue]; nothing is recorded once the session is ending. */
@@ -318,6 +412,36 @@ class ClipSender(
         const val GAVE_UP = "Couldn't sync a clip after several tries."
         const val UNREADABLE_IMAGE = "Couldn't read the image"
         const val KEY_RESET = "Encryption was reset."
+        const val FILE_KIND = "file"
+        const val MAX_FILES = 100
+        const val NOTHING_TO_SEND = "Nothing to send"
+        const val TOO_MANY_FILES = "Too many files. Share at most 100 at once."
+        const val SERVER_TOO_OLD_FOR_FILES = "Update your PrivatePaste server to sync files."
+        const val FILES_OFFLINE = "Couldn't send the files. Share them again when you're online."
+        const val FILES_LOCKED = "Open PrivatePaste to unlock, then share the files again."
+        const val UNREADABLE_FILES = "Couldn't read the files"
+
+        /** "Files over 25 MB aren't synced." with the server's limit. */
+        fun filesTooLarge(maxBytes: Long): String = "Files over ${maxBytes / (1024 * 1024)} MB aren't synced."
+
+        /**
+         * Copies [input] to [out], feeding [digest], and returns the byte count; -1 as soon as more than [limit] bytes
+         * came (after reading at most one buffer past it).
+         */
+        fun copyCounting(input: InputStream, out: OutputStream, digest: MessageDigest, limit: Long): Long {
+            val buffer = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) return total
+                total += n
+                if (total > limit) return -1
+                digest.update(buffer, 0, n)
+                out.write(buffer, 0, n)
+            }
+        }
+
+        private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
 
         /** Same text as the desktop's: "Clip too large to sync (text over 1 MB)." */
         fun textTooLarge(textKb: Int): String =

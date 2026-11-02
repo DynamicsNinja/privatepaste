@@ -12,6 +12,9 @@ public sealed record ServerOptions(string DbKey, string Password, string DataDir
     /// </summary>
     public bool TrustCloudflare { get; init; }
 
+    /// <summary>The most plaintext one file clip may hold, all its files together.</summary>
+    public long MaxFileBytes { get; init; } = 25L * 1024 * 1024;
+
     public static ServerOptions FromConfiguration(IConfiguration config)
     {
         var dbKey = config["PP_DB_KEY"];
@@ -29,9 +32,11 @@ public sealed record ServerOptions(string DbKey, string Password, string DataDir
 
         var imageMb = ReadPositive(config, "PP_MAX_IMAGE_MB", 20);
         var textKb = ReadPositive(config, "PP_MAX_TEXT_KB", 1024);
+        var fileMb = ReadPositive(config, "PP_MAX_FILE_MB", 25);
 
         return new ServerOptions(dbKey, password, dataDir, imageMb * 1024 * 1024, textKb * 1024)
         {
+            MaxFileBytes = fileMb * 1024 * 1024,
             TrustCloudflare = ReadBool(config, "PP_TRUST_CLOUDFLARE"),
         };
     }

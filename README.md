@@ -34,7 +34,8 @@
 ## Why PrivatePaste
 
 - **Copy here, paste there.** Text, links and images you copy show up on the clipboard of your other devices a moment later.
-- **A history you can search.** Every clip is kept until you delete it (or clear the history), with the device it came from, so the thing you copied last Tuesday is still one search away. Search runs on your devices, which hold the key.
+- **Files too.** Copy files in Explorer (Finder and Linux file managers: best effort for now), or share them from the phone, and they arrive on your other devices as one clip: paste them on a computer or save them to Downloads, copy, save or share them on the phone, or download them from the web UI. Up to 25 MB per copy by default (`PP_MAX_FILE_MB`), end-to-end encrypted like every clip, file names included. [Details](docs/desktop.md#files)
+- **A history you can search.** Every clip is kept until you delete it (or clear the history), with the device it came from, so the thing you copied last Tuesday is still one search away. Search runs on your devices, which hold the key. Filter by type (All, Text, Links, Images, Files) on every device.
 - **Private copies stay private.** On the desktop apps, a copy that a password manager marks as private never leaves your computer: it isn't uploaded, cached or shown anywhere. The desktop app can also ignore copies from apps you name. Android only sends what you send or share yourself. [Details](docs/desktop.md#private-copies)
 - **Pinned clips.** Pin the clips you reuse. They get their own tab on every device and survive clearing and auto-delete.
 - **Clear it when you want.** Clear the history from the web UI, or let the server delete clips older than 7, 30 or 90 days. Pinned clips stay. Off by default: otherwise clips are kept until you delete them.
@@ -90,10 +91,6 @@ Install an app, then enter your server URL, your name and password, and a name f
 
 The first time the owner signs in (in an app or the web UI), PrivatePaste asks you to **set up encryption**: choose a passphrase of at least 12 characters (a short sentence works well). It is separate from your password and the server never sees it. Every other device then unlocks once, by entering the passphrase or, on Android, by scanning a code from **Settings > Add a device** on a device that is already unlocked. From then on the device stays signed in, unlocked and in sync. Add the other people on the **People** page of the web UI, where you can also see and sign out devices; they unlock with the same passphrase.
 
-> [!WARNING]
-
-> [!NOTE]
-
 ## How it works
 
 ```mermaid
@@ -108,7 +105,7 @@ Each device signs in with a person's name and password once and gets its own dev
 ## Security
 
 - **Clips are end-to-end encrypted.** Your devices encrypt every clip (AES-256-GCM) before uploading it, with a vault key that the server never sees unwrapped. The server keeps that key only wrapped with your passphrase (Argon2id), which is separate from your password and never sent to it. Someone who steals the server, its disk or its backups, including its configuration and `PP_DB_KEY`, can't read your clips.
-- **What the server can see:** who copied a clip, from which device and platform, and when; its kind (text, link or image); its exact size; and whether it is pinned. It never sees a clip's content (text and images) or thumbnails.
+- **What the server can see:** who copied a clip, from which device and platform, and when; its kind (text, link, image or file); its exact size (for files, how many there are and about how big each one is); and whether it is pinned. It never sees a clip's content (text, images, file names and file contents) or thumbnails.
 - **`PP_DB_KEY` still matters.** The database and stored files are also encrypted at rest with it, which hides that metadata from someone who takes the disk without the server's configuration.
 - **The web UI is the exception to keep in mind.** It decrypts in your browser with code the server sends. Someone who steals the server and keeps it running could serve altered page code to any browser that is unlocked, or unlocks, while it runs. An unlocked tab is exposed as soon as it loads another page, so use **Lock** (or close the tab) when you're done. The apps don't have this risk; if it worries you, use the apps.
 - **Don't lose the passphrase.** Nobody can recover the history without it, not even the owner of the server. The only way back is **Reset encryption** in the web UI's Settings, which deletes the whole history, pinned clips included, and starts over with a new passphrase.
@@ -124,8 +121,8 @@ Each device signs in with a person's name and password once and gets its own dev
 | Guide | What's in it |
 |---|---|
 | [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, end-to-end encryption and its reset, backups, clearing history and auto-delete, proxies, local development |
-| [Desktop app](docs/desktop.md) | Install, upgrade, unlocking, adding a device, hotkey, pause, pinned clips, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
-| [Android app](docs/android.md) | Install, unlocking by passphrase or code, adding a device, pinned clips, background delivery, battery settings by phone maker, building and releasing |
+| [Desktop app](docs/desktop.md) | Install, upgrade, unlocking, adding a device, hotkey, the type filter, pause, pinned clips, copying and saving files, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
+| [Android app](docs/android.md) | Install, unlocking by passphrase or code, adding a device, sharing and receiving files, the type filter, pinned clips, background delivery, battery settings by phone maker, building and releasing |
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules, end-to-end encryption formats and test vectors, and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 

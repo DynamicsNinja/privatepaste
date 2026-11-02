@@ -1,5 +1,7 @@
 package xyz.ficdev.privatepaste.core.model
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
@@ -28,6 +30,7 @@ enum class ClipKind(val wire: String) {
     TEXT("text"),
     LINK("link"),
     IMAGE("image"),
+    FILE("file"),
     UNKNOWN("unknown"),
 }
 
@@ -75,7 +78,28 @@ data class ClipDto(
     val payload: String? = null,
     /** Id of the vault key that sealed [payload]; null on a clip from before encryption. */
     val keyId: String? = null,
+    /**
+     * A file clip's files in blob order, from the sealed payload: the server never sends it (like [text]). The names
+     * come from another device: untrusted, see FileNames.safe.
+     */
+    val files: List<ClipFileInfo>? = null,
 )
+
+/**
+ * One file of a file clip, as the sealed payload lists it. [mime] is for labelling only: a payload may leave it out
+ * (application/octet-stream then) or send null, and the clip still opens. It is always written, so other clients see it.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+data class ClipFileInfo(
+    val name: String,
+    val size: Long,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) val mime: String? = OCTET_STREAM,
+) {
+    companion object {
+        const val OCTET_STREAM = "application/octet-stream"
+    }
+}
 
 @Serializable
 data class ClipPage(val items: List<ClipDto>, val nextCursor: String? = null)
@@ -88,7 +112,7 @@ data class LoginResponse(val deviceId: String, val token: String)
 
 /** `GET /api/server-info`: what the server supports, readable before signing in. */
 @Serializable
-data class ServerLimits(val textKb: Int, val imageMb: Int)
+data class ServerLimits(val textKb: Int, val imageMb: Int, val fileMb: Int = 25)
 
 @Serializable
 data class ServerInfo(val protocol: Int, val kinds: List<String>, val limits: ServerLimits)

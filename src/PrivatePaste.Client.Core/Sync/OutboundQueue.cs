@@ -28,6 +28,8 @@ public sealed class OutboundQueue(string path, byte[] key)
             {
                 ClipboardContent.Text t => new Entry(false, t.Value, null, copiedAt),
                 ClipboardContent.Image i => new Entry(true, null, i.Png, copiedAt),
+                // Never queued: the paths may be gone or changed by the time a flush runs (the user copies them again).
+                ClipboardContent.Files => throw new ArgumentException("File clips are never queued.", nameof(content)),
                 _ => throw new ArgumentException("Unsupported content", nameof(content)),
             });
             Save();

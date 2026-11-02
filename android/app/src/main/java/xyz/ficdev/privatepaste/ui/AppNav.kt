@@ -122,6 +122,7 @@ private fun HistoryRoute(deps: UiDeps, session: StoredSession, relativeTime: Rel
                     copier = deps.clipboard.asClipCopier(),
                     cachedImage = deps.cachedImage,
                     onUnauthorized = deps::onUnauthorized,
+                    files = deps.fileActions,
                 )
             }
         },

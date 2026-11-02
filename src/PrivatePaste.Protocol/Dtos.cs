@@ -5,7 +5,10 @@ namespace PrivatePaste.Protocol;
 /// <summary>
 /// <see cref="Unknown"/> is what a reader makes of a kind it doesn't know (a newer client's); no client or server ever writes it.
 /// </summary>
-public enum ClipKind { Text, Link, Image, Unknown }
+public enum ClipKind { Text, Link, Image, File, Unknown }
+
+/// <summary>One file of a file clip, as listed inside the sealed payload.</summary>
+public sealed record ClipFileInfo(string Name, long Size, string Mime);
 
 public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, string Hash,
     int? Width, int? Height, long SizeBytes, Guid? SourceDeviceId, string SourceDeviceName,
@@ -38,6 +41,12 @@ public sealed record ClipDto(Guid Id, long Seq, ClipKind Kind, string? Text, str
 
     /// <summary>How many sealed blobs the clip has.</summary>
     public int BlobCount { get; init; }
+
+    /// <summary>
+    /// The files of a file clip, in blob order. The server never sets it: clients fill it after opening the sealed payload,
+    /// as they do <see cref="Text"/>, <see cref="Width"/> and <see cref="Height"/>.
+    /// </summary>
+    public IReadOnlyList<ClipFileInfo>? Files { get; init; }
 }
 
 public sealed record LoginRequest(string Password, string DeviceName, string Platform)
@@ -71,7 +80,7 @@ public static class WsTypes
     public const string VaultReset = "vault.reset";
 }
 
-public sealed record ServerLimitsDto(int TextKb, int ImageMb);
+public sealed record ServerLimitsDto(int TextKb, int ImageMb, int FileMb = 25);
 
 public sealed record ServerInfoDto(int Protocol, IReadOnlyList<string> Kinds, ServerLimitsDto Limits);
 

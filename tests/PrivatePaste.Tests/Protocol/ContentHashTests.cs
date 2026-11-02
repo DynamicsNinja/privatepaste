@@ -42,4 +42,23 @@ public class ContentHashTests
     public void Pixel_hash_cross_client_vector_1x1_opaque_red() =>
         Assert.Equal("8d833d22068fdf91eecbd0d310208548d1f9418c6513c572a7c7d01fc696c49a",
             ContentHash.ForPixels([255, 0, 0, 255], 1, 1));
+
+    // Cross-client vector (also "fileHash" in docs/e2e-test-vectors.json): sha256("hello") and sha256("") are the content digests.
+    [Fact]
+    public void ForFiles_vector() =>
+        Assert.Equal("0baeacb0a540c7f644e57744ae15f6df06f21ba4cdacf1444cec972fe60f4940", ContentHash.ForFiles(
+        [
+            ("a.txt", 5, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"),
+            ("b.bin", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        ]));
+
+    [Fact]
+    public void ForFiles_depends_on_order_name_and_size()
+    {
+        var h = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        var a = ContentHash.ForFiles([("a", 5, h), ("b", 5, h)]);
+        Assert.NotEqual(a, ContentHash.ForFiles([("b", 5, h), ("a", 5, h)]));
+        Assert.NotEqual(a, ContentHash.ForFiles([("a", 5, h), ("c", 5, h)]));
+        Assert.NotEqual(a, ContentHash.ForFiles([("a", 5, h), ("b", 6, h)]));
+    }
 }

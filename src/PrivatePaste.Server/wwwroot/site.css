@@ -148,6 +148,13 @@ button.copy.done .done-icon { display: inline; }
 .text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 7.5em; overflow: hidden; }
 .body a { overflow-wrap: anywhere; }
 .thumb { max-width: min(256px, 100%); max-height: 256px; border-radius: 8px; display: block; }
+.file-lines { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .1rem; }
+.file-line { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.file-name { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.file-size { flex: none; font-size: .85rem; }
+.file-line button { margin-left: auto; }
+/* A download is not destructive: accent on hover, not the ghost button's danger red. */
+button.file-download:hover, button.file-download:focus-visible { color: var(--accent); background: var(--accent-soft); }
 .meta { color: var(--muted); font-size: .78rem; margin-top: .3rem; }
 
 /* Source device platform: drawn in the muted colour, about the text's cap height, right before the device name. */
@@ -177,6 +184,19 @@ button.copy.done .done-icon { display: inline; }
 .tabs a { color: var(--muted); text-decoration: none; font-size: .9rem; padding: .4rem .9rem; border-radius: 99px; }
 .tabs a:hover { color: var(--text); background: var(--raised); }
 .tabs a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+
+/* Type filter chips under the search: one pressed at a time, styled like the tabs' selected state. */
+.search:has(+ .filters) { margin-bottom: .75rem; }
+.filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.25rem; }
+.chip {
+    display: inline-flex; align-items: center; gap: .35rem; font-size: .85rem; font-weight: 600; line-height: 1.2;
+    padding: .35rem .7rem; border-radius: 8px; background: var(--surface); color: var(--muted);
+}
+.chip:hover { color: var(--text); border-color: var(--line); }
+.chip[aria-pressed="true"] { color: var(--text); background: var(--accent-soft); border-color: var(--accent); }
+.chip[aria-pressed="true"] .chip-icon { color: var(--accent); }
+.chip-icon { display: inline-flex; }
+.chip-icon svg { width: 14px; height: 14px; }
 
 /* Pin: a marker on pinned rows in History, and the toggle in every row's actions. */
 .pin-icon { width: 1.15em; height: 1.15em; vertical-align: -.2em; flex: none; }
@@ -264,6 +284,9 @@ dialog .hint { margin: .15rem 0 .5rem; }
 
 @media (max-width: 34rem) {
     .clip { flex-wrap: wrap; }
+    /* All five chips on one line at 360px. */
+    .filters { gap: .3rem; }
+    .chip { padding: .35rem .5rem; gap: .25rem; font-size: .8rem; }
     .actions { width: 100%; justify-content: flex-end; }
     .bar .wordmark { display: none; }
     nav { gap: 0; }

@@ -269,6 +269,7 @@ public sealed class SyncEngine(
         try
         {
             cache.KeyId = c.KeyId;
+            coordinator.OnReconnected();   // the server may have been upgraded meanwhile: ask its kinds and limits again
             await CatchUpAsync(c, lifetime.Token).ConfigureAwait(false);
             await coordinator.FlushQueueAsync(lifetime.Token).ConfigureAwait(false);
             if (Volatile.Read(ref _halted) != 0) return Outcome.Failed;   // the flush hit a key reset

@@ -140,6 +140,146 @@ public class DesktopRenderTests
         });
     }, CancellationToken.None);
 
+    private static PrivatePaste.Protocol.ClipDto FileClip(int seq, int minutes, string device, string platform,
+        params (string Name, long Size)[] files) =>
+        new(Guid.NewGuid(), seq, PrivatePaste.Protocol.ClipKind.File, null, "f" + seq, null, null, files.Sum(f => f.Size), null, device,
+            DateTimeOffset.UtcNow.AddMinutes(-minutes))
+        {
+            SourceDevicePlatform = platform,
+            Files = files.Select(f => new PrivatePaste.Protocol.ClipFileInfo(f.Name, f.Size, "application/pdf")).ToList(),
+            BlobCount = files.Length,
+        };
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task File_toast_renders(string theme) => Session.Value.Dispatch(() =>
+    {
+        var toast = PrivatePaste.Desktop.Tray.ClipToast.For(
+            FileClip(1, 0, "Pixel 9", "android", ("report.pdf", 3_000_000), ("a.txt", 300_000), ("b.txt", 265_000)));
+        Assert.Equal("report.pdf +2 more · 3.4 MB", toast.Preview);
+        var window = new ToastWindow();
+        window.ShowClip(toast);
+        Render(window, theme, "toast-file", w =>
+        {
+            Assert.Equal("From Pixel 9", Find<TextBlock>(w, "ClipTitle").Text);
+            Assert.Equal("report.pdf +2 more · 3.4 MB", Find<TextBlock>(w, "ClipPreview").Text);
+        });
+    }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Popup_window_renders_a_file_row(string theme) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 4, PrivatePaste.Protocol.ClipKind.Text,
+            "git commit -m \"feat(desktop): copy and paste files\"", "h4", null, null, 100, null, "PC-work", now)
+        { SourceDevicePlatform = "windows" });
+        cache.Upsert(FileClip(3, 4, "Pixel 9", "android", ("report.pdf", 3_000_000), ("a.txt", 300_000), ("b.txt", 265_000)));
+        cache.Upsert(FileClip(2, 35, "MacBook", "macos", ("Quarterly budget with a very long file name for the trimming check.xlsx", 48_213)));
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 1, PrivatePaste.Protocol.ClipKind.Image, null, "h1", 1280, 720,
+            100, null, "ThinkPad", now.AddMinutes(-90)) { SourceDevicePlatform = "linux" });
+        var vm = new PopupViewModel(cache, null, _ => Task.CompletedTask, TimeProvider.System,
+            save: _ => Task.FromResult<string?>(null));
+        vm.MoveSelection(1);   // the file row: the footer offers Save
+        Render(new PopupWindow { DataContext = vm }, theme, "popup-files", w =>
+        {
+            var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            Assert.Contains("report.pdf +2 more · 3.4 MB", texts);
+            Assert.Contains("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save   Ctrl+1–5 to filter", texts);
+            var fileIcons = w.GetVisualDescendants().OfType<Canvas>().Where(c => c.Name == "FileIcon" && c.IsEffectivelyVisible).ToList();
+            Assert.Equal(2, fileIcons.Count);
+            Assert.All(w.GetVisualDescendants().OfType<Button>(), b => Assert.False(b.Focusable));
+        });
+    }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("dark", PrivatePaste.Desktop.ViewModels.PopupFilter.All)]
+    [InlineData("light", PrivatePaste.Desktop.ViewModels.PopupFilter.All)]
+    [InlineData("dark", PrivatePaste.Desktop.ViewModels.PopupFilter.File)]
+    [InlineData("light", PrivatePaste.Desktop.ViewModels.PopupFilter.File)]
+    [InlineData("dark", PrivatePaste.Desktop.ViewModels.PopupFilter.Image)]
+    public Task Popup_window_renders_the_type_chips(string theme, PrivatePaste.Desktop.ViewModels.PopupFilter filter) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 4, PrivatePaste.Protocol.ClipKind.Text,
+            "git commit -m \"feat(desktop): filter by type\"", "h4", null, null, 100, null, "PC-work", now)
+        { SourceDevicePlatform = "windows" });
+        cache.Upsert(FileClip(3, 4, "Pixel 9", "android", ("report.pdf", 3_000_000), ("a.txt", 300_000)));
+        cache.Upsert(FileClip(2, 35, "MacBook", "macos", ("budget.xlsx", 48_213)));
+        var vm = new PopupViewModel(cache, null, _ => Task.CompletedTask, TimeProvider.System,
+            save: _ => Task.FromResult<string?>(null));
+        vm.SetFilter(filter);
+        vm.MoveSelection(0);
+        Render(new PopupWindow { DataContext = vm }, theme, $"popup-chips-{filter.ToString().ToLowerInvariant()}", w =>
+        {
+            var chips = w.GetVisualDescendants().OfType<Border>().Where(b => b.Classes.Contains("chip")).ToList();
+            Assert.Equal(["FilterAllChip", "FilterTextChip", "FilterLinkChip", "FilterImageChip", "FilterFileChip"], chips.Select(c => c.Name));
+            Assert.All(chips, c => Assert.False(c.Focusable));
+            // Exactly the chosen chip is marked active.
+            Assert.Equal([$"Filter{filter}Chip"], chips.Where(c => c.Classes.Contains("active")).Select(c => c.Name));
+            var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            Assert.Subset(texts.ToHashSet(), new HashSet<string?> { "All", "Text", "Links", "Images", "Files" });
+            // The footer fits in the popup: one line (or two when a file row adds Ctrl+S) never clips.
+            var footer = Find<TextBlock>(w, "FooterText");
+            Assert.True(footer.Bounds.Height < 40, $"footer is {footer.Bounds.Height}px high");
+            Assert.Equal(vm.Items.Count, filter switch
+            {
+                PrivatePaste.Desktop.ViewModels.PopupFilter.File => 2,
+                PrivatePaste.Desktop.ViewModels.PopupFilter.Image => 0,
+                _ => 3,
+            });
+        });
+    }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Popup_footer_keeps_its_height_when_a_file_row_is_selected(string theme) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 4, PrivatePaste.Protocol.ClipKind.Text,
+            "git commit -m \"feat(desktop): filter by type\"", "h4", null, null, 100, null, "PC-work", now)
+        { SourceDevicePlatform = "windows" });
+        cache.Upsert(FileClip(3, 4, "Pixel 9", "android", ("report.pdf", 3_000_000), ("a.txt", 300_000)));
+        var vm = new PopupViewModel(cache, null, _ => Task.CompletedTask, TimeProvider.System,
+            save: _ => Task.FromResult<string?>(null));
+        vm.MoveSelection(0);
+        Render(new PopupWindow { DataContext = vm }, theme, "popup-footer-text-row", w =>
+        {
+            var slot = (Control)Find<TextBlock>(w, "FooterText").Parent!;
+            var footer = slot.Bounds.Height;
+            var rows = Find<ListBox>(w, "ItemsList").Bounds.Height;
+            Assert.True(footer < 40, $"footer is {footer}px high");
+
+            vm.MoveSelection(1);   // the file row: the hint gains "Ctrl+S to save" and wraps to a second line
+            Assert.Contains("Ctrl+S", vm.FooterHint);
+            w.UpdateLayout();
+            Assert.Equal(footer, slot.Bounds.Height);
+            Assert.Equal(rows, Find<ListBox>(w, "ItemsList").Bounds.Height);   // the list doesn't jump
+            if (ScreenshotDir is { Length: > 0 } dir)
+                w.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"popup-footer-file-row-{theme}.png"),
+                    new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+        });
+    }, CancellationToken.None);
+
+    [Fact]
+    public void File_icon_matches_the_branding_svg()
+    {
+        var root = PrivatePaste.Tests.Web.PlatformIconsTests.RepoRoot();
+        var svg = System.Xml.Linq.XDocument.Load(Path.Combine(root, "branding", "ui-icons", "kind-file.svg"));
+        var d = svg.Descendants().Single(e => e.Name.LocalName == "path").Attribute("d")!.Value;
+        var axaml = File.ReadAllText(Path.Combine(root, "src", "PrivatePaste.Desktop", "Views", "PopupWindow.axaml"));
+        Assert.Contains($"Data=\"{d}\"", axaml);
+    }
+
     [Theory]
     [InlineData("short", "short")]
     [InlineData("\n\n   \n  indented first line  \nsecond", "indented first line")]
@@ -419,7 +559,7 @@ public class DesktopRenderTests
     /// <summary>
     /// The README hero's popup, from the demo history in scripts/readme/demo.json (see scripts/readme/README.md).
     /// Runs only when PP_README_DEMO names that file; saves readme-popup-{theme}.png into PP_SCREENSHOT_DIR at 2x
-    /// (840x960), so the homepage can show it sharp on high-density screens.
+    /// (840x1040), so the homepage can show it sharp on high-density screens.
     /// </summary>
     [Theory]
     [InlineData("dark")]

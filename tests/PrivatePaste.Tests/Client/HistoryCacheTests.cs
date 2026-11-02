@@ -77,6 +77,22 @@ public class HistoryCacheTests : IDisposable
     }
 
     [Fact]
+    public void Search_matches_file_names()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        c.Upsert(Clip(1, "notes", 1));
+        var files = Clip(2, null, 2, kind: ClipKind.File) with
+        {
+            Files = [new ClipFileInfo("report.pdf", 5, "application/pdf"), new ClipFileInfo("Budget 2026.xlsx", 7, "application/octet-stream")],
+        };
+        c.Upsert(files);
+        Assert.Equal(files.Id, Assert.Single(c.Search("REPORT")).Clip.Id);
+        Assert.Equal(files.Id, Assert.Single(c.Search("budget")).Clip.Id);
+        Assert.Equal("notes", Assert.Single(c.Search("note")).Clip.Text);
+        Assert.Empty(c.Search("application/pdf"));   // only names are searched
+    }
+
+    [Fact]
     public void Persists_the_source_device_platform()
     {
         var key = NewKey();
@@ -183,6 +199,18 @@ public class HistoryCacheTests : IDisposable
         var loaded = HistoryCache.Load(FilePath, key).Items;
         Assert.Equal([ClipKind.Text, ClipKind.Unknown], loaded.Select(i => i.Clip.Kind));
         Assert.Equal("c2VhbGVk", loaded[1].Clip.Payload);   // kept, so a newer app could still open it
+    }
+
+    [Fact]
+    public void File_clips_survive_save_and_load_as_file()
+    {
+        var key = NewKey();
+        var c = new HistoryCache(FilePath, key);
+        c.Upsert(Clip(1, null, 1, kind: ClipKind.File) with { Files = [new ClipFileInfo("a.txt", 5, "text/plain")] });
+        c.Save();
+        var clip = Assert.Single(HistoryCache.Load(FilePath, key).Items).Clip;
+        Assert.Equal(ClipKind.File, clip.Kind);
+        Assert.Equal(new ClipFileInfo("a.txt", 5, "text/plain"), Assert.Single(clip.Files!));
     }
 
     [Fact]

@@ -136,6 +136,21 @@ public class PopupActivationTests
     }
 
     [Fact]
+    public async Task Paused_file_clip_is_not_fetched_and_says_files()
+    {
+        _paused = true;
+        var a = Create();
+        var files = new ClipDto(Guid.NewGuid(), 1, ClipKind.File, null, "h", null, null, 100, null, "PC", DateTimeOffset.UtcNow)
+        {
+            Files = [new ClipFileInfo("report.pdf", 100, "application/pdf")],
+            BlobCount = 1,
+        };
+        await RunAsync(a, files);
+        Assert.Empty(_log);
+        Assert.Equal(["Sync is paused. Resume it to paste files."], _toasts);
+    }
+
+    [Fact]
     public async Task Pausing_during_restore_aborts_instead_of_pasting_stale_clipboard()
     {
         var a = Create();
@@ -246,6 +261,31 @@ public class PopupActivationTests
         _time.Advance(PopupActivation.Deadline);
         await Task.Delay(30);
         write.SetResult(true);
+        await task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(["restore", "apply"], _log);
+        Assert.Equal([PopupActivation.CopiedToast], _toasts);
+    }
+
+    [Fact]
+    public async Task A_file_download_past_the_deadline_still_copies_without_pasting()
+    {
+        var a = Create();
+        var files = new ClipDto(Guid.NewGuid(), 1, ClipKind.File, null, "h", null, null, 100, null, "PC", DateTimeOffset.UtcNow)
+        {
+            Files = [new ClipFileInfo("report.pdf", 100, "application/pdf")],
+            BlobCount = 1,
+        };
+        var downloaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _restore = (_, _) => Task.FromResult(files);
+        _apply = async (_, ct) => { await downloaded.Task.WaitAsync(ct); return true; };   // a slow download honours its token
+        var task = a.ActivateAsync(files);
+        await Task.Delay(50);
+        _time.Advance(PopupActivation.Deadline + TimeSpan.FromSeconds(5));
+        await Task.Delay(30);
+        Assert.False(task.IsCompleted);   // not cut off at the deadline
+        Assert.Empty(_toasts);
+
+        downloaded.SetResult();
         await task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(["restore", "apply"], _log);
         Assert.Equal([PopupActivation.CopiedToast], _toasts);

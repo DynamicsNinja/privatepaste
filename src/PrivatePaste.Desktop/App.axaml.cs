@@ -281,7 +281,8 @@ public partial class App : Application
         }
         var host = _host;
         var vm = new PopupViewModel(host.Cache, host.Codec is null ? null : SearchOlder, ActivateFromPopupAsync,
-            TimeProvider.System, PinFromPopupAsync, ListPinnedFromServerAsync, message => _toast?.Notify(message))
+            TimeProvider.System, PinFromPopupAsync, ListPinnedFromServerAsync, message => _toast?.Notify(message),
+            clip => host.SaveFilesAsync(clip))
         {
             Banner = host.VaultMessage,
         };
@@ -326,7 +327,7 @@ public partial class App : Application
     {
         if (_host?.Api is not { } api || _host.Codec is not { } codec) return [];
         return (await api.ListPinnedAsync(null, 50, ct)).Items.Select(codec.Decode)
-            .Where(c => query.Length == 0 || c.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Where(c => PopupViewModel.Matches(c, query))
             .ToList();
     }
 

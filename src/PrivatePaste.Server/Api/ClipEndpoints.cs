@@ -69,7 +69,7 @@ public static partial class ClipEndpoints
                         var n = int.Parse(match.Groups[1].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture);
                         if (blobs.ContainsKey(n))
                             return Duplicate(name);
-                        blobs[n] = await ReadBoundedAsync(section.Body, service.MaxBlobBytes, "Blob");
+                        blobs[n] = await ReadBoundedAsync(section.Body, service.MaxBlobPartBytes, "Blob");
                     }
                 }
 

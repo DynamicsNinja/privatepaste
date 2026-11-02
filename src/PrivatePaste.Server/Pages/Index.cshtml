@@ -47,6 +47,14 @@
             <input type="search" id="search-input" name="q" value="@Model.Q" placeholder="@searchLabel" aria-label="@searchLabel">
             <button type="submit">Search</button>
         </form>
+        @* The icons are copied from the kind-icons template by history.js; one type at a time, All is the default. *@
+        <div class="filters" id="filters" role="group" aria-label="Filter by type">
+            <button type="button" class="chip" data-filter="all" aria-pressed="true">All</button>
+            <button type="button" class="chip" data-filter="text" aria-pressed="false"><span class="chip-icon"></span>Text</button>
+            <button type="button" class="chip" data-filter="link" aria-pressed="false"><span class="chip-icon"></span>Links</button>
+            <button type="button" class="chip" data-filter="image" aria-pressed="false"><span class="chip-icon"></span>Images</button>
+            <button type="button" class="chip" data-filter="file" aria-pressed="false"><span class="chip-icon"></span>Files</button>
+        </div>
         <p class="muted empty" id="history-empty" hidden></p>
         <ul class="clips" id="clips"></ul>
         <div class="list-footer">
@@ -68,9 +76,13 @@
             </div>
         </li>
     </template>
+    <template id="file-line">
+        <li class="file-line"><span class="file-name"></span><span class="file-size muted"></span><button type="button" class="ghost file-download icon-button" aria-label="Download" title="Download">@UiIcons.Download("btn-icon")</button></li>
+    </template>
     <template id="kind-icons">
         <svg data-kind="image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>
         <svg data-kind="link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>
+        <svg data-kind="file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5"/></svg>
         <svg data-kind="text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
     </template>
     <template id="platform-icons">@foreach (var icon in PlatformIcons.All){@PlatformIcons.Svg(icon.Key)}</template>

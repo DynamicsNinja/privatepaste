@@ -46,9 +46,7 @@ class ClipboardWriterTest {
 
     private fun writer() =
         if (windowsHost) {
-            ClipboardWriter(context, ClipImageFiles(dir)) { _, f ->
-                Uri.parse("content://${ClipboardWriter.AUTHORITY}/clipboard/${Uri.encode(f.name)}")
-            }
+            ClipboardWriter(context, ClipImageFiles(dir), ::hostUriFor)
         } else {
             ClipboardWriter(context, ClipImageFiles(dir))
         }
@@ -96,6 +94,25 @@ class ClipboardWriterTest {
     }
 
     @Test
+    fun writeFilesPutsOneItemPerFile() {
+        val clipDir = File(context.cacheDir, "files/clip-9").apply { mkdirs() }
+        val pdf = File(clipDir, "report.pdf").apply { writeBytes(byteArrayOf(1)) }
+        val txt = File(clipDir, "notes (2).txt").apply { writeBytes(byteArrayOf(2, 3)) }
+
+        writer().writeFiles(listOf(pdf, txt))
+
+        val clip = clipboard.primaryClip!!
+        assertEquals("PrivatePaste", clip.description.label)
+        assertEquals(2, clip.itemCount)
+        val uris = (0 until clip.itemCount).map { clip.getItemAt(it).uri }
+        assertEquals(listOf("files", "clip-9", "report.pdf"), uris[0].pathSegments)
+        assertEquals(listOf("files", "clip-9", "notes (2).txt"), uris[1].pathSegments)
+        assertTrue(uris.all { it.authority == ClipboardWriter.AUTHORITY })
+        assertTrue(clip.description.hasMimeType("application/pdf"))
+        assertArrayEquals(byteArrayOf(2, 3), context.contentResolver.openInputStream(uris[1])!!.use { it.readBytes() })
+    }
+
+    @Test
     fun readerReturnsTextBeforeImage() {
         val reader = ClipboardReader(context)
         clipboard.clearPrimaryClip()
@@ -111,14 +128,35 @@ class ClipboardWriterTest {
     }
 }
 
-/** Windows-host stand-in for FileProvider (see [ClipboardWriterTest.windowsHost]): `clipboard/<name>` under cacheDir. */
+/**
+ * The content URI [WindowsHostFileProvider] serves for a file of this app's cache: `files/<clipId>/<name>` for a file
+ * clip's file (ClipFileStore), else `clipboard/<name>`, as file_paths.xml maps them.
+ */
+fun hostUriFor(context: Context, f: File): Uri {
+    val clipDir = f.parentFile
+    val path = if (clipDir?.parentFile?.name == "files" && clipDir.parentFile?.parentFile?.canonicalFile == context.cacheDir.canonicalFile) {
+        "files/${Uri.encode(clipDir.name)}/${Uri.encode(f.name)}"
+    } else {
+        "clipboard/${Uri.encode(f.name)}"
+    }
+    return Uri.parse("content://${ClipboardWriter.AUTHORITY}/$path")
+}
+
+/**
+ * Windows-host stand-in for FileProvider (see [ClipboardWriterTest.windowsHost]): `clipboard/<name>` and
+ * `files/<clipId>/<name>` under cacheDir.
+ */
 class WindowsHostFileProvider : ContentProvider() {
     override fun onCreate() = true
 
     private fun fileFor(uri: Uri): File {
         val segments = uri.pathSegments
-        require(segments.size == 2 && segments[0] == "clipboard") { "Unknown uri $uri" }
-        return File(File(context!!.cacheDir, "clipboard"), File(segments[1]).name)
+        val cache = context!!.cacheDir
+        return when {
+            segments.size == 2 && segments[0] == "clipboard" -> File(File(cache, "clipboard"), File(segments[1]).name)
+            segments.size == 3 && segments[0] == "files" -> File(File(File(cache, "files"), File(segments[1]).name), File(segments[2]).name)
+            else -> throw IllegalArgumentException("Unknown uri $uri")
+        }
     }
 
     override fun getType(uri: Uri): String =

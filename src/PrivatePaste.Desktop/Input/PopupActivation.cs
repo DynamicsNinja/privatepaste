@@ -10,12 +10,13 @@ namespace PrivatePaste.Desktop.Input;
 /// <para>
 /// One deadline, <see cref="Deadline"/> from the pick, covers the restore, the coordinator's gate, the image download and
 /// the write. Past it nothing is pasted (the user has moved on): a write that still completes toasts "Copied", anything
-/// else "Couldn't copy the clip." Nothing is pasted either when the coordinator reports it wrote nothing.
+/// else "Couldn't copy the clip." A file clip's download is the exception: it is never cut off at the deadline, and when it
+/// finishes late the files are copied with "Copied". Nothing is pasted either when the coordinator reports it wrote nothing.
 /// </para>
 /// <para>
 /// Offline (HttpRequestException on restore): the cached clip is used without the restore. Paused: pause means nothing
 /// leaves or enters the machine, so text/links are copied and pasted locally with no restore call and no coordinator
-/// (which ignores clips while paused); images need a download and are refused with a toast.
+/// (which ignores clips while paused); images and files need a download and are refused with a toast.
 /// </para>
 /// </summary>
 public sealed class PopupActivation(
@@ -50,9 +51,9 @@ public sealed class PopupActivation(
 
             if (isPaused())
             {
-                if (clip.Kind == ClipKind.Image || clip.Text is null)
+                if (clip.Kind is ClipKind.Image or ClipKind.File || clip.Text is null)
                 {
-                    toast("Sync is paused. Resume it to paste images.");
+                    toast(clip.Kind == ClipKind.File ? "Sync is paused. Resume it to paste files." : "Sync is paused. Resume it to paste images.");
                     return;
                 }
                 await writeLocalText(clip.Text, ct);
@@ -69,8 +70,11 @@ public sealed class PopupActivation(
                 catch (HttpRequestException) { }   // unreachable: paste the cached copy; the restore is skipped
                 catch (OperationCanceledException) when (timeout.IsCancellationRequested && !picked.IsCancellationRequested) { }
 
+                // Files may need a download that outlasts the deadline: it isn't cut off (the user asked for these files and a
+                // retry would only start over). Past the deadline they are copied, not pasted, like any late write.
+                var applyToken = wanted.Kind == ClipKind.File ? ct : picked.Token;
                 bool written;
-                try { written = await applyRemote(wanted, picked.Token); }
+                try { written = await applyRemote(wanted, applyToken); }
                 catch (OperationCanceledException) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
                     toast(CouldNotCopyToast);   // never reached the clipboard in time

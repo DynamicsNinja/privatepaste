@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -26,10 +27,13 @@ import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ClipPage
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.ui.history.ClipCopier
+import xyz.ficdev.privatepaste.ui.history.ClipFileActions
 import xyz.ficdev.privatepaste.ui.history.ClipRemote
 import xyz.ficdev.privatepaste.ui.history.HistoryTab
 import xyz.ficdev.privatepaste.ui.history.HistoryViewModel
+import android.content.Intent
 import java.io.IOException
 import java.time.Instant
 
@@ -59,6 +63,15 @@ class HistoryViewModelTest {
         }
     }
 
+    private var fileCopyWorks = true
+    private var fileSaveWorks = true
+    private var shareIntent: Intent? = Intent("share")
+    private val files = object : ClipFileActions {
+        override suspend fun copy(clip: ClipDto): Boolean { events += "copyFiles:${clip.id}"; return fileCopyWorks }
+        override suspend fun save(clip: ClipDto): Boolean { events += "saveFiles:${clip.id}"; return fileSaveWorks }
+        override suspend fun share(clip: ClipDto): Intent? { events += "shareFiles:${clip.id}"; return shareIntent }
+    }
+
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
 
@@ -76,6 +89,7 @@ class HistoryViewModelTest {
         cachedImage = { localImages[it] },
         io = dispatcher,
         onUnauthorized = { unauthorizedCalls++ },
+        files = files,
     )
 
     /** Keeps [HistoryViewModel.state] collected, like the screen does. */
@@ -285,6 +299,168 @@ class HistoryViewModelTest {
         assertEquals("no query, no button", false, vm.state.value.canSearchOlder)
     }
 
+    private fun mixed() = listOf(
+        clip("t", 6, "plain note"),
+        clip("l", 5, "https://example.com", ClipKind.LINK),
+        clip("i", 4, null, ClipKind.IMAGE),
+        fileClip("f").copy(seq = 3),
+        clip("u", 2, null, ClipKind.UNKNOWN),
+    )
+
+    @Test
+    fun filterShowsOneKindAndTappingAgainOrAllReturnsToAll() = runTest(dispatcher) {
+        cache.value = mixed()
+        val vm = collecting(vm())
+        advanceUntilIdle()
+        assertEquals(null, vm.state.value.filter)
+        assertEquals(listOf("t", "l", "i", "f", "u"), vm.ids())
+
+        vm.onFilter(ClipKind.LINK)
+        advanceUntilIdle()
+        assertEquals(ClipKind.LINK, vm.state.value.filter)
+        assertEquals(listOf("l"), vm.ids())
+
+        vm.onFilter(ClipKind.FILE)   // one at a time
+        advanceUntilIdle()
+        assertEquals(listOf("f"), vm.ids())
+
+        vm.onFilter(ClipKind.FILE)   // the active chip again: back to All
+        advanceUntilIdle()
+        assertEquals(null, vm.state.value.filter)
+        assertEquals(5, vm.ids().size)
+
+        vm.onFilter(ClipKind.IMAGE)
+        vm.onFilter(null)
+        advanceUntilIdle()
+        assertEquals(5, vm.ids().size)
+    }
+
+    @Test
+    fun unknownKindShowsOnlyUnderAll() = runTest(dispatcher) {
+        cache.value = mixed()
+        val vm = collecting(vm())
+        for (kind in listOf(ClipKind.TEXT, ClipKind.LINK, ClipKind.IMAGE, ClipKind.FILE)) {
+            vm.onFilter(kind)
+            advanceUntilIdle()
+            assertTrue(kind.name, "u" !in vm.ids())
+        }
+        vm.onFilter(null)
+        advanceUntilIdle()
+        assertTrue("u" in vm.ids())
+    }
+
+    @Test
+    fun filterCombinesWithThePinnedTabAndSearch() = runTest(dispatcher) {
+        cache.value = listOf(
+            pinned(clip("t1", 9, "report notes"), 3),
+            clip("t2", 8, "report draft"),
+            pinned(clip("l1", 7, "https://report.example", ClipKind.LINK), 4),
+            clip("l2", 6, "https://other.example", ClipKind.LINK),
+        )
+        val vm = collecting(vm())
+        vm.onFilter(ClipKind.LINK)
+        advanceUntilIdle()
+        assertEquals(listOf("l1", "l2"), vm.ids())
+
+        vm.onTab(HistoryTab.PINNED)
+        advanceUntilIdle()
+        assertEquals(ClipKind.LINK, vm.state.value.filter)   // the filter survives a tab switch
+        assertEquals(listOf("l1"), vm.ids())
+
+        vm.onTab(HistoryTab.HISTORY)
+        vm.onQueryChange("report")
+        advanceUntilIdle()
+        assertEquals("search runs inside the chosen type", listOf("l1"), vm.ids())
+
+        vm.onFilter(ClipKind.TEXT)
+        advanceUntilIdle()
+        assertEquals(listOf("t1", "t2"), vm.ids())
+    }
+
+    @Test
+    fun searchOlderKeepsTheFilter() = runTest(dispatcher) {
+        cache.value = listOf(clip("a", 30, "Hello"))
+        remote.pages["|"] = ClipPage(
+            listOf(clip("x", 5, "old invoice text"), clip("y", 4, "https://invoice.example", ClipKind.LINK)),
+            null,
+        )
+        val vm = collecting(vm())
+        vm.onFilter(ClipKind.LINK)
+        vm.onQueryChange("invoice")
+        advanceUntilIdle()
+        assertTrue(vm.state.value.canSearchOlder)
+
+        vm.searchOlder()
+        advanceUntilIdle()
+        assertEquals(listOf("y"), vm.ids())
+        assertEquals(false, vm.state.value.canSearchOlder)
+
+        vm.onFilter(null)   // the hits are kept: All shows both
+        advanceUntilIdle()
+        assertEquals(listOf("x", "y"), vm.ids())
+    }
+
+    @Test
+    fun aNewViewModelStartsAtAllAndTheFilterSurvivesTheScreenLeavingAndComingBack() = runTest(dispatcher) {
+        cache.value = mixed()
+        val vm = vm()
+        assertEquals(null, vm.state.value.filter)   // a fresh launch
+
+        val first = backgroundScope.launch { vm.state.collect {} }
+        vm.onFilter(ClipKind.IMAGE)
+        advanceUntilIdle()
+        first.cancel()   // rotation or Settings: the screen stops collecting, the view model stays
+        advanceUntilIdle()
+        collecting(vm)
+        advanceUntilIdle()
+        assertEquals(ClipKind.IMAGE, vm.state.value.filter)
+        assertEquals(listOf("i"), vm.ids())
+    }
+
+    @Test
+    fun aTypeFilterWithNoMatchKeepsPagingOlderClipsBeforeSayingNothing() = runTest(dispatcher) {
+        cache.value = listOf(clip("t", 9, "plain"))
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain"), clip("t2", 8, "more")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("t3", 7, "again")), "c2")
+        remote.pages["|c2"] = ClipPage(listOf(fileClip("f").copy(seq = 1)), null)
+        val vm = collecting(vm())
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), events)   // All: nothing is fetched by itself
+
+        val gate = CompletableDeferred<Unit>()
+        remote.gates["|c1"] = gate
+        vm.onFilter(ClipKind.FILE)
+        runCurrent()
+        assertEquals(emptyList<String>(), vm.ids())
+        assertTrue("the empty state waits behind the spinner", vm.state.value.loadingMore)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("clips:|", "clips:|c1", "clips:|c2"), events)
+        assertEquals(listOf("f"), vm.ids())
+    }
+
+    @Test
+    fun aTypeFilterStopsPagingAtTheEndOfTheHistoryAndOnAFailure() = runTest(dispatcher) {
+        cache.value = listOf(clip("t", 9, "plain"))
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("t2", 8, "more")), null)
+        val vm = collecting(vm())
+        vm.onFilter(ClipKind.IMAGE)
+        advanceUntilIdle()
+        assertEquals(listOf("clips:|", "clips:|c1"), events)   // the whole history was read: truly none
+        assertEquals(emptyList<String>(), vm.ids())
+        assertEquals(false, vm.state.value.loadingMore)
+
+        events.clear()
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain")), "c9")
+        remote.failPages += "|c9"
+        val failing = collecting(vm())
+        failing.onFilter(ClipKind.FILE)
+        advanceUntilIdle()
+        assertEquals("one try, no retry loop", listOf("clips:|", "clips:|c9"), events)
+        assertEquals(false, failing.state.value.loadingMore)
+    }
+
     @Test
     fun searchSkipsClipsWithoutText() = runTest(dispatcher) {
         cache.value = listOf(
@@ -296,6 +472,24 @@ class HistoryViewModelTest {
         vm.onQueryChange("pic")
         advanceUntilIdle()
         assertEquals(listOf("t"), vm.ids())
+    }
+
+    @Test
+    fun searchMatchesEveryFileName() = runTest(dispatcher) {
+        val files = clip("f", 3, text = null, kind = ClipKind.FILE).copy(
+            files = listOf(
+                xyz.ficdev.privatepaste.core.model.ClipFileInfo("report.pdf", 1, "application/pdf"),
+                xyz.ficdev.privatepaste.core.model.ClipFileInfo("Holiday.JPG", 2, "image/jpeg"),
+            ),
+        )
+        cache.value = listOf(files, clip("t", 1, "a report"))
+        val vm = collecting(vm())
+        vm.onQueryChange("holiday")
+        advanceUntilIdle()
+        assertEquals(listOf("f"), vm.ids())
+        vm.onQueryChange("report")
+        advanceUntilIdle()
+        assertEquals(listOf("f", "t"), vm.ids())
     }
 
     @Test
@@ -352,6 +546,86 @@ class HistoryViewModelTest {
         vm.copy(image)
         advanceUntilIdle()
         assertEquals(listOf("image:img", "copyImage:img:7", "restore:img"), events)
+    }
+
+    private fun fileClip(id: String) = clip(id, 1, text = null, kind = ClipKind.FILE)
+        .copy(files = listOf(ClipFileInfo("a.pdf", 10, "application/pdf")))
+
+    @Test
+    fun tapOnAFileClipCopiesTheFilesThenRestores() = runTest(dispatcher) {
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.copy(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf("copyFiles:f", "restore:f"), events)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copied)), messages)
+    }
+
+    @Test
+    fun copyingFilesThatCannotBeHadOfflineSaysTheyNeedAConnection() = runTest(dispatcher) {
+        fileCopyWorks = false
+        sync.value = SyncState.OFFLINE
+        val vm = collecting(vm(online = false))
+        val messages = messagesOf(vm)
+        vm.copy(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf("copyFiles:f"), events)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_files_offline)), messages)
+    }
+
+    @Test
+    fun copyingFilesThatFailWhileOnlineSaysCopyFailed() = runTest(dispatcher) {
+        fileCopyWorks = false
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.copy(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copy_failed)), messages)
+        assertEquals(listOf("copyFiles:f"), events)
+    }
+
+    @Test
+    fun saveToastsSavedOrFailed() = runTest(dispatcher) {
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.save(fileClip("f"))
+        advanceUntilIdle()
+        fileSaveWorks = false
+        vm.save(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf<UiText>(UiText.Res(R.string.saved_to_downloads), UiText.Res(R.string.save_failed)), messages)
+    }
+
+    @Test
+    fun savingFilesThatCannotBeHadOfflineSaysTheyNeedAConnection() = runTest(dispatcher) {
+        fileSaveWorks = false
+        sync.value = SyncState.OFFLINE
+        val vm = collecting(vm(online = false))
+        val messages = messagesOf(vm)
+        vm.save(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf("saveFiles:f"), events)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_files_offline)), messages)
+    }
+
+    @Test
+    fun shareEmitsTheIntentAndFailureToasts() = runTest(dispatcher) {
+        val vm = collecting(vm())
+        val shared = mutableListOf<Intent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.shares.collect { shared += it } }
+        val messages = messagesOf(vm)
+        vm.share(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(1, shared.size)
+        assertSame(shareIntent, shared[0])
+        assertEquals(emptyList<UiText>(), messages)
+
+        shareIntent = null
+        sync.value = SyncState.OFFLINE
+        vm.share(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(1, shared.size)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_files_offline)), messages)
     }
 
     @Test

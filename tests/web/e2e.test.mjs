@@ -216,3 +216,66 @@ test('thumb small item with the fixed nonce matches the vector, and opens', asyn
   assert.equal(toHex(await e2e.openSmall(vault, 'thumb', hex(t.sealed))), t.plaintext);
   await assert.rejects(() => e2e.openSmall(vault, 'payload', hex(t.sealed)));
 });
+
+test('contentHashFiles reproduces the fileHash vector', async () => {
+  assert.equal(await e2e.contentHashFiles(vectors.fileHash.files), vectors.fileHash.expected);
+});
+
+test('contentHashFiles matches a hand-built string and depends on order, name and size', async () => {
+  const a = { name: 'ä.txt', size: 3, sha256Hex: sha256(Buffer.from('abc')) };
+  const b = { name: 'b', size: 0, sha256Hex: sha256(Buffer.alloc(0)) };
+  const manual = sha256(Buffer.from(`f:ä.txt\u00003\u0000${a.sha256Hex}\nb\u00000\u0000${b.sha256Hex}\n`, 'utf8'));
+  assert.equal(await e2e.contentHashFiles([a, b]), manual);
+  assert.notEqual(await e2e.contentHashFiles([b, a]), manual);
+  assert.notEqual(await e2e.contentHashFiles([{ ...a, size: 4 }, b]), manual);
+});
+
+test('safeFileName reproduces every vector', () => {
+  for (const { in: input, out } of vectors.safeFileName)
+    assert.equal(e2e.safeFileName(input), out, JSON.stringify(input));
+});
+
+test('formatSize reproduces every fileSize vector', () => {
+  for (const { bytes, text } of vectors.fileSize) assert.equal(e2e.formatSize(bytes), text, String(bytes));
+});
+
+test('fileRowText reproduces every vector', () => {
+  for (const { files, text } of vectors.fileRowText) assert.equal(e2e.fileRowText(files), text);
+});
+
+test('payloadFiles: one safe-named file per blob, or null like the .NET and Kotlin Decode', () => {
+  const payload = { files: [{ name: '../a\nb.pdf', size: 3, mime: 'application/pdf' }, { name: 'c.txt', size: 1 }] };
+  assert.deepEqual(e2e.payloadFiles(payload, 2), [{ name: 'ab.pdf', size: 3 }, { name: 'c.txt', size: 1 }]);
+  assert.equal(e2e.payloadFiles(payload, 1), null);   // fewer blobs than files
+  assert.equal(e2e.payloadFiles(payload, 3), null);   // more blobs than files
+  assert.equal(e2e.payloadFiles(payload, undefined), null);
+  assert.equal(e2e.payloadFiles({ files: [] }, 0), null);
+  assert.equal(e2e.payloadFiles({ text: 'x' }, 1), null);
+});
+
+test('matchesFilter: All shows every kind, a type shows only its own, an unknown kind only under All', () => {
+  for (const kind of ['text', 'link', 'image', 'file', 'hologram']) assert.equal(e2e.matchesFilter(kind, 'all'), true);
+  for (const filter of ['text', 'link', 'image', 'file']) {
+    for (const kind of ['text', 'link', 'image', 'file']) assert.equal(e2e.matchesFilter(kind, filter), kind === filter);
+    assert.equal(e2e.matchesFilter('hologram', filter), false);
+  }
+});
+
+test('nextFilter: tapping a type selects it, tapping it again or All returns to All', () => {
+  assert.equal(e2e.nextFilter('all', 'link'), 'link');
+  assert.equal(e2e.nextFilter('link', 'file'), 'file');
+  assert.equal(e2e.nextFilter('link', 'link'), 'all');
+  assert.equal(e2e.nextFilter('link', 'all'), 'all');
+  assert.equal(e2e.nextFilter('all', 'all'), 'all');
+});
+
+test('filterEmptyText names the type, and says pinned in the Pinned tab', () => {
+  assert.equal(e2e.filterEmptyText('text', false), 'No text yet');
+  assert.equal(e2e.filterEmptyText('link', false), 'No links yet');
+  assert.equal(e2e.filterEmptyText('image', false), 'No images yet');
+  assert.equal(e2e.filterEmptyText('file', false), 'No files yet');
+  assert.equal(e2e.filterEmptyText('text', true), 'No pinned text');
+  assert.equal(e2e.filterEmptyText('link', true), 'No pinned links');
+  assert.equal(e2e.filterEmptyText('image', true), 'No pinned images');
+  assert.equal(e2e.filterEmptyText('file', true), 'No pinned files');
+});

@@ -11,8 +11,11 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -22,6 +25,8 @@ import org.robolectric.shadows.ShadowToast
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = TestPrivatePasteApp::class)
@@ -31,6 +36,7 @@ class CopyActivityTest {
     private val clipboard = app.getSystemService(ClipboardManager::class.java)
     private val nm = app.getSystemService(NotificationManager::class.java)
     private lateinit var server: FakeServer
+    @get:Rule val tmp = TemporaryFolder()
 
     @Before fun setUp() {
         TestPrivatePasteApp.setUpHostProvider()
@@ -78,6 +84,32 @@ class CopyActivityTest {
         assertEquals("Copied", runCopy("i1"))
         val uri = clipboard.primaryClip!!.getItemAt(0).uri
         assertArrayEquals(png, app.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+    }
+
+    @Test
+    fun aFileClipCopyFinishesRightAwayAndCopiesInTheBackground() {
+        val clip = server.fileClip("f1", tmp.root, "report.pdf" to byteArrayOf(5, 6))
+        app.graph.cache.upsert(clip, fromSync = true)
+        Notifications.postClip(app, clip, copy = true, save = true)
+        val download = CountDownLatch(1)
+        val serve = server.other
+        server.other = { r -> if (r.path!!.contains("/blobs/")) download.await(10, TimeUnit.SECONDS); serve(r) }
+        val toasts = ShadowToast.shownToastCount()
+
+        val intent = Intent(app, CopyActivity::class.java).putExtra(CopyActivity.EXTRA_CLIP_ID, "f1")
+        try {
+            val controller = Robolectric.buildActivity(CopyActivity::class.java, intent).setup()
+
+            assertTrue("not on top during the download", controller.get().isFinishing)
+            assertEquals(toasts, ShadowToast.shownToastCount())
+        } finally {
+            download.countDown()
+        }
+        awaitUntil("toast") { ShadowToast.shownToastCount() > toasts }
+        assertEquals("Copied", ShadowToast.getTextOfLatestToast())
+        val uri = clipboard.primaryClip!!.getItemAt(0).uri
+        assertArrayEquals(byteArrayOf(5, 6), app.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+        assertNull(shadowOf(nm).getNotification(Notifications.ID_CLIP))
     }
 
     @Test

@@ -516,6 +516,68 @@ class ClipSenderTest {
         assertEquals(SendResult.SignedOut, f.sender { true }.sendText("typed during sign-out"))
         assertEquals(2, f.queue.size)
     }
+
+    private fun shared(name: String, bytes: ByteArray, mime: String? = null) = SharedFile(name, mime) { ByteArrayInputStream(bytes) }
+
+    @Test
+    fun readFilesCopiesAndHashesWhileReading() = runBlocking {
+        val read = f.sender.readFiles(listOf(shared("a.txt", "hello".toByteArray()), shared("", ByteArray(0), "application/x-thing")))
+        read as FilesRead.Ready
+        assertEquals(listOf("a.txt", "file"), read.files.map { it.name })
+        assertEquals(listOf("text/plain", "application/x-thing"), read.files.map { it.mime })
+        assertEquals("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", read.files[0].sha256Hex)
+        assertEquals(listOf(5L, 0L), read.files.map { it.size })
+        assertTrue(read.files.all { it.file.isFile && it.file.canonicalPath.startsWith(f.outgoing.canonicalPath) })
+
+        f.respondWith { f.echo(it, "f") }
+        assertEquals(SendResult.Sent, f.sender.sendFiles(read))
+        val upload = f.uploaded(f.server.takeRequest())
+        val digests = read.files.map { ContentHash.FileDigest(it.name, it.size, it.sha256Hex) }
+        assertEquals(ClipCodec(f.vaultKey).keyedHash(ContentHash.files(digests)), upload.meta.hash)
+        assertTrue(f.outgoing.walkTopDown().none { it.isFile })
+        assertEquals(ClipKind.FILE, f.cache.items.value.single().kind)
+    }
+
+    @Test
+    fun aHugeShareStopsReadingAtTheLimit() = runBlocking {
+        f.limits = f.limits.copy(fileMb = 1)
+        var served = 0L
+        val endless = object : InputStream() {
+            override fun read(): Int = 0.also { served++ }
+            override fun read(b: ByteArray, off: Int, len: Int): Int = len.also { served += it }
+        }
+        val read = f.sender.readFiles(listOf(SharedFile("big", null) { endless }))
+        assertEquals(SendResult.TooLarge("Files over 1 MB aren't synced."), (read as FilesRead.Failed).result)
+        assertTrue("stopped soon after the limit", served < 2L * 1024 * 1024)
+        assertTrue(f.outgoing.walkTopDown().none { it.isFile })
+    }
+
+    @Test
+    fun atMost100FilesAtOnce() = runBlocking {
+        val read = f.sender.readFiles((1..101).map { shared("f$it", byteArrayOf(1)) })
+        assertEquals(SendResult.Rejected("Too many files. Share at most 100 at once."), (read as FilesRead.Failed).result)
+        assertEquals(0, f.server.requestCount)
+    }
+
+    @Test
+    fun anUnreadableStreamFailsTheWholeShare() = runBlocking {
+        val read = f.sender.readFiles(listOf(shared("a", byteArrayOf(1)), SharedFile("b", null) { throw SecurityException("no grant") }))
+        assertEquals(SendResult.Rejected("Couldn't read the files"), (read as FilesRead.Failed).result)
+        assertTrue(f.outgoing.walkTopDown().none { it.isFile })
+    }
+
+    @Test
+    fun lockedOrSignedOutFilesAreNotSent() = runBlocking {
+        val read = f.sender.readFiles(listOf(shared("a", byteArrayOf(1)))) as FilesRead.Ready
+        f.codec = null
+        assertEquals(SendResult.Rejected("Open PrivatePaste to unlock, then share the files again."), f.sender.sendFiles(read))
+        assertTrue(f.queue.isEmpty)
+        assertTrue(f.outgoing.walkTopDown().none { it.isFile })
+
+        f.limitsError = ApiException.Unauthorized()
+        assertEquals(SendResult.SignedOut, (f.sender.readFiles(listOf(shared("a", byteArrayOf(1)))) as FilesRead.Failed).result)
+        assertEquals(0, f.server.requestCount)
+    }
 }
 
 /** A PNG that only declares its size (IHDR), with no real pixel data. */

@@ -71,9 +71,60 @@ public class ClipboardSelectorTests
     public void Capture_skips_formats_the_selection_would_not_use()
     {
         var (_, textAsked) = Capture(new() { [ClipboardFormat.UnicodeText] = Text("cell"), [ClipboardFormat.Png] = Png() });
-        Assert.Equal([ClipboardFormat.UnicodeText], textAsked);
+        Assert.Equal([ClipboardFormat.HDrop, ClipboardFormat.UnicodeText], textAsked);
         var (_, pngAsked) = Capture(new() { [ClipboardFormat.Png] = Png(), [ClipboardFormat.Dib] = [1] });
-        Assert.Equal([ClipboardFormat.UnicodeText, ClipboardFormat.Png], pngAsked);
+        Assert.Equal([ClipboardFormat.HDrop, ClipboardFormat.UnicodeText, ClipboardFormat.Png], pngAsked);
+    }
+
+    [Fact]
+    public void Files_win_over_the_file_name_text()
+    {
+        // Explorer offers the names as text too; the files are what was copied.
+        string[] paths = [@"C:\Users\Ana\report.pdf", @"C:\Users\Ana\notes.txt"];
+        var r = Select(new()
+        {
+            [ClipboardFormat.HDrop] = DropFiles.Build(paths),
+            [ClipboardFormat.UnicodeText] = Text("report.pdf"),
+        });
+        Assert.Equal(paths, Assert.IsType<ClipboardContent.Files>(r).Paths);
+    }
+
+    [Fact]
+    public void An_image_next_to_a_file_list_stays_an_image()
+    {
+        // Chat apps and screenshot tools put a temp file next to the bitmap; Explorer never adds a bitmap to a file copy.
+        var drop = DropFiles.Build([@"C:\Temp\shot.png"]);
+        var png = Png();
+        Assert.Equal(png, Assert.IsType<ClipboardContent.Image>(Select(new()
+        {
+            [ClipboardFormat.HDrop] = drop, [ClipboardFormat.UnicodeText] = Text("shot.png"), [ClipboardFormat.Png] = png,
+        })).Png);
+        Assert.IsType<ClipboardContent.Image>(Select(new() { [ClipboardFormat.HDrop] = drop, [ClipboardFormat.Dib] = DibConverter.FromPng(png) }));
+        // A bitmap that doesn't convert: the files are still there.
+        Assert.IsType<ClipboardContent.Files>(Select(new() { [ClipboardFormat.HDrop] = drop, [ClipboardFormat.Dib] = [1, 2, 3] }));
+
+        var (captured, asked) = Capture(new() { [ClipboardFormat.HDrop] = drop, [ClipboardFormat.Png] = png, [ClipboardFormat.UnicodeText] = Text("x") });
+        Assert.Equal([ClipboardFormat.HDrop, ClipboardFormat.Png], asked);   // the names as text are never needed
+        Assert.IsType<ClipboardContent.Image>(ClipboardSelector.Select(captured, null));
+    }
+
+    [Fact]
+    public void Capture_takes_only_the_file_list_when_there_is_no_image()
+    {
+        var drop = DropFiles.Build([@"C:\a.txt"]);
+        var (captured, asked) = Capture(new() { [ClipboardFormat.HDrop] = drop, [ClipboardFormat.UnicodeText] = Text("a.txt") });
+        Assert.Equal([ClipboardFormat.HDrop, ClipboardFormat.Png, ClipboardFormat.DibV5, ClipboardFormat.Dib], asked);
+        Assert.Single(captured);
+        Assert.Equal([@"C:\a.txt"], Assert.IsType<ClipboardContent.Files>(ClipboardSelector.Select(captured, null)).Paths);
+    }
+
+    [Fact]
+    public void An_unreadable_file_list_falls_through_to_text()
+    {
+        var r = Select(new() { [ClipboardFormat.HDrop] = [1, 2, 3], [ClipboardFormat.UnicodeText] = Text("cell") });
+        Assert.Equal(new ClipboardContent.Text("cell"), r);
+        var (captured, _) = Capture(new() { [ClipboardFormat.HDrop] = [1, 2, 3], [ClipboardFormat.UnicodeText] = Text("cell") });
+        Assert.Equal(new ClipboardContent.Text("cell"), ClipboardSelector.Select(captured, null));
     }
 
     [Fact]

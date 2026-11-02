@@ -65,4 +65,53 @@ public class ProtocolJsonTests
         var sealedB64 = Convert.ToBase64String(SealedBox.Seal(key, "payload", raw));
         Assert.Equal("a", ClipPayload.Open(key, sealedB64).Text);
     }
+
+    [Fact]
+    public void File_kind_round_trips()
+    {
+        Assert.Contains("\"kind\":\"file\"", JsonSerializer.Serialize(SampleClip(ClipKind.File), ProtocolJson.Options));
+        var json = $$"""{"id":"{{Guid.NewGuid()}}","seq":1,"kind":"file","hash":"h","sizeBytes":2,"sourceDeviceName":"pc","lastCopiedAt":"1970-01-01T00:00:00+00:00"}""";
+        Assert.Equal(ClipKind.File, JsonSerializer.Deserialize<ClipDto>(json, ProtocolJson.Options)!.Kind);
+    }
+
+    [Fact]
+    public void Missing_fileMb_defaults_to_25()
+    {
+        var info = JsonSerializer.Deserialize<ServerInfoDto>(
+            """{"protocol":2,"kinds":["text"],"limits":{"textKb":256,"imageMb":10}}""", ProtocolJson.Options)!;
+        Assert.Equal(25, info.Limits.FileMb);
+        var set = JsonSerializer.Deserialize<ServerLimitsDto>("""{"textKb":1,"imageMb":2,"fileMb":7}""", ProtocolJson.Options)!;
+        Assert.Equal(7, set.FileMb);
+    }
+
+    [Fact]
+    public void Clip_files_field_is_optional()
+    {
+        var json = $$"""{"id":"{{Guid.NewGuid()}}","seq":1,"kind":"file","hash":"h","sizeBytes":2,"sourceDeviceName":"pc","lastCopiedAt":"1970-01-01T00:00:00+00:00"}""";
+        Assert.Null(JsonSerializer.Deserialize<ClipDto>(json, ProtocolJson.Options)!.Files);
+        var withFiles = SampleClip(ClipKind.File) with { Files = [new ClipFileInfo("a.txt", 5, "text/plain")] };
+        var back = JsonSerializer.Deserialize<ClipDto>(JsonSerializer.Serialize(withFiles, ProtocolJson.Options), ProtocolJson.Options)!;
+        Assert.Equal(new ClipFileInfo("a.txt", 5, "text/plain"), Assert.Single(back.Files!));
+    }
+
+    [Fact]
+    public void Payload_files_use_the_wire_field_names()
+    {
+        using var key = VaultKey.Create();
+        var sealedB64 = ClipPayload.Seal(key, new ClipPayload { Files = [new ClipFileInfo("a.txt", 5, "text/plain")] });
+        var json = Encoding.UTF8.GetString(SealedBox.Open(key, "payload", Convert.FromBase64String(sealedB64)));
+        // text, width and height are written as null today and readers ignore them; the files part is the contract here.
+        Assert.Contains("\"files\":[{\"name\":\"a.txt\",\"size\":5,\"mime\":\"text/plain\"}]", json);
+    }
+
+    [Fact]
+    public void Payload_files_round_trip_and_are_omitted_when_null()
+    {
+        using var key = VaultKey.Create();
+        var files = new[] { new ClipFileInfo("a.txt", 5, "text/plain"), new ClipFileInfo("b", 0, "application/octet-stream") };
+        var rt = ClipPayload.Open(key, ClipPayload.Seal(key, new ClipPayload { Files = files }));
+        Assert.Equal(files, rt.Files);
+        Assert.Null(rt.Text);
+        Assert.DoesNotContain("files", JsonSerializer.Serialize(new ClipPayload { Text = "a" }, ProtocolJson.Options));
+    }
 }

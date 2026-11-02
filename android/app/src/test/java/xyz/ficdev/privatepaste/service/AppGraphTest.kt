@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -130,6 +131,7 @@ class AppGraphTest {
         app.graph.imageFiles.store("c1", byteArrayOf(1, 2, 3))
         Notifications.postClip(app, clip)
         assertNotNull(app.graph.imageFiles.find("c1"))
+        val shareCopy = leftoverShareCopy()
 
         checkMayAnswer.countDown()
         awaitUntil("checked") { app.graph.sessions.vaultChecked.value }
@@ -138,5 +140,30 @@ class AppGraphTest {
         assertNull("no plaintext PNG of the wiped history is left", app.graph.imageFiles.find("c1"))
         assertTrue(java.io.File(app.cacheDir, "clipboard").listFiles().orEmpty().isEmpty())
         assertNull("no clip preview either", shadowOf(nm).getNotification(Notifications.ID_CLIP))
+        assertFalse("no plaintext copy of a cancelled share either", shareCopy.exists())
     }
+
+    @Test
+    fun signOutDeletesTheCopiesOfACancelledShare() {
+        app.signInTo(server)
+        val shareCopy = leftoverShareCopy()
+
+        runBlocking { app.uiDeps.signOut() }
+
+        assertFalse(shareCopy.exists())
+        assertTrue(java.io.File(app.cacheDir, "outgoing").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun processStartDeletesTheCopiesOfASendThatWasKilled() {
+        val shareCopy = leftoverShareCopy()   // the process died mid-send; the graph isn't built yet
+
+        assertNotNull(app.graph)   // the next process start builds it
+
+        assertFalse("no plaintext copy outlives its send", shareCopy.exists())
+    }
+
+    /** What ClipSender.readFiles leaves under cacheDir/outgoing when the share is cancelled before it is sent. */
+    private fun leftoverShareCopy() =
+        java.io.File(app.cacheDir, "outgoing/3f2a/0").apply { parentFile!!.mkdirs(); writeText("a plaintext file") }
 }

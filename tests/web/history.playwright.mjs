@@ -6,10 +6,10 @@
 //   node tests/web/history.playwright.mjs [--url http://localhost:5303] [--password dev]
 //
 // Uses Playwright from scripts/readme (run `npm ci` there once). With PP_SCREENSHOT_DIR set, it saves the setup,
-// unlock, history, settings and dialog states in dark and light at desktop and phone widths. It signs in once.
+// unlock, history, file clip, type filter, settings and dialog states in dark and light at desktop and phone widths. It signs in once.
 
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from '../../scripts/readme/node_modules/playwright/index.mjs';
 
@@ -102,6 +102,17 @@ async function upload(clips) {
         }));
         body.append('thumb', new Blob([await e2e.sealSmall(vault, 'thumb', png)]), 'thumb');
         body.append('blob0', new Blob([await e2e.encryptBlob(vault, png)]), 'blob0');
+      } else if (clip.kind === 'file') {
+        const sha = async b => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map(x => x.toString(16).padStart(2, '0')).join('');
+        const contents = clip.files.map(f => new TextEncoder().encode(f.content));
+        const entries = await Promise.all(clip.files.map(async (f, i) => ({ name: f.name, size: contents[i].length, sha256Hex: await sha(contents[i]) })));
+        body.append('meta', JSON.stringify({
+          kind: 'file', keyId: vault.keyId,
+          hash: await e2e.keyedHash(vault, await e2e.contentHashFiles(entries)),
+          payload: await e2e.sealPayload(vault, { files: clip.files.map((f, i) => ({ name: f.name, size: contents[i].length, mime: 'text/plain' })) }),
+          sizeBytes: contents.reduce((n, c) => n + c.length, 0), backfill: false,
+        }));
+        for (const [i, c] of contents.entries()) body.append(`blob${i}`, new Blob([await e2e.encryptBlob(vault, c)]), `blob${i}`);
       } else {
         body.append('meta', JSON.stringify({
           kind: clip.kind, keyId: vault.keyId,
@@ -290,7 +301,7 @@ try {
   await page.route('**/api/clips?*', async route => {
     const response = await route.fetch();
     const body = await response.json();
-    body.items.unshift({ ...body.items[0], id: '00000000-0000-4000-8000-000000000001', kind: 'file', payload: null });
+    body.items.unshift({ ...body.items[0], id: '00000000-0000-4000-8000-000000000001', kind: 'hologram', payload: null });
     await route.fulfill({ response, json: body });
   });
   await page.reload();
@@ -300,6 +311,133 @@ try {
   assert.equal(await unknown.locator('button.copy').count(), 0);
   assert.equal(await unknown.locator('button.pin-toggle').count(), 1);
   await page.unroute('**/api/clips?*');
+
+  step('a file clip: row text, no Copy, search by file name, one download per file under the safe name');
+  const [fileId] = await upload([{ kind: 'file', files: [
+    { name: '..\\..\\report.txt', content: 'first file' }, { name: 'notes.txt', content: 'second file' }] }]);
+  await page.reload();
+  const fileRow = row(fileId);
+  await fileRow.waitFor();
+  assert.match(await fileRow.locator('.body .text').first().innerText(), /^report\.txt \+1 more . 21 B$/);
+  assert.equal(await fileRow.locator('button.copy').count(), 0);
+  assert.equal(await fileRow.locator('.kind svg').count(), 1);
+  await page.fill('#search-input', 'NOTES');
+  assert.equal(await fileRow.isVisible(), true);
+  await page.fill('#search-input', '');
+  for (const [i, name] of ['report.txt', 'notes.txt'].entries()) {
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      fileRow.locator(`button[aria-label="Download ${name}"]`).click(),
+    ]);
+    assert.equal(download.suggestedFilename(), name);
+    const text = readFileSync(await download.path(), 'utf8');
+    assert.equal(text, i === 0 ? 'first file' : 'second file');
+  }
+  // Download is not destructive: its hover is the accent, never the danger red of the other ghost buttons.
+  const notesButton = fileRow.locator('button[aria-label="Download notes.txt"]');
+  await notesButton.hover();
+  await page.waitForTimeout(300);   // buttons fade their colours over .15s
+  const [hoverColor, accent, danger] = await notesButton.evaluate(b => {
+    const probe = document.createElement('span');
+    document.body.append(probe);
+    const colorOf = v => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
+    const result = [getComputedStyle(b).color, colorOf('--accent'), colorOf('--danger')];
+    probe.remove();
+    return result;
+  });
+  assert.equal(hoverColor, accent);
+  assert.notEqual(hoverColor, danger);
+  await page.mouse.move(0, 0);
+
+  step('a failed file download leaves the row usable and can be tried again');
+  await page.route('**/blobs/*', route => route.fulfill({ status: 503, body: '' }));
+  await notesButton.click();
+  await until(() => !document.getElementById('history-error').hidden);
+  assert.equal(await text('#history-error'), "Couldn't download the file. Try again.");
+  assert.equal(await fileRow.locator('.file-download').count(), 2);
+  await page.unroute('**/blobs/*');
+  const [retried] = await Promise.all([page.waitForEvent('download'), notesButton.click()]);
+  assert.equal(readFileSync(await retried.path(), 'utf8'), 'second file');
+  await until(() => document.getElementById('history-error').hidden);
+  await shoot('history-file');
+
+  step('a file clip that does not describe one file per blob is unreadable');
+  await page.route('**/api/clips?*', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    for (const item of body.items) if (item.id === fileId) item.blobCount = 3;
+    await route.fulfill({ response, json: body });
+  });
+  await page.reload();
+  await fileRow.waitFor();
+  assert.equal(await fileRow.locator('.body .text').innerText(), "This clip can't be decrypted.");
+  assert.equal(await fileRow.locator('.file-download').count(), 0);
+  await page.unroute('**/api/clips?*');
+  await page.reload();
+  await fileRow.locator('.file-download').first().waitFor();
+
+  step('a file blob that does not open marks the row unreadable');
+  await page.route('**/blobs/*', route => route.fulfill({ status: 200, body: Buffer.alloc(64, 2) }));
+  await notesButton.click();
+  await until(id => document.querySelector(`.clip[data-id="${id}"] .files`) === null, fileId);
+  assert.equal(await fileRow.locator('.body .text').innerText(), "This clip can't be decrypted.");
+  await page.unroute('**/blobs/*');
+  await page.reload();
+  await fileRow.locator('.file-download').first().waitFor();
+
+  step('type chips: one at a time, inside search and the tab, search older keeps the type, a reload starts at All');
+  const chip = kind => page.locator(`#filters .chip[data-filter="${kind}"]`);
+  const pressed = async () => page.locator('#filters .chip[aria-pressed="true"]').evaluateAll(els => els.map(e => e.dataset.filter));
+  assert.deepEqual(await page.locator('#filters .chip').evaluateAll(els => els.map(e => e.textContent.trim())),
+    ['All', 'Text', 'Links', 'Images', 'Files']);
+  assert.equal(await page.locator('#filters .chip svg').count(), 4);
+  assert.deepEqual(await pressed(), ['all']);
+  await chip('file').click();
+  assert.deepEqual(await pressed(), ['file']);
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  assert.equal(await fileRow.isVisible(), true);
+  await page.fill('#search-input', 'notes');
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  await page.fill('#search-input', 'filler');
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  assert.equal(await text('#history-empty'), 'No clips match that search.');
+  // The Files filter paged to the end of the history; reload so "Search older clips" has something left to fetch.
+  await page.reload();
+  await fileRow.waitFor();
+  await page.fill('#search-input', 'needle');
+  await chip('text').click();
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  await page.waitForSelector('#search-older:not([hidden])');
+  await page.click('#search-older');
+  await page.waitForSelector('#search-older', { state: 'hidden' });
+  await row(needleId).waitFor();
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  await chip('link').click();
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  await page.fill('#search-input', '');
+  await chip('link').click();
+  assert.deepEqual(await pressed(), ['all']);
+  for (const kind of ['text', 'link', 'image', 'file']) {
+    await chip(kind).click();
+    const kinds = await page.locator('.clip:visible').evaluateAll(els => [...new Set(els.map(e => e.dataset.kind))]);
+    assert.deepEqual(kinds, [kind]);
+  }
+  await chip('all').click();
+  assert.deepEqual(await pressed(), ['all']);
+  assert.ok(await page.locator('.clip:visible').count() > 50);
+  await chip('link').focus();
+  await page.keyboard.press('Enter');
+  assert.deepEqual(await pressed(), ['link']);
+  await shoot('history-filter');
+  await page.click('.tabs a:has-text("Pinned")');
+  await page.waitForSelector('#clips-view:not([hidden])');
+  assert.deepEqual(await pressed(), ['all']);
+  await chip('file').click();
+  await page.waitForSelector('#history-empty:not([hidden])');
+  assert.equal(await text('#history-empty'), 'No pinned files');
+  await page.goto(`${url}/`);
+  await row(fileId).waitFor();
+  assert.deepEqual(await pressed(), ['all']);
 
   step('a loaded clip under another key means encryption was reset in another tab: the key goes');
   await page.route('**/api/clips?*', async route => {
@@ -393,6 +531,19 @@ try {
   await page.fill('#unlock-passphrase', passphrase);
   await page.click('#unlock-form button');
   await until(id => document.querySelector(`.clip[data-id="${id}"] img.thumb`)?.naturalWidth > 0, imageId);
+
+  step('a type whose matches sit beyond the first page loads older pages by itself, never a blank list with Load more');
+  const newer = await upload(Array.from({ length: 50 }, (_, i) => ({ kind: 'text', text: `newer clip ${i}` })));
+  await page.reload();
+  await row(newer[49]).waitFor({ timeout: 30000 });
+  assert.equal(await page.locator('.clip[data-kind="image"]').count(), 0);
+  await page.locator('#filters .chip[data-filter="image"]').click();
+  await until(() => document.querySelectorAll('.clip[data-kind="image"]:not([hidden])').length === 2);
+  assert.equal(await page.locator('.clip:visible').count(), 2);
+  assert.equal(await visible('#history-empty'), false);
+  assert.equal(await visible('#load-more'), false);
+  await shoot('history-filter-older');
+  await page.locator('#filters .chip[data-filter="all"]').click();
 
   // ---- Settings: the encryption panels ----
   const unlockWith = async phrase => {
@@ -539,6 +690,10 @@ try {
   assert.deepEqual(pageErrors, []);
 
   console.log('history.playwright.mjs: all checks passed');
+} catch (error) {
+  // Closing the browser below would otherwise bury this under a TargetClosedError.
+  console.error(error);
+  process.exitCode = 1;
 } finally {
   await browser.close();
 }

@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
 import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
+import xyz.ficdev.privatepaste.files.DownloadsSaver
+import xyz.ficdev.privatepaste.files.FileSaver
 import xyz.ficdev.privatepaste.send.ClipSender
 import xyz.ficdev.privatepaste.send.SenderProvider
 import xyz.ficdev.privatepaste.service.Notifications
@@ -47,6 +49,9 @@ open class PrivatePasteApp : Application(), UiDepsProvider, SenderProvider {
 
     /** Test seam: androidx FileProvider cannot map paths on a Windows host. */
     internal open fun clipboardWriter(files: ClipImageFiles): ClipboardWriter = ClipboardWriter(this, files)
+
+    /** Test seam: Robolectric has no MediaStore. */
+    internal open fun downloadsSaver(): FileSaver = DownloadsSaver(this)
 
     override fun onCreate() {
         super.onCreate()

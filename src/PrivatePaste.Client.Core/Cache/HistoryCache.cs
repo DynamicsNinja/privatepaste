@@ -133,12 +133,15 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
             if (_lastAppliedAt is null || clip.LastCopiedAt > _lastAppliedAt) _lastAppliedAt = clip.LastCopiedAt;
     }
 
+    /// <summary>Clips whose text, or any of whose file names, contains <paramref name="query"/> (case-insensitive); all for "".</summary>
     public IReadOnlyList<CachedClip> Search(string query)
     {
         lock (_gate)
         {
             if (string.IsNullOrEmpty(query)) return _items.ToArray();
-            return _items.Where(i => i.Clip.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase)).ToArray();
+            return _items.Where(i => i.Clip.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase)
+                                     || i.Clip.Files is { } files && files.Any(f => f.Name.Contains(query, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
         }
     }
 
@@ -278,6 +281,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
                     "text" => ClipKind.Text,
                     "link" => ClipKind.Link,
                     "image" => ClipKind.Image,
+                    "file" => ClipKind.File,
                     _ => ClipKind.Unknown,
                 }
                 : ClipKind.Unknown;
@@ -288,6 +292,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
                 ClipKind.Text => "text",
                 ClipKind.Link => "link",
                 ClipKind.Image => "image",
+                ClipKind.File => "file",
                 _ => "unknown",
             });
     }

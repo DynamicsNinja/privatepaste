@@ -15,6 +15,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.storage.DeliveryMode
 import xyz.ficdev.privatepaste.sync.SyncState
@@ -119,6 +120,12 @@ class ScreenshotTest {
     @Test fun searchOlderDark() = shootOne("history-search-older", dark = true) { HistorySample(searchOlder) }
     @Test fun searchOlderLight() = shootOne("history-search-older", dark = false) { HistorySample(searchOlder) }
 
+    @Test fun historyFilesDark() = shootOne("history-files", dark = true) { HistorySample(fileHistory) }
+    @Test fun historyFilesLight() = shootOne("history-files", dark = false) { HistorySample(fileHistory) }
+
+    @Test fun historyFilterDark() = shootOne("history-filter", dark = true) { HistorySample(filesFilter) }
+    @Test fun historyFilterLight() = shootOne("history-filter", dark = false) { HistorySample(filesFilter) }
+
     private fun shootOne(name: String, dark: Boolean, tag: String? = null, content: @Composable () -> Unit) {
         assumeTrue("PP_SCREENSHOT_DIR not set", dir != null)
         compose.setContent { PrivatePasteTheme(darkTheme = dark) { content() } }
@@ -186,6 +193,22 @@ class ScreenshotTest {
             clip("u", ClipKind.UNKNOWN, null, 3, "Workstation", "windows"),
             history.items[1],
         ),
+    )
+
+    private val fileHistory = history.copy(
+        items = listOf(
+            clip("f1", ClipKind.FILE, null, 1, "Workstation", "windows")
+                .copy(files = listOf(ClipFileInfo("report.pdf", 3_565_158, "application/pdf"), ClipFileInfo("a.png", 100, "image/png"), ClipFileInfo("b.csv", 9, "text/csv"))),
+            clip("f2", ClipKind.FILE, null, 4, "Pixel 9", "android")
+                .copy(files = listOf(ClipFileInfo("notes.txt", 12_288, "text/plain"))),
+            history.items[0],
+            history.items[1],
+        ),
+    )
+
+    private val filesFilter = fileHistory.copy(
+        filter = ClipKind.FILE,
+        items = fileHistory.items.filter { it.kind == ClipKind.FILE },
     )
 
     private val searchOlder = HistoryState(query = "invoice", canSearchOlder = true, syncState = SyncState.CONNECTED)

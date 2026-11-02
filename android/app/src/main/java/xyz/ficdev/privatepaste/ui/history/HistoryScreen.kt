@@ -1,9 +1,12 @@
 package xyz.ficdev.privatepaste.ui.history
 
+import android.content.ActivityNotFoundException
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.DropdownMenu
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -63,6 +67,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import xyz.ficdev.privatepaste.R
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.BrandMark
 import xyz.ficdev.privatepaste.ui.BrandMarkSize
@@ -71,6 +76,9 @@ import xyz.ficdev.privatepaste.ui.theme.Live
 
 /** The history screen's top bar (brand mark, connection chip, settings button); for tests and screenshots. */
 const val HISTORY_TOP_BAR_TAG = "history_top_bar"
+
+/** Each visible filter chip (inside its hit box); for tests. */
+const val FILTER_CHIP_TAG = "history_filter_chip"
 
 @Composable
 fun HistoryScreen(
@@ -83,6 +91,15 @@ fun HistoryScreen(
     val context = LocalContext.current
     LaunchedEffect(vm) {
         vm.messages.collect { Toast.makeText(context, it.resolve(context), Toast.LENGTH_SHORT).show() }
+    }
+    LaunchedEffect(vm) {
+        vm.shares.collect {
+            try {
+                context.startActivity(it)
+            } catch (_: ActivityNotFoundException) {
+                // No app to share with: the chooser itself normally says so.
+            }
+        }
     }
     // Re-renders the relative times once a minute.
     val minuteTick by produceState(0) {
@@ -98,7 +115,10 @@ fun HistoryScreen(
         onCopy = vm::copy,
         onDelete = vm::delete,
         onTab = vm::onTab,
+        onFilter = vm::onFilter,
         onTogglePin = vm::togglePin,
+        onSave = vm::save,
+        onShare = vm::share,
         onNearEnd = vm::onNearEnd,
         onOpenSettings = onOpenSettings,
         thumbnails = thumbnails,
@@ -119,7 +139,10 @@ fun HistoryContent(
     thumbnails: ThumbnailLoader? = null,
     minuteTick: Int = 0,
     onTab: (HistoryTab) -> Unit = {},
+    onFilter: (ClipKind?) -> Unit = {},
     onTogglePin: (ClipDto) -> Unit = {},
+    onSave: (ClipDto) -> Unit = {},
+    onShare: (ClipDto) -> Unit = {},
     onSearchOlder: () -> Unit = {},
 ) {
     var pendingDelete by remember { mutableStateOf<ClipDto?>(null) }
@@ -167,6 +190,8 @@ fun HistoryContent(
 
             TabRow(state.tab, onTab, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
 
+            FilterRow(state.filter, onFilter, modifier = Modifier.padding(bottom = 4.dp))
+
             if (state.items.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -185,6 +210,7 @@ fun HistoryContent(
                                 text = stringResource(
                                     when {
                                         state.query.isNotBlank() -> R.string.history_no_matches
+                                        state.filter != null -> emptyFilterText(state.filter, state.tab == HistoryTab.PINNED)
                                         state.tab == HistoryTab.PINNED -> R.string.history_pinned_empty
                                         else -> R.string.history_empty
                                     },
@@ -240,6 +266,22 @@ fun HistoryContent(
                                         onTogglePin(clip)
                                     },
                                 )
+                                if (clip.kind == ClipKind.FILE) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.history_save_action)) },
+                                        onClick = {
+                                            menuFor = null
+                                            onSave(clip)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.history_share_action)) },
+                                        onClick = {
+                                            menuFor = null
+                                            onShare(clip)
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.history_delete), color = MaterialTheme.colorScheme.error) },
                                     onClick = {
@@ -322,6 +364,65 @@ private fun TabChip(label: Int, selected: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelLarge,
             color = if (selected) colors.primary else colors.onSurfaceVariant,
         )
+    }
+}
+
+private fun emptyFilterText(kind: ClipKind, pinned: Boolean): Int = when (kind) {
+    ClipKind.TEXT -> if (pinned) R.string.history_pinned_empty_text else R.string.history_empty_text
+    ClipKind.LINK -> if (pinned) R.string.history_pinned_empty_links else R.string.history_empty_links
+    ClipKind.IMAGE -> if (pinned) R.string.history_pinned_empty_images else R.string.history_empty_images
+    ClipKind.FILE -> if (pinned) R.string.history_pinned_empty_files else R.string.history_empty_files
+    ClipKind.UNKNOWN -> R.string.history_no_matches   // there is no chip for it
+}
+
+/** All / Text / Links / Images / Files under the tabs; scrolls sideways rather than squeezing on a narrow phone. */
+@Composable
+private fun FilterRow(selected: ClipKind?, onSelect: (ClipKind?) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        // The gutter pads the viewport, not the scrolled content: the row lines up with the search field and list.
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .horizontalScroll(rememberScrollState())
+            .selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        FilterKindChip(R.string.history_filter_all, null, selected == null) { onSelect(null) }
+        FilterKindChip(R.string.history_filter_text, R.drawable.ic_kind_text, selected == ClipKind.TEXT) { onSelect(ClipKind.TEXT) }
+        FilterKindChip(R.string.history_filter_links, R.drawable.ic_kind_link, selected == ClipKind.LINK) { onSelect(ClipKind.LINK) }
+        FilterKindChip(R.string.history_filter_images, R.drawable.ic_kind_image, selected == ClipKind.IMAGE) { onSelect(ClipKind.IMAGE) }
+        FilterKindChip(R.string.history_filter_files, R.drawable.ic_kind_file, selected == ClipKind.FILE) { onSelect(ClipKind.FILE) }
+    }
+}
+
+@Composable
+private fun FilterKindChip(label: Int, icon: Int?, selected: Boolean, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(8.dp)
+    val tint = if (selected) colors.primary else colors.onSurfaceVariant
+    // Tighter than a stock FilterChip (which pads 8 dp around a 8 dp icon gap) so all five fit a 411 dp phone.
+    // The outer box is the hit area, 48 dp tall; the chip is at least 48 dp wide, so the box is too.
+    Box(
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier
+                .testTag(FILTER_CHIP_TAG)
+                .heightIn(min = 36.dp)
+                .widthIn(min = 48.dp)   // the hit box and the visible chip coincide, so the row starts at the gutter
+                .clip(shape)
+                .background(if (selected) colors.primary.copy(alpha = 0.24f) else colors.surfaceVariant)
+                .border(1.dp, if (selected) colors.primary else colors.outline, shape)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+        ) {
+            if (icon != null) Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(14.dp), tint = tint)
+            Text(stringResource(label), style = MaterialTheme.typography.labelMedium, color = tint)
+        }
     }
 }
 

@@ -53,6 +53,15 @@ public class ServerOptionsTests
         Assert.Equal("/data", o.DataDir);
         Assert.Equal(20L * 1024 * 1024, o.MaxImageBytes);
         Assert.Equal(1024L * 1024, o.MaxTextBytes);
+        Assert.Equal(25L * 1024 * 1024, o.MaxFileBytes);
+    }
+
+    [Fact]
+    public void File_limit_override_applies()
+    {
+        var o = ServerOptions.FromConfiguration(Config(
+            ("PP_DB_KEY", GoodKey), ("PP_PASSWORD", "p"), ("PP_MAX_FILE_MB", "7")));
+        Assert.Equal(7L * 1024 * 1024, o.MaxFileBytes);
     }
 
     [Fact]
@@ -68,6 +77,8 @@ public class ServerOptionsTests
     [InlineData("PP_MAX_IMAGE_MB", "abc")]
     [InlineData("PP_MAX_IMAGE_MB", "0")]
     [InlineData("PP_MAX_TEXT_KB", "-1")]
+    [InlineData("PP_MAX_FILE_MB", "abc")]
+    [InlineData("PP_MAX_FILE_MB", "0")]
     public void Invalid_size_throws(string key, string value)
     {
         var msg = Assert.Throws<InvalidOperationException>(() => ServerOptions.FromConfiguration(

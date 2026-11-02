@@ -483,6 +483,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
         ClipKind.Text => "text",
         ClipKind.Link => "link",
         ClipKind.Image => "image",
+        ClipKind.File => "file",
         _ => throw new ArgumentOutOfRangeException(nameof(k)),
     };
 
@@ -491,6 +492,7 @@ public sealed class ClipRepository(PrivatePasteDb db)
         "text" => ClipKind.Text,
         "link" => ClipKind.Link,
         "image" => ClipKind.Image,
+        "file" => ClipKind.File,
         _ => throw new InvalidOperationException($"Unknown clip kind '{s}'"),
     };
 

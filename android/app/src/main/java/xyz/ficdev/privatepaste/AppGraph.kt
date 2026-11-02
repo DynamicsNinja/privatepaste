@@ -1,5 +1,6 @@
 package xyz.ficdev.privatepaste
 
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -37,10 +39,14 @@ import okhttp3.OkHttpClient
 import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
+import xyz.ficdev.privatepaste.core.FileNames
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
+import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.HandoverCreated
+import xyz.ficdev.privatepaste.core.model.ServerInfo
 import xyz.ficdev.privatepaste.core.model.ServerLimits
+import xyz.ficdev.privatepaste.files.ClipFileStore
 import xyz.ficdev.privatepaste.send.ClipSender
 import xyz.ficdev.privatepaste.service.BatteryOptimization
 import xyz.ficdev.privatepaste.service.Notifications
@@ -60,6 +66,7 @@ import xyz.ficdev.privatepaste.sync.Backoff
 import xyz.ficdev.privatepaste.sync.LocalCaptureClock
 import xyz.ficdev.privatepaste.sync.OkHttpLinkFactory
 import xyz.ficdev.privatepaste.sync.PrefsSignInHints
+import xyz.ficdev.privatepaste.sync.ServerInfoCache
 import xyz.ficdev.privatepaste.sync.SessionManager
 import xyz.ficdev.privatepaste.sync.SignInResult
 import xyz.ficdev.privatepaste.sync.SyncEngine
@@ -67,6 +74,7 @@ import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.sync.VaultState
 import xyz.ficdev.privatepaste.ui.UiDeps
 import xyz.ficdev.privatepaste.ui.UiText
+import xyz.ficdev.privatepaste.ui.history.ClipFileActions
 import java.io.File
 import java.io.IOException
 import java.security.GeneralSecurityException
@@ -90,6 +98,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
 
     val settings = SettingsStore(app)
     val imageFiles = ClipImageFiles(File(app.cacheDir, "clipboard"))   // served by the FileProvider (file_paths.xml)
+    val clipFiles = ClipFileStore(File(app.cacheDir, "files"))          // served by the FileProvider too
+    private val outgoing = File(app.cacheDir, "outgoing")               // shared files copied for sending (ClipSender)
+    private val saver = app.downloadsSaver()
     val clipboard = app.clipboardWriter(imageFiles)
     val cache = HistoryCache(CryptoFile(File(dir, "history.bin"), keys, KeyAliases.CACHE))
     val thumbs = ThumbnailStore(File(dir, "thumbnails"), keys)
@@ -106,10 +117,19 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         onLocalDataCleared = ::clearPlaintextCopies,
     )
 
-    /** Every wipe of local data takes these too: plaintext PNG copies of clips, and the clip preview notification. */
+    /**
+     * Every wipe of local data takes these too: plaintext PNG copies of clips, the opened files of file clips, the
+     * copies of shared files a cancelled share left in [outgoing], and the clip preview notification.
+     */
     private fun clearPlaintextCopies() {
-        imageFiles.clear()
+        deletePlaintextFiles()
         Notifications.cancelClip(app)
+    }
+
+    private fun deletePlaintextFiles() {
+        imageFiles.clear()
+        clipFiles.clear()
+        outgoing.deleteRecursively()
     }
 
     private val lifecycle = Mutex()
@@ -145,7 +165,20 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     fun connectionStateNow(): SyncState = _current.value?.displayStateNow() ?: SyncState.SIGNED_OUT
 
     init {
+        // Plaintext copies of shared files live only while their send runs: a process killed mid-send left them here,
+        // and nothing is sending yet at process start.
+        outgoing.deleteRecursively()
         sessions.session.value?.let { _current.value = SessionGraph(it) }   // process start while signed in
+        // A file clip's opened files live as long as the clip is in the history, or while in use (ClipFileStore.markInUse).
+        appScope.launch(Dispatchers.IO) {
+            cache.items.map { items -> items.mapTo(HashSet()) { it.id } }.distinctUntilChanged().collect { ids ->
+                try {
+                    clipFiles.prune(ids)
+                } catch (e: SecurityException) {
+                    Log.w(TAG, "Cannot prune the clip files (${e.javaClass.simpleName})")
+                }
+            }
+        }
     }
 
     private fun api(baseUrl: HttpUrl, token: String?) = PrivatePasteApi(baseUrl, token, client)
@@ -159,14 +192,18 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         private val capture = LocalCaptureClock()
         val sender = ClipSender(
             api, ::codec, ::limits, queue, cache, capture, app::notifyUser, clock,
-            onKeyReset = ::keyWasReset, isEnding = { ending },
+            onKeyReset = ::keyWasReset, isEnding = { ending }, kinds = ::kinds, outgoing = outgoing,
         )
 
-        @Volatile private var serverLimits: ServerLimits? = null
+        /**
+         * What the server takes, asked again each time the sync link connects (see the init block below). A server
+         * without `/api/server-info` gets the defaults.
+         */
+        internal val serverInfo = ServerInfoCache { api.serverInfo() ?: LEGACY_INFO }
 
-        /** The server's limits, asked once per session. A server without `/api/server-info` gets the defaults. */
-        private suspend fun limits(): ServerLimits =
-            serverLimits ?: (api.serverInfo()?.limits ?: DEFAULT_LIMITS).also { serverLimits = it }
+        private suspend fun limits(): ServerLimits = serverInfo.get().limits
+
+        private suspend fun kinds(): List<String> = serverInfo.get().kinds
 
         /** The full PNG of an image clip, fetched and opened. */
         suspend fun image(id: String): ByteArray {
@@ -201,6 +238,11 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             backoff = Backoff(),
             scope = scope,
         )
+
+        init {
+            // Each (re)connect may reach an upgraded server: its kinds and limits are asked again on next use.
+            scope.launch { engine.state.collect { if (it == SyncState.CONNECTED) serverInfo.invalidate() } }
+        }
 
         /**
          * Set once sign-out or revoke begins: the engine must not be started again, and a send still in flight must
@@ -360,16 +402,22 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     private suspend fun end(g: SessionGraph) {
         g.markEnding()
         g.engine.stop()
-        withContext(Dispatchers.IO) { imageFiles.clear() }   // plaintext copies of clips: gone with the session
+        withContext(Dispatchers.IO) { deletePlaintextFiles() }   // plaintext copies of clips: gone with the session
         Notifications.cancelClip(app)   // a clip preview (maybe a password) is gone with the session too
         if (_current.value === g) _current.value = null
         g.close()
     }
 
-    /** The Copy action: puts a cached clip on the clipboard. False when unknown or the write failed. */
-    suspend fun copyClip(id: String): Boolean {
+    /** The Copy action of a notification: puts a cached clip on the clipboard. False when unknown or the write failed. */
+    suspend fun copyClip(id: String): Boolean = copyClip(cache.items.value.firstOrNull { it.id == id } ?: return false)
+
+    /**
+     * Puts a decoded clip on the clipboard: one from the history screen may not be in the cache (an older page, the
+     * Pinned tab, a search of older clips). False when the write failed.
+     */
+    suspend fun copyClip(clip: ClipDto): Boolean {
         val g = _current.value
-        val clip = cache.items.value.firstOrNull { it.id == id } ?: return false
+        val id = clip.id
         return try {
             when (clip.kind) {
                 ClipKind.TEXT, ClipKind.LINK -> clipboard.writeText(clip.text ?: return false)
@@ -378,6 +426,10 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                         ?: g?.image(id)
                         ?: return false
                     withContext(Dispatchers.IO) { clipboard.writeImage(id, png) }
+                }
+                ClipKind.FILE -> {
+                    val files = openedFiles(clip) ?: return false
+                    withContext(Dispatchers.IO) { clipboard.writeFiles(files) }
                 }
                 ClipKind.UNKNOWN -> return false  // a kind from a newer client: nothing this build can copy
             }
@@ -396,6 +448,63 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         } catch (e: GeneralSecurityException) {
             Log.w(TAG, "Cannot open the image to copy (${e.javaClass.simpleName})")
             false
+        }
+    }
+
+    /** The Save action of a notification: a cached file clip's files into Downloads. False on any failure. */
+    suspend fun saveClipFiles(id: String): Boolean = saveClipFiles(cache.items.value.firstOrNull { it.id == id } ?: return false)
+
+    /** The Save action: a decoded file clip's files, downloaded if needed, into Downloads. False on any failure. */
+    suspend fun saveClipFiles(clip: ClipDto): Boolean {
+        val files = openedFiles(clip) ?: return false
+        return withContext(Dispatchers.IO) { saver.save(files) }
+    }
+
+    /** [shareClipFiles] for a cached clip. */
+    suspend fun shareClipFiles(id: String): Intent? = shareClipFiles(cache.items.value.firstOrNull { it.id == id } ?: return null)
+
+    /**
+     * The Share action: a chooser for a decoded file clip's files (downloaded if needed), readable by the app the user
+     * picks through this app's FileProvider. Null when it isn't a file clip or the files can't be had.
+     */
+    suspend fun shareClipFiles(clip: ClipDto): Intent? {
+        val files = openedFiles(clip) ?: return null
+        val uris = files.map(clipboard::contentUri)
+        val send = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).setType(FileNames.mimeFor(files[0].name)).putExtra(Intent.EXTRA_STREAM, uris[0])
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*").putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        }
+        // The grant covers the URIs in the ClipData; the chooser carries both on to the app the user picks.
+        send.clipData = ClipData.newRawUri(null, uris[0]).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        return Intent.createChooser(send, null)
+    }
+
+    /**
+     * The opened files of the decoded file clip [clip] (ClipFileStore), fetched from the server the first time, and
+     * kept as in use: the clipboard or a share target reads them later, even when the clip isn't in the cache. Null when
+     * it isn't a file clip, locked, offline, or a blob doesn't open; a 401 takes the revoke path.
+     */
+    private suspend fun openedFiles(clip: ClipDto): List<File>? {
+        if (clip.kind != ClipKind.FILE) return null
+        val infos = clip.files?.takeIf { it.isNotEmpty() } ?: return null
+        val g = _current.value
+        val codec = codec() ?: return null
+        return try {
+            // Before the download too: a prune meanwhile must not take the finished files. Only for a clip the history
+            // doesn't hold: a cached clip's files go when it's deleted, as on desktop.
+            if (cache.items.value.none { it.id == clip.id }) clipFiles.markInUse(clip.id)
+            clipFiles.materialize(clip, { n -> (g ?: throw IOException("Signed out")).api.blob(clip.id, n, infos[n].size) }, codec)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiException.Unauthorized) {
+            unauthorized(g)
+            null
+        } catch (e: Exception) {
+            // ApiException (offline), IOException, GeneralSecurityException (a blob that doesn't open), a closed key.
+            Log.w(TAG, "Cannot get the clip's files (${e.javaClass.simpleName})")
+            null
         }
     }
 
@@ -425,6 +534,11 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override fun api(): PrivatePasteApi? = _current.value?.api
         override fun codec(): ClipCodec? = this@AppGraph.codec().takeIf { _current.value != null }
         override val clipboard = this@AppGraph.clipboard
+        override val fileActions = object : ClipFileActions {
+            override suspend fun copy(clip: ClipDto) = copyClip(clip)
+            override suspend fun save(clip: ClipDto) = saveClipFiles(clip)
+            override suspend fun share(clip: ClipDto) = shareClipFiles(clip)
+        }
         override val settings = this@AppGraph.settings
         override val startService: () -> Unit = { SyncService.start(app) }
         override val isBatteryExempt: () -> Boolean = { BatteryOptimization.isExempt(app) }
@@ -475,7 +589,10 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     private companion object {
         const val TAG = "AppGraph"
 
-        /** The server's defaults (PP_MAX_TEXT_KB, PP_MAX_IMAGE_MB). */
-        val DEFAULT_LIMITS = ServerLimits(textKb = 1024, imageMb = 20)
+        /** The server's defaults (PP_MAX_TEXT_KB, PP_MAX_IMAGE_MB, PP_MAX_FILE_MB). */
+        val DEFAULT_LIMITS = ServerLimits(textKb = 1024, imageMb = 20, fileMb = 25)
+
+        /** A server without `/api/server-info` (protocol 1): the defaults, and no file clips. */
+        val LEGACY_INFO = ServerInfo(protocol = 1, kinds = listOf("text", "link", "image"), limits = DEFAULT_LIMITS)
     }
 }

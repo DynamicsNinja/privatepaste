@@ -428,6 +428,34 @@ class PrivatePasteApiTest {
         assertEquals(Duration.ofMinutes(5), PrivatePasteApi.uploadTimeout(100L * 1024 * 1024))
     }
 
+    @Test fun blobTimeoutScalesWithTheExpectedSize() = runBlocking<Unit> {
+        val a = api().also { it.requestTimeout = Duration.ofMillis(200) }
+        assertEquals(Duration.ofMillis(200), a.blobTimeout(0))
+        assertEquals(Duration.ofMillis(1200), a.blobTimeout(1))
+        assertEquals(Duration.ofMillis(200).plusSeconds(270), a.blobTimeout(1L shl 40))
+
+        // A body that takes longer than the base timeout: a small blob gives up, a large one waits for it.
+        server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(1))).setBodyDelay(600, java.util.concurrent.TimeUnit.MILLISECONDS))
+        assertThrowsApi<ApiException.Transient> { a.blob("c1", 0) }
+        server.enqueue(MockResponse().setBody(Buffer().write(byteArrayOf(2))).setBodyDelay(600, java.util.concurrent.TimeUnit.MILLISECONDS))
+        assertArrayEquals(byteArrayOf(2), a.blob("c1", 1, expectedBytes = 10L * 1024 * 1024))
+    }
+
+    @Test fun uploadFileClipStreamsBlobFiles() = runBlocking<Unit> {
+        server.enqueue(json(clipJson))
+        val dir = java.nio.file.Files.createTempDirectory("pp-api").toFile()
+        try {
+            val blobs = listOf(java.io.File(dir, "0").apply { writeBytes(byteArrayOf(5, 6)) }, java.io.File(dir, "1").apply { writeBytes(byteArrayOf(7)) })
+            api().uploadFileClip(meta.copy(kind = "file"), blobs)
+            val body = take().body.readUtf8()
+            assertTrue(body.contains("name=\"blob0\""))
+            assertTrue(body.contains("name=\"blob1\""))
+            assertFalse(body.contains("name=\"thumb\""))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     @Test fun idWithSlashStaysOneEncodedSegment() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(204))
         api().delete("a/b")

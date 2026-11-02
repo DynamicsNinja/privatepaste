@@ -73,7 +73,7 @@ jobs:
         run: |
           # The template's compose file with the image just built, and the env Dokploy would generate from template.toml.
           sed 's#image: .*#image: privatepaste:smoke-amd64#' deploy/dokploy/privatepaste/docker-compose.yml > "$RUNNER_TEMP/compose.yml"
-          export PP_DB_KEY="$(openssl rand -base64 32)" PP_PASSWORD=template PP_MAX_IMAGE_MB=20 PP_MAX_TEXT_KB=1024 PP_TRUST_CLOUDFLARE=false
+          export PP_DB_KEY="$(openssl rand -base64 32)" PP_PASSWORD=template PP_MAX_IMAGE_MB=20 PP_MAX_FILE_MB=25 PP_MAX_TEXT_KB=1024 PP_TRUST_CLOUDFLARE=false
           docker compose -f "$RUNNER_TEMP/compose.yml" -p tpl up -d
           for i in $(seq 60); do
             docker run --rm --network tpl_default curlimages/curl:8.11.1 -fs http://privatepaste:8080/health && ok=1 && break

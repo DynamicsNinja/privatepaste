@@ -21,6 +21,7 @@ import org.robolectric.annotation.Config
 import xyz.ficdev.privatepaste.api.ApiException
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.storage.DeliveryMode
 import java.io.File
@@ -51,6 +52,20 @@ class ServiceClipApplierTest {
         id = id, seq = 2, kind = ClipKind.IMAGE, hash = "h-$id", width = 640, height = 480, sizeBytes = 5,
         sourceDeviceId = "pc", sourceDeviceName = "Laptop", lastCopiedAt = Instant.parse("2026-10-28T12:00:00Z"),
     )
+
+    private fun files(id: String) = ClipDto(
+        id = id, seq = 3, kind = ClipKind.FILE, hash = "h-$id", sizeBytes = 3565158, blobCount = 3,
+        sourceDeviceId = "pc", sourceDeviceName = "Laptop", lastCopiedAt = Instant.parse("2026-10-28T12:00:00Z"),
+        files = listOf(
+            ClipFileInfo("report.pdf", 1000000, "application/pdf"), ClipFileInfo("b.txt", 2000000, "text/plain"),
+            ClipFileInfo("c", 565158, "application/octet-stream"),
+        ),
+    )
+
+    private fun clipNotification(): Notification =
+        shadowOf(nm).getNotification(Notifications.ID_CLIP) ?: throw AssertionError("no clip notification")
+
+    private fun Notification.Action.target() = shadowOf(actionIntent).savedIntent
 
     @Before fun setUp() {
         TestPrivatePasteApp.setUpHostProvider()
@@ -153,5 +168,60 @@ class ServiceClipApplierTest {
         assertEquals("before", clipboard.primaryClip!!.getItemAt(0).text.toString())
         assertNull(shadowOf(nm).getNotification(Notifications.ID_CLIP))
         assertTrue(fetched.isEmpty())
+    }
+
+    @Test
+    fun fileClipPostsSaveInAutomaticMode() = runBlocking {
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("x", "before"))
+
+        assertTrue(applier().apply(files("f1")))
+
+        assertEquals("the clipboard is left alone", "before", clipboard.primaryClip!!.getItemAt(0).text.toString())
+        val n = clipNotification()
+        assertEquals("New clip from Laptop", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals("report.pdf +2 more · 3.4 MB", n.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        val save = n.actions.single()
+        assertEquals("Save", save.title.toString())
+        assertTrue(shadowOf(save.actionIntent).isActivity)
+        assertTrue("immutable", shadowOf(save.actionIntent).flags and PendingIntent.FLAG_IMMUTABLE != 0)
+        assertEquals(SaveActivity::class.java.name, save.target().component?.className)
+        assertEquals("f1", save.target().getStringExtra(SaveActivity.EXTRA_CLIP_ID))
+    }
+
+    @Test
+    fun fileNotificationShowsTheSafeName() = runBlocking {
+        val hostile = files("f3").let { it.copy(files = listOf(ClipFileInfo("../secret\nplan.pdf", 5, "application/pdf"))) }
+
+        assertTrue(applier().apply(hostile))
+
+        assertEquals("secretplan.pdf · 5 B", clipNotification().extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+    }
+
+    @Test
+    fun fileClipPostsCopyAndSaveInNotificationMode() = runBlocking {
+        mode = DeliveryMode.NOTIFICATION
+
+        assertTrue(applier().apply(files("f2")))
+
+        val actions = clipNotification().actions
+        assertEquals(listOf("Copy", "Save"), actions.map { it.title.toString() })
+        assertEquals(CopyActivity::class.java.name, actions[0].target().component?.className)
+        assertEquals("f2", actions[0].target().getStringExtra(CopyActivity.EXTRA_CLIP_ID))
+        assertEquals(SaveActivity::class.java.name, actions[1].target().component?.className)
+        assertEquals("f2", actions[1].target().getStringExtra(SaveActivity.EXTRA_CLIP_ID))
+    }
+
+    @Test
+    fun fileClipIsNeverDownloadedOnArrival() = runBlocking {
+        for (m in DeliveryMode.entries) {
+            mode = m
+            assertTrue(applier().apply(files("f-$m")))
+        }
+        assertTrue("no blob fetched", fetched.isEmpty())
+        assertFalse(File(app.cacheDir, "files").exists() && File(app.cacheDir, "files").list()!!.isNotEmpty())
+
+        // Without notifications nothing is delivered, so the engine doesn't record it as applied.
+        shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertFalse(applier().apply(files("f3")))
     }
 }
