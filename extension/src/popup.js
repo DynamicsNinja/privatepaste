@@ -4,12 +4,12 @@
 // Never log clip content, passphrases or tokens.
 
 import { fromBase64 } from './core/base64.js';
+import { createAsk, EngineError, FAILED } from './ui/ask.js';
 import { formatSize, nextFilter } from './js/e2e.js';
 import * as ui from './ui/rows.js';
 
 const REFRESH_MS = 2000;
 const FEEDBACK_MS = 1500;
-const NOT_RUNNING = "PrivatePaste isn't running yet. Try again in a moment.";
 const NO_PERMISSION = 'Allow PrivatePaste to reach that server to sign in.';
 const DOWNLOAD_FAILED = "Couldn't download the file. Try again.";
 const LOAD_FAILED = "Couldn't load your history.";
@@ -34,25 +34,12 @@ let generation = 0;     // bumped whenever the list is reloaded, so an answer st
 const thumbUrls = [];
 const expanded = new Set();
 
-class EngineError extends Error {}
+const ask = createAsk(message => chrome.runtime.sendMessage(message));
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-/** Asks the engine. Retries while the offscreen document is still starting; throws EngineError with the text to show. */
-async function ask(message) {
-  for (let attempt = 0; ; attempt++) {
-    let answer;
-    try {
-      answer = await chrome.runtime.sendMessage(message);
-    } catch { /* no receiver yet */ }
-    if (answer) {
-      if (!answer.ok) throw new EngineError(answer.error);
-      return answer.value;
-    }
-    if (attempt >= 25) throw new EngineError(NOT_RUNNING);
-    await sleep(200);
-  }
-}
+/** Frees a download URL the offscreen document made (it also frees it after a minute, in case the popup closed). */
+const release = url => ask({ type: 'engine.release', url }).catch(() => {});
+// Long enough for the browser to start reading the file; a save dialog that closes the popup is covered by the minute.
+const RELEASE_AFTER_MS = 10000;
 
 function show(el, text) {
   el.textContent = text ?? '';
@@ -92,7 +79,9 @@ function render(next) {
   if (name === 'settings') {
     $('settings-server').textContent = status.serverUrl ?? '';
     $('settings-device').textContent = status.deviceName ?? '';
-    $('pause').checked = !!status.paused;
+    // Every refresh tick sets it from the engine, except while a change is in flight (the box is disabled then): a tick
+    // that read the old status must not flip the box back.
+    if (!$('pause').disabled) $('pause').checked = !!status.paused;
   }
 
   const was = view;
@@ -113,7 +102,7 @@ async function busy(form, errorLine, work) {
     errorLine.hidden = true;
     await work();
   } catch (e) {
-    show(errorLine, e instanceof EngineError ? e.message : NOT_RUNNING);
+    show(errorLine, e instanceof EngineError ? e.message : FAILED);
   } finally {
     button.disabled = false;
     form.removeAttribute('aria-busy');
@@ -375,8 +364,13 @@ function copy(row, button) {
     // first, so the clipboard poller doesn't send the image back as a new copy.
     const png = (async () => {
       await ask({ type: 'engine.copy', id: row.id });
-      const file = await ask({ type: 'engine.download', id: row.id, n: 0 });
-      return new Blob([fromBase64(file.bytesBase64)], { type: 'image/png' });
+      const { url } = await ask({ type: 'engine.download', id: row.id, n: 0 });
+      try {
+        // The offscreen document's blob URL: same extension origin, so the popup can read it.
+        return new Blob([await (await fetch(url)).arrayBuffer()], { type: 'image/png' });
+      } finally {
+        release(url);
+      }
     })();
     done = navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
   } else {
@@ -390,16 +384,16 @@ function copy(row, button) {
 async function download(row, n, button) {
   button.disabled = true;
   try {
-    const file = await ask({ type: 'engine.download', id: row.id, n });
-    // Saved as application/octet-stream under the safe name, so the browser never opens or runs it.
-    const url = URL.createObjectURL(new Blob([fromBase64(file.bytesBase64)], { type: 'application/octet-stream' }));
+    // A blob URL made by the offscreen document (application/octet-stream, so the browser never opens or runs the
+    // file), saved under the engine's safe name. The bytes never cross the message channel, whatever their size.
+    const { url, name } = await ask({ type: 'engine.download', id: row.id, n });
     const a = element('a');
     a.href = url;
-    a.download = file.name;
+    a.download = name;
     document.body.append(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    setTimeout(() => release(url), RELEASE_AFTER_MS);
     if ($('history-error').textContent === DOWNLOAD_FAILED) $('history-error').hidden = true;
   } catch {
     show($('history-error'), DOWNLOAD_FAILED);

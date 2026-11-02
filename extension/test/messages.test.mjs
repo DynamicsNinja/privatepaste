@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handleEngineMessage } from '../src/messages.js';
+import { handleEngineMessage, replyWith, urlKeeper, URL_LIFETIME_MS } from '../src/messages.js';
 import { toBase64, fromBase64 } from '../src/core/base64.js';
 
 // An engine double that records calls; `ready` settles like the real one's after start().
@@ -97,14 +97,70 @@ test('copy answers whether the engine wrote the clip', async () => {
   assert.deepEqual(await handleEngineMessage(engine, { type: 'engine.copy', id: 'image' }), { ok: true, value: false });
 });
 
-test('download sends the bytes as base64 with the safe name', async () => {
+// Blob URLs without a browser: records what was made, revoked and scheduled.
+function fakeUrls() {
+  const made = [];
+  const revoked = [];
+  const timers = [];
+  const urls = urlKeeper({
+    create: blob => { made.push(blob); return `blob:test/${made.length}`; },
+    revoke: url => revoked.push(url),
+    setTimeout: (fn, ms) => timers.push({ fn, ms }),
+  });
+  return { urls, made, revoked, timers };
+}
+
+test('download hands out a blob URL of the decrypted bytes, never the bytes themselves', async () => {
   const bytes = new Uint8Array(70000).map((_, i) => i % 251);
   const engine = fakeEngine({ download: () => ({ bytes, name: 'report.pdf', mime: 'application/pdf' }) });
-  const answer = await handleEngineMessage(engine, { type: 'engine.download', id: 'f', n: 1 });
+  const { urls, made } = fakeUrls();
+  const answer = await handleEngineMessage(engine, { type: 'engine.download', id: 'f', n: 1 }, urls);
   assert.deepEqual(engine.calls[0], ['download', 'f', 1]);
-  assert.equal(answer.value.name, 'report.pdf');
-  assert.equal(answer.value.mime, 'application/pdf');
-  assert.deepEqual(fromBase64(answer.value.bytesBase64), bytes);
+  assert.deepEqual(answer, { ok: true, value: { url: 'blob:test/1', name: 'report.pdf', mime: 'application/pdf' } });
+  assert.equal(made[0].type, 'application/octet-stream');
+  assert.deepEqual(new Uint8Array(await made[0].arrayBuffer()), bytes);
+});
+
+test('a file bigger than a runtime message may be still answers with a short message', async () => {
+  const bytes = new Uint8Array(65 * 1024 * 1024);   // over Chrome's 64 MiB message cap, even before base64
+  const engine = fakeEngine({ download: () => ({ bytes, name: 'big.iso' }) });
+  const { urls, made } = fakeUrls();
+  const answer = await handleEngineMessage(engine, { type: 'engine.download', id: 'f', n: 0 }, urls);
+  assert.ok(JSON.stringify(answer).length < 200);
+  assert.equal(made[0].size, bytes.length);
+});
+
+test('a download URL is revoked on release, or after a minute, once', async () => {
+  const engine = fakeEngine({ download: () => ({ bytes: new Uint8Array([1]), name: 'a' }) });
+  const { urls, revoked, timers } = fakeUrls();
+  const { value: { url } } = await handleEngineMessage(engine, { type: 'engine.download', id: 'f' }, urls);
+  assert.equal(timers[0].ms, URL_LIFETIME_MS);
+  assert.deepEqual(await handleEngineMessage(engine, { type: 'engine.release', url }, urls), { ok: true, value: true });
+  assert.deepEqual(revoked, [url]);
+  timers[0].fn();
+  assert.deepEqual(revoked, [url], 'the timer finds it already released');
+
+  const second = (await handleEngineMessage(engine, { type: 'engine.download', id: 'f' }, urls)).value.url;
+  timers[1].fn();
+  assert.deepEqual(revoked, [url, second]);
+});
+
+test('release ignores URLs it did not hand out', async () => {
+  const { urls, revoked } = fakeUrls();
+  assert.deepEqual(await handleEngineMessage(fakeEngine(), { type: 'engine.release', url: 'blob:other/1' }, urls), { ok: true, value: false });
+  assert.deepEqual(revoked, []);
+});
+
+test('an answer that cannot be sent becomes a short failure, so the popup is not left waiting', async () => {
+  const sent = [];
+  let first = true;
+  const reply = value => {
+    if (first) { first = false; throw new Error('Message length exceeded maximum allowed length.'); }
+    sent.push(value);
+  };
+  await replyWith(Promise.resolve({ ok: true, value: 'huge' }), reply);
+  assert.deepEqual(sent, [{ ok: false, error: 'Something went wrong. Try again.' }]);
+  await replyWith(Promise.resolve({ ok: true }), () => { throw new Error('port closed'); });   // nothing thrown out
 });
 
 test('base64 round trips every byte value', () => {
