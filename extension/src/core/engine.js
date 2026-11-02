@@ -27,6 +27,7 @@
 import { ApiError, isTransient } from './api.js';
 import { inspectLocal, sealLocal, decodeClip, DEFAULT_LIMITS, KNOWN_KINDS, contentHashText, contentHashPixels } from './codec.js';
 import { pngToRgba } from './image.js';
+import { normalizeServerUrl } from './server-url.js';
 import { unwrapWithPassphrase, WrongPassphraseError, encryptBlob, decryptBlob, openSmall } from '../js/e2e.js';
 
 export const MESSAGES = Object.freeze({
@@ -709,8 +710,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
      * @throws {ApiError} with the server's detail as message (e.g. 'Wrong name or password.'); Error for a server too old.
      */
     async signIn(serverUrl, username, password, deviceName) {
-      const url = String(serverUrl ?? '').trim().replace(/\/+$/, '');
-      if (!/^https?:\/\/[^/]+/i.test(url)) throw new Error('Enter the server address, starting with https://');
+      const url = normalizeServerUrl(serverUrl);
       const anonymous = makeApi({ serverUrl: url });
       let info;
       try {

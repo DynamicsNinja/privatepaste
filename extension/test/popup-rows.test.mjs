@@ -105,4 +105,9 @@ test('the server origin pattern for the host permission', () => {
   assert.equal(rows.originPattern(' http://localhost:5202/sub '), 'http://localhost/*');
   assert.equal(rows.originPattern('paste.example.com'), null);
   assert.equal(rows.originPattern('ftp://x'), null);
+  // Plain http only for this computer, like the other apps: nothing is asked for elsewhere.
+  assert.equal(rows.originPattern('http://192.168.1.20:8080'), null);
+  assert.equal(rows.originPattern('http://paste.example.com'), null);
+  assert.equal(rows.originPattern('http://127.0.0.1:5202'), 'http://127.0.0.1/*');
+  assert.equal(rows.originPattern('http://[::1]:5202'), 'http://[::1]/*');
 });

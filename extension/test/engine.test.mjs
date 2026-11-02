@@ -402,6 +402,21 @@ test('sign in, then unlock with the passphrase', async () => {
   assert.equal(vault.encKey.extractable, false);
 });
 
+test('plain http is refused except for this computer, before anything is sent', async () => {
+  const env = await setup({ signedIn: false, wrap: vectors.passphraseWrap[0].wrap });
+  await env.engine.start();
+  for (const url of ['http://192.168.1.20:8080', 'HTTP://paste.example.com', ' http://10.0.0.2/ ']) {
+    await assert.rejects(() => env.engine.signIn(url, 'owner', 'dev', 'Edge'),
+      { message: 'The server address must use https:// (http:// is only allowed for localhost).' });
+  }
+  await assert.rejects(() => env.engine.signIn('paste.example.com', 'owner', 'dev', 'Edge'),
+    { message: 'Enter a full server address starting with https://' });
+  assert.deepEqual(env.server.calls, []);
+  for (const url of ['http://127.0.0.1:5202', 'http://[::1]:5202', 'https://paste.example.com']) {
+    assert.equal((await env.engine.signIn(url, 'owner', 'dev', 'Edge')).state, 'locked');
+  }
+});
+
 test('without a vault, someone other than the owner is told to ask the owner', async () => {
   const env = await setup({ signedIn: false, wrap: null });
   env.server.isOwner = false;
