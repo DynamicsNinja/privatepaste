@@ -9,7 +9,7 @@ namespace PrivatePaste.Desktop.ViewModels;
 
 public enum PopupTab { History, Pinned }
 
-/// <summary>The type chips under the tabs, in their order (Alt+1 to Alt+5). One at a time; clips of an unknown kind show under All only.</summary>
+/// <summary>The type chips under the tabs, in their order (Ctrl+1 to Ctrl+5). One at a time; clips of an unknown kind show under All only.</summary>
 public enum PopupFilter { All, Text, Link, Image, File }
 
 /// <summary>A server lookup that needs the vault key was asked for while locked or signed out.</summary>
@@ -146,7 +146,7 @@ public sealed partial class PopupViewModel : ObservableObject
     public bool IsImageFilter => Filter == PopupFilter.Image;
     public bool IsFileFilter => Filter == PopupFilter.File;
 
-    /// <summary>A chip click or Alt+digit: picks the type, or returns to All when it is already the active one (or is All).</summary>
+    /// <summary>A chip click or Ctrl+digit: picks the type, or returns to All when it is already the active one (or is All).</summary>
     public void SetFilter(PopupFilter filter)
     {
         if (filter == Filter) filter = PopupFilter.All;
@@ -155,7 +155,7 @@ public sealed partial class PopupViewModel : ObservableObject
         Refilter();
     }
 
-    /// <summary>Alt+1 to Alt+5, the chips in order; anything else is ignored.</summary>
+    /// <summary>Ctrl+1 to Ctrl+5, the chips in order; anything else is ignored.</summary>
     public void SetFilterByIndex(int index)
     {
         if (index is >= 1 and <= 5) SetFilter((PopupFilter)(index - 1));
@@ -191,7 +191,7 @@ public sealed partial class PopupViewModel : ObservableObject
 
     public string FooterHint => $"Enter to paste   Tab for {(Tab == PopupTab.History ? "Pinned" : "History")}   Ctrl+P to pin"
         + (Selected is { IsFile: true } ? "   Ctrl+S to save" : "")
-        + "   Alt+1–5 to filter";
+        + "   Ctrl+1–5 to filter";
 
     private PopupItem? Selected => SelectedIndex >= 0 && SelectedIndex < Items.Count ? Items[SelectedIndex] : null;
 

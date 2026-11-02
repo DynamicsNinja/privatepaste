@@ -51,9 +51,9 @@ public static class PopupKeyRouter
             case KeyCode.VcP when ctrl && !alt && (mask & EventMask.Shift) == 0: return new PopupKey(PopupKeyAction.TogglePin);
             // Ctrl+S alone saves a file row; the popup decides whether the selected row is one.
             case KeyCode.VcS when ctrl && !alt && (mask & EventMask.Shift) == 0: return new PopupKey(PopupKeyAction.Save);
-            // Alt+1..5 alone picks a type chip (the top-row digits: Alt+numpad types Alt codes). Ctrl+Alt is AltGr, i.e. text.
+            // Ctrl+1..5 alone picks a type chip. Not Alt: the popup never takes the focus, so Alt up would reach the app below and open its menu bar.
             case KeyCode.Vc1 or KeyCode.Vc2 or KeyCode.Vc3 or KeyCode.Vc4 or KeyCode.Vc5
-                when alt && !ctrl && (mask & EventMask.Shift) == 0:
+                when ctrl && !alt && (mask & EventMask.Shift) == 0:
                 return new PopupKey(PopupKeyAction.Filter, Index: key - KeyCode.Vc1 + 1);
         }
 

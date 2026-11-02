@@ -189,7 +189,7 @@ public class DesktopRenderTests
         {
             var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             Assert.Contains("report.pdf +2 more · 3.4 MB", texts);
-            Assert.Contains("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save   Alt+1–5 to filter", texts);
+            Assert.Contains("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save   Ctrl+1–5 to filter", texts);
             var fileIcons = w.GetVisualDescendants().OfType<Canvas>().Where(c => c.Name == "FileIcon" && c.IsEffectivelyVisible).ToList();
             Assert.Equal(2, fileIcons.Count);
             Assert.All(w.GetVisualDescendants().OfType<Button>(), b => Assert.False(b.Focusable));

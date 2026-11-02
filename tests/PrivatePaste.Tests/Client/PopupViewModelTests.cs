@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Time.Testing;
 using PrivatePaste.Client.Core.Cache;
 using PrivatePaste.Desktop.ViewModels;
@@ -332,14 +332,14 @@ public class PopupViewModelTests
         var vm = CreatePins(CacheWith(
             Text("plain", 1, 5), Pin(Text("pin alpha", 30, 1), 10), Pin(Text("pin beta", 20, 2), 20), Text("other", 5, 3)));
         Assert.Equal(PopupTab.History, vm.Tab);
-        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Alt+1–5 to filter", vm.FooterHint);
+        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+1–5 to filter", vm.FooterHint);
 
         vm.SwitchTab();
         Assert.Equal(PopupTab.Pinned, vm.Tab);
         Assert.Equal(["pin beta", "pin alpha"], vm.Items.Select(i => i.Clip.Text));
         Assert.All(vm.Items, i => Assert.True(i.IsPinned));
         Assert.All(vm.Items, i => Assert.False(i.IsNewest));
-        Assert.Equal("Enter to paste   Tab for History   Ctrl+P to pin   Alt+1–5 to filter", vm.FooterHint);
+        Assert.Equal("Enter to paste   Tab for History   Ctrl+P to pin   Ctrl+1–5 to filter", vm.FooterHint);
 
         vm.Query = "alpha";   // search filters the open tab
         Assert.Equal(["pin alpha"], vm.Items.Select(i => i.Clip.Text));
@@ -485,7 +485,7 @@ public class PopupViewModelTests
     public void Footer_offers_save_only_while_a_file_row_is_selected()
     {
         const string plain = "Enter to paste   Tab for Pinned   Ctrl+P to pin";
-        const string filter = "   Alt+1–5 to filter";
+        const string filter = "   Ctrl+1–5 to filter";
         var vm = CreateWithSave(CacheWith(Text("text", 1, 2), FileClip(2, 1, ("report.pdf", 10))));
         Assert.Equal(plain + filter, vm.FooterHint);
         var changes = new List<string?>();
@@ -586,7 +586,7 @@ public class PopupViewModelTests
     [InlineData(3, PopupFilter.Link)]
     [InlineData(4, PopupFilter.Image)]
     [InlineData(5, PopupFilter.File)]
-    public void Alt_digits_pick_the_chips_in_order(int index, PopupFilter expected)
+    public void Ctrl_digits_pick_the_chips_in_order(int index, PopupFilter expected)
     {
         var vm = Create(MixedCache());
         vm.SetFilterByIndex(index);
@@ -656,9 +656,9 @@ public class PopupViewModelTests
     public void Footer_always_offers_the_filter_keys_and_save_only_on_files()
     {
         var vm = CreateWithSave(CacheWith(Text("text", 1, 2), FileClip(2, 1, ("report.pdf", 10))));
-        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Alt+1–5 to filter", vm.FooterHint);
+        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+1–5 to filter", vm.FooterHint);
         vm.MoveSelection(1);
-        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save   Alt+1–5 to filter", vm.FooterHint);
+        Assert.Equal("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save   Ctrl+1–5 to filter", vm.FooterHint);
     }
 
     [Fact]

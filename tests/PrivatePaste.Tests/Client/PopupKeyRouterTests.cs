@@ -107,18 +107,19 @@ public class PopupKeyRouterTests
     [InlineData(KeyCode.Vc3, 3)]
     [InlineData(KeyCode.Vc4, 4)]
     [InlineData(KeyCode.Vc5, 5)]
-    public void Alt_digit_picks_a_filter(KeyCode key, int index)
+    public void Ctrl_digit_picks_a_filter(KeyCode key, int index)
     {
-        Assert.Equal(new PopupKey(PopupKeyAction.Filter, Index: index), Route(key, EventMask.LeftAlt, "1"));
-        Assert.Equal(new PopupKey(PopupKeyAction.Filter, Index: index), Route(key, EventMask.RightAlt, null));
+        Assert.Equal(new PopupKey(PopupKeyAction.Filter, Index: index), Route(key, EventMask.LeftCtrl, "1"));
+        Assert.Equal(new PopupKey(PopupKeyAction.Filter, Index: index), Route(key, EventMask.RightCtrl, null));
     }
 
     [Theory]
-    [InlineData(KeyCode.Vc6, EventMask.LeftAlt)]                      // only five chips
-    [InlineData(KeyCode.Vc0, EventMask.LeftAlt)]
-    [InlineData(KeyCode.Vc1, EventMask.LeftAlt | EventMask.LeftShift)]
-    [InlineData(KeyCode.Vc1, EventMask.LeftCtrl)]                     // Ctrl+1 would switch tabs in the app below
-    [InlineData(KeyCode.VcNumPad1, EventMask.LeftAlt)]                // Alt+numpad types Alt codes
+    [InlineData(KeyCode.Vc6, EventMask.LeftCtrl)]                     // only five chips
+    [InlineData(KeyCode.Vc0, EventMask.LeftCtrl)]
+    [InlineData(KeyCode.Vc1, EventMask.LeftCtrl | EventMask.LeftShift)]
+    [InlineData(KeyCode.Vc1, EventMask.LeftAlt)]                      // Alt is not a filter key: Alt up would reach the app below
+    [InlineData(KeyCode.Vc3, EventMask.RightAlt)]
+    [InlineData(KeyCode.VcNumPad1, EventMask.LeftCtrl)]
     public void Other_digit_shortcuts_are_swallowed(KeyCode key, EventMask mask) =>
         Assert.Equal(new PopupKey(PopupKeyAction.Swallow), Route(key, mask, null));
 

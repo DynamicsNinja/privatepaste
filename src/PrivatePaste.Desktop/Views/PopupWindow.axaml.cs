@@ -1,4 +1,4 @@
-﻿using System.Collections.Specialized;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using Avalonia;
@@ -131,7 +131,7 @@ public partial class PopupWindow : Window
             case Key.Tab: vm.SwitchTab(); break;
             case Key.P when e.KeyModifiers == KeyModifiers.Control: _ = vm.TogglePinSelectedAsync(); break;
             case Key.S when e.KeyModifiers == KeyModifiers.Control: _ = vm.SaveSelectedAsync(); break;
-            case Key.D1 or Key.D2 or Key.D3 or Key.D4 or Key.D5 when e.KeyModifiers == KeyModifiers.Alt:
+            case Key.D1 or Key.D2 or Key.D3 or Key.D4 or Key.D5 when e.KeyModifiers == KeyModifiers.Control:
                 vm.SetFilterByIndex(e.Key - Key.D1 + 1);
                 break;
             case Key.Escape:
