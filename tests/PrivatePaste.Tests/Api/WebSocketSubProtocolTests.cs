@@ -81,4 +81,57 @@ public class WebSocketSubProtocolTests
 
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, (await client.GetAsync("/api/sync")).StatusCode);
     }
+
+    [Fact]
+    public async Task WebSessionCookie_DoesNotOpenTheSocket()
+    {
+        using var f = new PrivatePasteFactory();
+        var web = f.CreateWebClient();
+        var form = await PrivatePasteFactory.AntiforgeryTokenAsync(web, "/login");
+        var login = await web.PostAsync("/login", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["Name"] = PrivatePasteFactory.OwnerName,
+            ["Password"] = PrivatePasteFactory.Password,
+            ["__RequestVerificationToken"] = form,
+        }));
+        Assert.Equal(System.Net.HttpStatusCode.Redirect, login.StatusCode);
+        var cookies = string.Join("; ", login.Headers.GetValues("Set-Cookie").Select(c => c.Split(';')[0]));
+        using (var page = new HttpRequestMessage(HttpMethod.Get, "/"))
+        {
+            page.Headers.Add("Cookie", cookies);
+            using var plain = f.CreateClient(new() { AllowAutoRedirect = false, HandleCookies = false });
+            Assert.Equal(System.Net.HttpStatusCode.OK, (await plain.SendAsync(page)).StatusCode);   // a working session
+        }
+        // The version offered as a subprotocol passes the protocol gate; the session cookie must still not authenticate.
+        var client = Browser(f, ProtocolHeaders.WebSocketSubProtocol);
+        client.ConfigureRequest = r => r.Headers.Cookie = cookies;
+
+        var e = await Assert.ThrowsAnyAsync<Exception>(() => client.ConnectAsync(Ws(f), CancellationToken.None));
+        Assert.Contains("401", e.Message);
+    }
+
+    [Fact]
+    public async Task OfferedVersion_DoesNotStandInForTheHeaderOutsideTheSocket()
+    {
+        using var f = new PrivatePasteFactory();
+        var (_, _, token) = await f.LoginDeviceAsync("Edge", "extension");
+        using var client = f.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Add("Sec-WebSocket-Protocol", ProtocolHeaders.WebSocketSubProtocol);
+
+        Assert.Equal((System.Net.HttpStatusCode)426, (await client.GetAsync("/api/sync")).StatusCode);
+    }
+
+    [Fact]
+    public async Task NonBearerAuthorization_WithSubprotocolToken_Gets401()
+    {
+        using var f = new PrivatePasteFactory();
+        var (_, _, token) = await f.LoginDeviceAsync("Edge", "extension");
+        var client = Browser(f, ProtocolHeaders.WebSocketSubProtocol, ProtocolHeaders.WebSocketAuthPrefix + token);
+        client.ConfigureRequest = r => r.Headers.Authorization = "Basic eDp5";
+
+        // A request that brings its own Authorization header is never authenticated from the subprotocol.
+        var e = await Assert.ThrowsAnyAsync<Exception>(() => client.ConnectAsync(Ws(f), CancellationToken.None));
+        Assert.Contains("401", e.Message);
+    }
 }
