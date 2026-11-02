@@ -53,6 +53,20 @@ class FileNamesTest {
     }
 
     @Test
+    fun namesFitTheByteLimitWithACounterAndPart() {
+        for (unit in listOf("a", "ж", "文", "😀")) {
+            for (tail in listOf("", ".pdf", " x", "." + "e".repeat(40))) {
+                for (count in 60..210 step 7) {
+                    val safe = FileNames.safe(unit.repeat(count) + tail)
+                    assertTrue(safe, safe.toByteArray(Charsets.UTF_8).size <= 200)
+                    val last = FileNames.unique(safe) { !it.contains(" (99)") }
+                    assertTrue(last, last.contains(" (99)") && "$last.part".toByteArray(Charsets.UTF_8).size <= 255)
+                }
+            }
+        }
+    }
+
+    @Test
     fun mimeComesFromTheSharedTable() {
         assertEquals("application/pdf", FileNames.mimeFor("x.PDF"))
         assertEquals("image/jpeg", FileNames.mimeFor("a.jpeg"))

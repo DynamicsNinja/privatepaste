@@ -61,6 +61,20 @@ class ClipFileStoreTest {
     }
 
     @Test
+    fun aTempNameNeverOverwritesAnotherFileOfTheClip() = runBlocking {
+        val store = ClipFileStore(tmp.newFolder("files"))
+        for (order in listOf(listOf("a.txt.part", "a.txt"), listOf("a.txt", "a.txt.part"))) {
+            val (clip, blobs) = fileClip("c-${order.first()}", order[0] to byteArrayOf(1), order[1] to byteArrayOf(2))
+
+            val files = store.materialize(clip, { blobs[it] }, codec)
+
+            assertEquals(2, files.map { it.name.lowercase() }.toSet().size)
+            assertEquals(listOf(1, 2), files.map { it.readBytes().single().toInt() })
+            assertEquals(files.map { it.name }.toSet(), files.first().parentFile!!.list()!!.toSet())
+        }
+    }
+
+    @Test
     fun aMaterializedClipIsNotFetchedAgain() = runBlocking {
         val store = ClipFileStore(tmp.newFolder("files"))
         val (clip, blobs) = fileClip("c1", "a.txt" to "hello".toByteArray())

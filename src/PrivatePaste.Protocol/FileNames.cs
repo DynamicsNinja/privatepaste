@@ -11,6 +11,8 @@ namespace PrivatePaste.Protocol;
 public static class FileNames
 {
     private const int MaxLength = 200;
+    private const int MaxBytes = 200;
+    private const int MaxExtensionBytes = 32;
     private const string Fallback = "file";
     private const string Octet = "application/octet-stream";
 
@@ -40,7 +42,8 @@ public static class FileNames
     /// <summary>
     /// The part after the last / or \; control characters and <c>&lt;&gt;:"|?*</c> dropped; trailing dots and spaces trimmed;
     /// "file" when nothing usable is left; a Windows reserved device name (CON, NUL, COM1, ...) prefixed with _;
-    /// cut to 200 UTF-16 units keeping the extension (the cut never splits a surrogate pair and the stem is re-trimmed).
+    /// cut to 200 UTF-16 units keeping the extension (the cut never splits a surrogate pair and the stem is re-trimmed);
+    /// then cut to 200 UTF-8 bytes the same way (an extension over 32 bytes is cut with the stem).
     /// </summary>
     public static string Safe(string name)
     {
@@ -65,7 +68,49 @@ public static class FileNames
             var stem = s[..keep].TrimEnd('.', ' ');
             s = (stem.Length == 0 ? Fallback : stem) + ext;
         }
+
+        // ext4, f2fs and APFS allow 255 bytes per name and 200 units of CJK are 600 bytes, so the UTF-8 length is capped at
+        // 200 bytes too (room left for " (99)" and ".part"). The stem is cut by whole code points; an extension over 32 bytes
+        // is cut with it as one stem; trailing dots and spaces are trimmed again and an empty stem becomes "file".
+        if (Utf8Length(s) > MaxBytes)
+        {
+            var ext = ExtensionOf(s);
+            if (Utf8Length(ext) > MaxExtensionBytes) ext = "";
+            var stemEnd = s.Length - ext.Length;
+            var budget = MaxBytes - Utf8Length(ext);
+            int keep = 0, bytes = 0;
+            while (keep < stemEnd)
+            {
+                var (units, size) = CodePointAt(s, keep);
+                if (bytes + size > budget) break;
+                keep += units;
+                bytes += size;
+            }
+            var stem = s[..keep].TrimEnd('.', ' ');
+            s = (stem.Length == 0 ? Fallback : stem) + ext;
+        }
         return s;
+    }
+
+    private static int Utf8Length(string s)
+    {
+        var bytes = 0;
+        for (var i = 0; i < s.Length;)
+        {
+            var (units, size) = CodePointAt(s, i);
+            i += units;
+            bytes += size;
+        }
+        return bytes;
+    }
+
+    // UTF-16 units and UTF-8 bytes of the code point at i, counted by hand so every port agrees: a surrogate pair is 4 bytes,
+    // a lone surrogate 3 (the size of the replacement character an encoder writes for it).
+    private static (int Units, int Bytes) CodePointAt(string s, int i)
+    {
+        var c = s[i];
+        if (char.IsHighSurrogate(c) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) return (2, 4);
+        return (1, c < 0x80 ? 1 : c < 0x800 ? 2 : 3);
     }
 
     /// <summary>

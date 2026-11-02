@@ -37,11 +37,16 @@ class ClipFileStore(private val root: File) {
         require(!infos.isNullOrEmpty()) { "Not a file clip" }
         val folder = folderName(clip.id)
         val dir = File(root, folder)
-        // Unique ignoring case, so two names never land on one file on a case-insensitive file system.
+        // Unique ignoring case, so two names never land on one file on a case-insensitive file system. Each target's
+        // temp name is reserved with it, and a name whose temp name is taken is numbered too: with names
+        // ["a.txt.part", "a.txt"], decrypting the second must not overwrite the finished first.
         val taken = HashSet<String>()
         val targets = infos.map { info ->
-            val name = FileNames.unique(FileNames.safe(info.name)) { it.lowercase() in taken }
+            val name = FileNames.unique(FileNames.safe(info.name)) {
+                it.lowercase() in taken || "$it$PART".lowercase() in taken
+            }
             taken += name.lowercase()
+            taken += "$name$PART".lowercase()
             File(dir, name)
         }
         val complete = withContext(Dispatchers.IO) { targets.zip(infos).all { (f, info) -> f.isFile && f.length() == info.size } }
@@ -59,7 +64,7 @@ class ClipFileStore(private val root: File) {
             for ((i, target) in targets.withIndex()) {
                 val sealed = fetch(i)
                 withContext(Dispatchers.IO) {
-                    val part = File(dir, target.name + ".part")
+                    val part = File(dir, target.name + PART)
                     part.outputStream().buffered().use { codec.decodeBlobTo(sealed, it) }
                     if (!part.renameTo(target)) throw IOException("Cannot finish a downloaded file")
                 }
@@ -90,6 +95,7 @@ class ClipFileStore(private val root: File) {
     }
 
     private companion object {
+        const val PART = ".part"
         val UNSAFE = Regex("[^A-Za-z0-9-]")
 
         /** A clip id from the server becomes a plain folder name: it can't name a parent or nest. */

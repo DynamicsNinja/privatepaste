@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -14,8 +13,8 @@ import xyz.ficdev.privatepaste.R
 
 /**
  * Transparent, no-history target of a file clip notification's Save action: downloads the files if they aren't here
- * yet, saves them to Downloads, toasts, cancels the clip notification and finishes, on every path. The work runs in
- * the app's scope, so leaving the activity (it has no history) doesn't abort a large download half-way.
+ * yet, saves them to Downloads, toasts and cancels the clip notification. It finishes at once: the work runs in the
+ * app's scope (the toast uses the app's context), so a large download neither keeps it on top nor stops half-way.
  */
 class SaveActivity : ComponentActivity() {
 
@@ -28,7 +27,7 @@ class SaveActivity : ComponentActivity() {
             finish()
             return
         }
-        val work = app.appScope.launch {
+        app.appScope.launch {
             val ok = try {
                 id != null && app.graph.saveClipFiles(id)
             } catch (e: CancellationException) {
@@ -42,10 +41,7 @@ class SaveActivity : ComponentActivity() {
                 Notifications.cancelClip(app)
             }
         }
-        lifecycleScope.launch {
-            work.join()
-            finish()
-        }
+        finish()   // nothing to show meanwhile: staying on top would block the screen for a large download
     }
 
     companion object {

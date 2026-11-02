@@ -207,6 +207,8 @@ export const contentHashFiles = entries =>
 // ---- file names and sizes: the same rules as FileNames.cs on every platform (see "safeFileName" in the vectors) ----
 
 const FILE_NAME_MAX = 200;
+const FILE_NAME_MAX_BYTES = 200;
+const FILE_EXT_MAX_BYTES = 32;
 const RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|(?:COM|LPT)[1-9])$/i;
 // Ends with the last dot unless the dot starts the name (".bashrc" has no extension).
 const extensionOf = name => { const dot = name.lastIndexOf('.'); return dot > 0 ? name.slice(dot) : ''; };
@@ -214,7 +216,7 @@ const trimDotsAndSpaces = s => s.replace(/[. ]+$/, '');
 
 /**
  * A name from a payload comes from another device, so it is untrusted: the leaf after the last / or \, without control
- * characters or <>:"|?*, without trailing dots and spaces, never empty or a reserved Windows device name, at most 200 UTF-16 units.
+ * characters or <>:"|?*, without trailing dots and spaces, never empty or a reserved Windows device name, at most 200 UTF-16 units and 200 UTF-8 bytes.
  */
 export function safeFileName(name) {
   let s = trimDotsAndSpaces(name.slice(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1)
@@ -234,7 +236,44 @@ export function safeFileName(name) {
     const stem = trimDotsAndSpaces(s.slice(0, keep));
     s = (stem === '' ? 'file' : stem) + ext;
   }
+
+  // ext4, f2fs and APFS allow 255 bytes per name: cap the UTF-8 length at 200 bytes too, cutting the stem by whole code
+  // points; an extension over 32 bytes is cut with it as one stem.
+  if (utf8Length(s) > FILE_NAME_MAX_BYTES) {
+    let ext = extensionOf(s);
+    if (utf8Length(ext) > FILE_EXT_MAX_BYTES) ext = '';
+    const stemEnd = s.length - ext.length, budget = FILE_NAME_MAX_BYTES - utf8Length(ext);
+    let keep = 0, bytes = 0;
+    while (keep < stemEnd) {
+      const [units, size] = codePointAt(s, keep);
+      if (bytes + size > budget) break;
+      keep += units;
+      bytes += size;
+    }
+    const stem = trimDotsAndSpaces(s.slice(0, keep));
+    s = (stem === '' ? 'file' : stem) + ext;
+  }
   return s;
+}
+
+// [UTF-16 units, UTF-8 bytes] of the code point at i, counted as FileNames.cs does: a pair is 4 bytes, a lone surrogate 3.
+function codePointAt(s, i) {
+  const c = s.charCodeAt(i);
+  if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+    const next = s.charCodeAt(i + 1);
+    if (next >= 0xdc00 && next <= 0xdfff) return [2, 4];
+  }
+  return [1, c < 0x80 ? 1 : c < 0x800 ? 2 : 3];
+}
+
+function utf8Length(s) {
+  let bytes = 0;
+  for (let i = 0; i < s.length;) {
+    const [units, size] = codePointAt(s, i);
+    i += units;
+    bytes += size;
+  }
+  return bytes;
 }
 
 function scaled(bytes, unit, label) {

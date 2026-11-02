@@ -20,6 +20,8 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowToast
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = TestPrivatePasteApp::class)
@@ -45,11 +47,36 @@ class SaveActivityTest {
         server.shutdown()
     }
 
-    private fun runSave(id: String?): String {
+    /** Starts Save, checks it finished at once (the work runs in the app's scope) and returns the toast it ends with. */
+    private fun runSave(id: String?, beforeToast: () -> Unit = {}): String {
+        val toasts = ShadowToast.shownToastCount()
         val intent = Intent(app, SaveActivity::class.java).apply { if (id != null) putExtra(SaveActivity.EXTRA_CLIP_ID, id) }
         val controller = Robolectric.buildActivity(SaveActivity::class.java, intent).setup()
-        awaitUntil("finished") { controller.get().isFinishing }
+        assertTrue("finishes right away", controller.get().isFinishing)
+        beforeToast()
+        awaitUntil("toast") { ShadowToast.shownToastCount() > toasts }
         return ShadowToast.getTextOfLatestToast() ?: throw AssertionError("no toast")
+    }
+
+    @Test
+    fun saveDoesNotStayOnTopDuringTheDownload() {
+        val clip = server.fileClip("f1", tmp.root, "big.bin" to ByteArray(4096) { it.toByte() })
+        app.graph.cache.upsert(clip, fromSync = true)
+        val download = CountDownLatch(1)
+        val serve = server.other
+        server.other = { r -> if (r.path!!.contains("/blobs/")) download.await(10, TimeUnit.SECONDS); serve(r) }
+
+        val toast = try {
+            runSave("f1") {
+                assertTrue("nothing saved yet", saved.isEmpty())
+                download.countDown()
+            }
+        } finally {
+            download.countDown()   // never leave the server blocked
+        }
+
+        assertEquals("Saved to Downloads", toast)
+        assertEquals(listOf("big.bin"), saved.map { it.first })
     }
 
     @Test

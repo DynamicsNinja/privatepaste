@@ -97,6 +97,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     val settings = SettingsStore(app)
     val imageFiles = ClipImageFiles(File(app.cacheDir, "clipboard"))   // served by the FileProvider (file_paths.xml)
     val clipFiles = ClipFileStore(File(app.cacheDir, "files"))          // served by the FileProvider too
+    private val outgoing = File(app.cacheDir, "outgoing")               // shared files copied for sending (ClipSender)
     private val saver = app.downloadsSaver()
     val clipboard = app.clipboardWriter(imageFiles)
     val cache = HistoryCache(CryptoFile(File(dir, "history.bin"), keys, KeyAliases.CACHE))
@@ -115,13 +116,18 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     )
 
     /**
-     * Every wipe of local data takes these too: plaintext PNG copies of clips, the opened files of file clips, and the
-     * clip preview notification.
+     * Every wipe of local data takes these too: plaintext PNG copies of clips, the opened files of file clips, the
+     * copies of shared files a cancelled share left in [outgoing], and the clip preview notification.
      */
     private fun clearPlaintextCopies() {
+        deletePlaintextFiles()
+        Notifications.cancelClip(app)
+    }
+
+    private fun deletePlaintextFiles() {
         imageFiles.clear()
         clipFiles.clear()
-        Notifications.cancelClip(app)
+        outgoing.deleteRecursively()
     }
 
     private val lifecycle = Mutex()
@@ -181,7 +187,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         private val capture = LocalCaptureClock()
         val sender = ClipSender(
             api, ::codec, ::limits, queue, cache, capture, app::notifyUser, clock,
-            onKeyReset = ::keyWasReset, isEnding = { ending }, kinds = ::kinds, outgoing = File(app.cacheDir, "outgoing"),
+            onKeyReset = ::keyWasReset, isEnding = { ending }, kinds = ::kinds, outgoing = outgoing,
         )
 
         @Volatile private var serverInfo: ServerInfo? = null
@@ -385,10 +391,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     private suspend fun end(g: SessionGraph) {
         g.markEnding()
         g.engine.stop()
-        withContext(Dispatchers.IO) {   // plaintext copies of clips: gone with the session
-            imageFiles.clear()
-            clipFiles.clear()
-        }
+        withContext(Dispatchers.IO) { deletePlaintextFiles() }   // plaintext copies of clips: gone with the session
         Notifications.cancelClip(app)   // a clip preview (maybe a password) is gone with the session too
         if (_current.value === g) _current.value = null
         g.close()
