@@ -279,6 +279,7 @@ class HistoryViewModel(
                         return@launch
                     }
                 }
+                ClipKind.FILE -> return@launch  // placeholder until the history copies files (Task 7)
                 ClipKind.UNKNOWN -> return@launch  // a kind from a newer client: nothing this build can copy
             }
             _messages.trySend(UiText.Res(R.string.copied))
@@ -347,7 +348,8 @@ class HistoryViewModel(
     }
 
     /** On-device search: the clip's text contains [needle], ignoring case. Images and unknown clips have no text. */
-    private fun ClipDto.matches(needle: String) = needle.isEmpty() || text?.contains(needle, ignoreCase = true) == true
+    private fun ClipDto.matches(needle: String) = needle.isEmpty() || text?.contains(needle, ignoreCase = true) == true ||
+        files?.any { it.name.contains(needle, ignoreCase = true) } == true
 
     private fun isOnline() = syncState.value == SyncState.CONNECTED || syncState.value == SyncState.CONNECTING
 

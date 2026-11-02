@@ -3,12 +3,15 @@ package xyz.ficdev.privatepaste.core.crypto
 import kotlinx.serialization.Serializable
 import xyz.ficdev.privatepaste.core.ContentHash
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ClipUploadMeta
 import xyz.ficdev.privatepaste.core.model.ProtocolJson
 import xyz.ficdev.privatepaste.core.model.ServerLimits
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.OutputStream
 import java.security.GeneralSecurityException
 import java.time.Instant
 import java.util.Base64
@@ -19,12 +22,23 @@ class ClipTooLargeException(message: String) : Exception(message)
 /** What `POST /api/clips` takes: the meta, the sealed thumbnail if any, and the sealed blobs in order. */
 class EncodedClip(val meta: ClipUploadMeta, val thumb: ByteArray?, val blobs: List<ByteArray>)
 
+/** A file clip ready for `POST /api/clips`: the meta and one sealed blob file per file, in order. */
+class EncodedFiles(val meta: ClipUploadMeta, val blobs: List<File>)
+
+/** One file to send: its plaintext in [file], and what the payload and the hash say about it. */
+class OutgoingFile(val file: File, val name: String, val size: Long, val mime: String, val sha256Hex: String)
+
 /**
  * The sealed payload: UTF-8 JSON with optional fields. Later releases add fields, so unknown ones are ignored, and
  * null ones are left out (ProtocolJson).
  */
 @Serializable
-private data class ClipPayload(val text: String? = null, val width: Int? = null, val height: Int? = null)
+private data class ClipPayload(
+    val text: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val files: List<ClipFileInfo>? = null,
+)
 
 /**
  * Seals clips for upload and opens the ones the server sends, under one vault key. The server sees only the kind, the
@@ -56,18 +70,36 @@ class ClipCodec(private val key: VaultKey) {
         return EncodedClip(meta, SealedBox.seal(key, "thumb", image.thumbPng), listOf(blob))
     }
 
+    /**
+     * Seals a file clip: the payload lists [files] in order, and each file becomes one sealed blob, streamed from its
+     * plaintext into `<index>.blob` under [sealedDir]. The hash is [ContentHash.files] of the names, sizes and SHA-256s.
+     * @throws java.io.IOException when a file can't be read or a blob written.
+     */
+    fun encodeFiles(files: List<OutgoingFile>, sealedDir: File, copiedAt: Instant?, backfill: Boolean): EncodedFiles {
+        val hash = ContentHash.files(files.map { ContentHash.FileDigest(it.name, it.size, it.sha256Hex) })
+        val payload = ClipPayload(files = files.map { ClipFileInfo(it.name, it.size, it.mime) })
+        val meta = meta(ClipKind.FILE, hash, payload, files.sumOf { it.size }, copiedAt, backfill)
+        sealedDir.mkdirs()
+        val blobs = files.mapIndexed { i, f ->
+            File(sealedDir, "$i.blob").also { out ->
+                f.file.inputStream().use { input -> out.outputStream().buffered().use { BlobCipher.encrypt(key, input, it) } }
+            }
+        }
+        return EncodedFiles(meta, blobs)
+    }
+
     /** The server-visible hash of a content hash, to compare with the hashes of synced clips. */
     fun keyedHash(contentHash: String): String = KeyedHash.forHash(key, contentHash)
 
     /**
-     * Fills in `text`, `width` and `height` from the sealed payload. Never throws for a bad clip: an unknown kind, a
+     * Fills in `text`, `width`, `height` and `files` from the sealed payload. Never throws for a bad clip: an unknown kind, a
      * clip sealed under another key, or a payload that doesn't open or parse comes back as [ClipKind.UNKNOWN], which
      * is shown but never copied.
      * @throws VaultKeyClosedException when the key was closed meanwhile: that says nothing about the clip.
      */
     fun decode(wire: ClipDto): ClipDto {
         // Never the server's own text, width or height: only what opens under this key is shown or searched.
-        val unknown = wire.copy(kind = ClipKind.UNKNOWN, text = null, width = null, height = null)
+        val unknown = wire.copy(kind = ClipKind.UNKNOWN, text = null, width = null, height = null, files = null)
         if (wire.kind == ClipKind.UNKNOWN) return unknown
         val sealed = wire.payload
         if (wire.keyId != key.keyId || sealed == null) return unknown
@@ -81,8 +113,11 @@ class ClipCodec(private val key: VaultKey) {
         }
         return when (wire.kind) {
             ClipKind.TEXT, ClipKind.LINK ->
-                payload.text?.let { wire.copy(text = it, width = null, height = null) } ?: unknown
-            ClipKind.IMAGE -> wire.copy(text = null, width = payload.width, height = payload.height)
+                payload.text?.let { wire.copy(text = it, width = null, height = null, files = null) } ?: unknown
+            ClipKind.IMAGE -> wire.copy(text = null, width = payload.width, height = payload.height, files = null)
+            // One blob per listed file, or the clip can't be downloaded as described.
+            ClipKind.FILE -> payload.files?.takeIf { it.isNotEmpty() && it.size == wire.blobCount }
+                ?.let { wire.copy(text = null, width = null, height = null, files = it) } ?: unknown
             ClipKind.UNKNOWN -> unknown
         }
     }
@@ -93,6 +128,13 @@ class ClipCodec(private val key: VaultKey) {
     /** @throws GeneralSecurityException if the blob doesn't open under this key. */
     fun decodeBlob(bytes: ByteArray): ByteArray =
         ByteArrayOutputStream().also { BlobCipher.decrypt(key, ByteArrayInputStream(bytes), it) }.toByteArray()
+
+    /**
+     * Streams the opened blob into [output], chunk by chunk as each authenticates.
+     * @throws GeneralSecurityException if the blob doesn't open; earlier chunks may already be written, so the caller
+     * discards [output] then.
+     */
+    fun decodeBlobTo(bytes: ByteArray, output: OutputStream) = BlobCipher.decrypt(key, ByteArrayInputStream(bytes), output)
 
     private fun meta(
         kind: ClipKind,

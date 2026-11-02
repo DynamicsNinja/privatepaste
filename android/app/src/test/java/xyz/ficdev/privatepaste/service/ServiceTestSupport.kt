@@ -1,6 +1,5 @@
 package xyz.ficdev.privatepaste.service
 
-import android.net.Uri
 import android.os.Looper
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
@@ -18,7 +17,14 @@ import xyz.ficdev.privatepaste.PrivatePasteApp
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
 import xyz.ficdev.privatepaste.clipboard.WindowsHostFileProvider
+import xyz.ficdev.privatepaste.clipboard.hostUriFor
+import xyz.ficdev.privatepaste.files.FileSaver
+import xyz.ficdev.privatepaste.core.ContentHash
+import xyz.ficdev.privatepaste.core.crypto.ClipCodec
+import xyz.ficdev.privatepaste.core.crypto.OutgoingFile
 import xyz.ficdev.privatepaste.core.crypto.VaultKey
+import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.storage.InMemoryKeyProvider
 import xyz.ficdev.privatepaste.storage.KeyProvider
 import xyz.ficdev.privatepaste.sync.SignInResult
@@ -36,11 +42,14 @@ class TestPrivatePasteApp : PrivatePasteApp() {
     override fun keyProvider(): KeyProvider = InMemoryKeyProvider()
 
     override fun clipboardWriter(files: ClipImageFiles): ClipboardWriter =
-        ClipboardWriter(this, files) { _, f ->
-            Uri.parse("content://${ClipboardWriter.AUTHORITY}/clipboard/${Uri.encode(f.name)}")
-        }
+        ClipboardWriter(this, files, ::hostUriFor)
+
+    override fun downloadsSaver(): FileSaver = FileSaver { files -> saver(files) }
 
     companion object {
+        /** What Save does with the materialized files; true by default, as if Downloads took them. */
+        @Volatile var saver: (List<File>) -> Boolean = { true }
+
         /** Call in @Before so image URIs resolve (FileProvider can't map Robolectric's cacheDir; see ClipboardWriterTest). */
         fun setUpHostProvider() {
             Robolectric.setupContentProvider(WindowsHostFileProvider::class.java, ClipboardWriter.AUTHORITY)
@@ -56,6 +65,7 @@ class FakeServer {
     val server = MockWebServer().also { it.start(InetAddress.getByName("127.0.0.1"), 0) }
     val url: String get() = "http://127.0.0.1:${server.port}/"
     val wsRequests = AtomicInteger()
+    val blobFetches = AtomicInteger()
 
     /** The server's vault key; the phone gets a copy in [signInTo]. Only its id is on the wire here. */
     val vaultKey: VaultKey = VaultKey.create()
@@ -121,6 +131,38 @@ class FakeServer {
         fun json(body: String, code: Int = 200) =
             MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(body)
     }
+}
+
+/**
+ * A file clip sealed under the server's vault key, opened as the cache holds it. The server answers its blobs
+ * (`/api/clips/<id>/blobs/<n>`) from then on, counted in [blobFetches]; [tmp] holds the plaintext and sealed files.
+ */
+fun FakeServer.fileClip(id: String, tmp: File, vararg files: Pair<String, ByteArray>): ClipDto {
+    val codec = ClipCodec(vaultKey)
+    val outgoing = files.mapIndexed { i, (name, bytes) ->
+        val f = File(tmp, "$id-in$i").apply { writeBytes(bytes) }
+        OutgoingFile(f, name, bytes.size.toLong(), "application/octet-stream", ContentHash.sha256Hex(bytes))
+    }
+    val sealedDir = File(tmp, "$id-sealed").apply { mkdirs() }
+    val encoded = codec.encodeFiles(outgoing, sealedDir, null, false)
+    val blobs = encoded.blobs.map { it.readBytes() }
+    val previous = other
+    other = { r ->
+        val n = r.path?.removePrefix("/api/clips/$id/blobs/")?.takeIf { it != r.path }?.toIntOrNull()
+        if (n != null) {
+            blobFetches.incrementAndGet()
+            MockResponse().setBody(okio.Buffer().write(blobs[n]))
+        } else {
+            previous(r)
+        }
+    }
+    return codec.decode(
+        ClipDto(
+            id = id, seq = 4, kind = ClipKind.FILE, hash = encoded.meta.hash, sizeBytes = encoded.meta.sizeBytes,
+            sourceDeviceId = "pc", sourceDeviceName = "Laptop", lastCopiedAt = java.time.Instant.parse("2026-11-02T10:00:00Z"),
+            payload = encoded.meta.payload, keyId = encoded.meta.keyId, blobCount = files.size,
+        ),
+    )
 }
 
 /**

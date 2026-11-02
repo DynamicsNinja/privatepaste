@@ -52,7 +52,8 @@ class ClipCodecTest {
     /** The DTO the server would send back for an upload. */
     private fun wire(meta: ClipUploadMeta, kind: ClipKind = ClipKind.entries.first { it.wire == meta.kind }) = ClipDto(
         id = "c1", seq = 1, kind = kind, hash = meta.hash, sizeBytes = meta.sizeBytes, lastCopiedAt = copiedAt,
-        payload = meta.payload, keyId = meta.keyId, hasThumb = kind == ClipKind.IMAGE, blobCount = if (kind == ClipKind.IMAGE) 1 else 0,
+        payload = meta.payload, keyId = meta.keyId, hasThumb = kind == ClipKind.IMAGE,
+        blobCount = if (kind == ClipKind.IMAGE) 1 else 0,
     )
 
     @Test
@@ -246,5 +247,63 @@ class ClipCodecTest {
         // Not UNKNOWN: the clip is fine, the key is gone. The caller must not cache anything for it.
         assertThrows(VaultKeyClosedException::class.java) { codec.decode(wire(meta)) }
         assertThrows(VaultKeyClosedException::class.java) { codec.encodeText("x", null, false) }
+    }
+
+    private fun outgoing(name: String, content: ByteArray, mime: String = "application/octet-stream"): OutgoingFile {
+        val file = tmp.newFile()
+        file.writeBytes(content)
+        return OutgoingFile(file, name, content.size.toLong(), mime, ContentHash.sha256Hex(content))
+    }
+
+    @Test
+    fun filesRoundTripWithOneBlobEachInOrder() {
+        val big = Random(7).nextBytes(BlobCipher.CHUNK_SIZE + 10)   // two chunks
+        val files = listOf(outgoing("a.txt", "hello".toByteArray(), "text/plain"), outgoing("b.bin", ByteArray(0)), outgoing("c.dat", big))
+        val sealedDir = tmp.newFolder()
+
+        val encoded = codec.encodeFiles(files, sealedDir, copiedAt = null, backfill = false)
+
+        val meta = encoded.meta
+        assertEquals("file", meta.kind)
+        assertEquals(5L + 0 + big.size, meta.sizeBytes)
+        assertNull(meta.copiedAt)
+        val digests = files.map { ContentHash.FileDigest(it.name, it.size, it.sha256Hex) }
+        assertEquals(codec.keyedHash(ContentHash.files(digests)), meta.hash)
+        // The payload holds only the file list, in blob order, with the .NET wire names.
+        val json = SealedBox.open(key, "payload", Base64.getDecoder().decode(meta.payload)).toString(Charsets.UTF_8)
+        assertEquals(
+            """{"files":[{"name":"a.txt","size":5,"mime":"text/plain"},{"name":"b.bin","size":0,"mime":"application/octet-stream"},""" +
+                """{"name":"c.dat","size":${big.size},"mime":"application/octet-stream"}]}""",
+            json,
+        )
+        assertEquals(3, encoded.blobs.size)
+        assertTrue("sealed blobs are written where they were asked", encoded.blobs.all { it.parentFile == sealedDir })
+        assertTrue("an empty file still has a blob (one empty final chunk)", encoded.blobs[1].length() > 0)
+
+        val decoded = codec.decode(wire(meta, ClipKind.FILE).copy(blobCount = 3))
+        assertEquals(ClipKind.FILE, decoded.kind)
+        assertNull(decoded.text)
+        assertEquals(listOf("a.txt", "b.bin", "c.dat"), decoded.files!!.map { it.name })
+        assertEquals(listOf(5L, 0L, big.size.toLong()), decoded.files!!.map { it.size })
+        assertEquals("hello", codec.decodeBlob(encoded.blobs[0].readBytes()).toString(Charsets.UTF_8))
+        assertEquals(0, codec.decodeBlob(encoded.blobs[1].readBytes()).size)
+        val out = ByteArrayOutputStream()
+        codec.decodeBlobTo(encoded.blobs[2].readBytes(), out)
+        assertTrue(big.contentEquals(out.toByteArray()))
+    }
+
+    @Test
+    fun aFileClipWithoutAMatchingFileListIsUnknown() {
+        val meta = codec.encodeFiles(listOf(outgoing("a.txt", byteArrayOf(1))), tmp.newFolder(), null, false).meta
+        assertEquals(ClipKind.UNKNOWN, codec.decode(wire(meta, ClipKind.FILE).copy(blobCount = 2)).kind)
+        val noFiles = Base64.getEncoder().encodeToString(SealedBox.seal(key, "payload", """{"text":"x"}""".toByteArray()))
+        assertEquals(ClipKind.UNKNOWN, codec.decode(wire(meta, ClipKind.FILE).copy(blobCount = 0, payload = noFiles)).kind)
+        // A text clip never carries a file list, whatever its payload says.
+        val textWithFiles = Base64.getEncoder().encodeToString(
+            SealedBox.seal(key, "payload", """{"text":"x","files":[{"name":"a","size":1,"mime":"m"}]}""".toByteArray()),
+        )
+        val text = codec.decode(wire(meta, ClipKind.TEXT).copy(payload = textWithFiles))
+        assertEquals("x", text.text)
+        assertNull(text.files)
     }
 }

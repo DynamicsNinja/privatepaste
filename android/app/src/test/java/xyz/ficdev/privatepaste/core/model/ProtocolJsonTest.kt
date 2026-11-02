@@ -276,4 +276,29 @@ class ProtocolJsonTest {
     fun knownKindsEncodeLowercase() {
         assertEquals("\"image\"", json.encodeToString(ClipKind.serializer(), ClipKind.IMAGE))
     }
+
+    @Test
+    fun fileKindRoundTripsAndFilesAreOptional() {
+        val clip = json.decodeFromString<ClipDto>(
+            linkClipJson.replace("\"kind\":\"link\"", "\"kind\":\"file\",\"blobCount\":2"),
+        )
+        assertEquals(ClipKind.FILE, clip.kind)
+        assertNull("the server never sends files", clip.files)
+        assertEquals("\"file\"", json.encodeToString(ClipKind.serializer(), ClipKind.FILE))
+
+        // The cache keeps the opened file list with the clip.
+        val opened = clip.copy(files = listOf(ClipFileInfo("report.pdf", 3, "application/pdf")))
+        assertEquals(opened, json.decodeFromString<ClipDto>(json.encodeToString(ClipDto.serializer(), opened)))
+    }
+
+    @Test
+    fun missingFileMbDefaultsTo25() {
+        val info = json.decodeFromString<ServerInfo>("""{"protocol":2,"kinds":["text"],"limits":{"textKb":1024,"imageMb":20}}""")
+        assertEquals(25, info.limits.fileMb)
+        val withFiles = json.decodeFromString<ServerInfo>(
+            """{"protocol":2,"kinds":["text","file"],"limits":{"textKb":1024,"imageMb":20,"fileMb":7}}""",
+        )
+        assertEquals(7, withFiles.limits.fileMb)
+        assertTrue("file" in withFiles.kinds)
+    }
 }

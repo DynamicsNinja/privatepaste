@@ -3,6 +3,12 @@ package xyz.ficdev.privatepaste.core
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import java.io.File
 
 class ContentHashTest {
     @Test
@@ -33,5 +39,20 @@ class ContentHashTest {
     fun otherWhitespaceIsKept() {
         assertNotEquals(ContentHash.text("a\tb"), ContentHash.text("a b"))
         assertNotEquals(ContentHash.text("a\n\nb"), ContentHash.text("a\nb"))
+    }
+
+    @Test
+    fun fileHashVector() {
+        val vector = Json.parseToJsonElement(File("../../docs/e2e-test-vectors.json").readText(Charsets.UTF_8))
+            .jsonObject.getValue("fileHash").jsonObject
+        val files = vector.getValue("files").jsonArray.map {
+            val o = it.jsonObject
+            ContentHash.FileDigest(
+                o.getValue("name").jsonPrimitive.content, o.getValue("size").jsonPrimitive.long, o.getValue("sha256Hex").jsonPrimitive.content,
+            )
+        }
+        assertEquals("0baeacb0a540c7f644e57744ae15f6df06f21ba4cdacf1444cec972fe60f4940", vector.getValue("expected").jsonPrimitive.content)
+        assertEquals(vector.getValue("expected").jsonPrimitive.content, ContentHash.files(files))
+        assertEquals("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", ContentHash.sha256Hex("hello".toByteArray()))
     }
 }

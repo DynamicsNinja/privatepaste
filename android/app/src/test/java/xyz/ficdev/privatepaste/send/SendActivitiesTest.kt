@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -22,6 +23,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowToast
+import xyz.ficdev.privatepaste.core.model.ServerLimits
 import java.util.concurrent.TimeUnit
 
 /** The send runs in the app scope after the activity has finished, so wait for its toast. */
@@ -119,6 +121,128 @@ class ShareActivityTest {
             assertEquals("Couldn't read the image", awaitToast())
         }
         assertEquals(0, f.server.requestCount)
+    }
+
+    private val app get() = ApplicationProvider.getApplicationContext<Application>()
+
+    private fun stream(uri: String, bytes: ByteArray): android.net.Uri =
+        android.net.Uri.parse(uri).also { shadowOf(app.contentResolver).registerInputStream(it, java.io.ByteArrayInputStream(bytes)) }
+
+    private fun share(intent: Intent): String {
+        val controller = Robolectric.buildActivity(ShareActivity::class.java, intent).setup()
+        awaitFinish { controller.get().isFinishing }
+        return awaitToast()
+    }
+
+    private fun shareMultiple(vararg uris: android.net.Uri) =
+        Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*").putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(*uris))
+
+    @Test
+    fun aSharedPdfBecomesOneFileClip() {
+        f.respondWith { f.echo(it, "f") }
+        val pdf = "%PDF-1.7 report".toByteArray()
+        val uri = stream("content://com.example.docs/document/report.pdf", pdf)
+
+        assertEquals("Sent to your devices", share(Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, uri)))
+
+        val upload = f.uploaded(f.server.takeRequest())
+        assertEquals("file", upload.meta.kind)
+        assertEquals("report.pdf", upload.files!!.single().name)
+        assertEquals(pdf.size.toLong(), upload.files!!.single().size)
+        assertEquals("application/pdf", upload.files!!.single().mime)
+        assertEquals(pdf.size.toLong(), upload.meta.sizeBytes)
+        assertArrayEquals(pdf, xyz.ficdev.privatepaste.core.crypto.ClipCodec(f.vaultKey).decodeBlob(upload.blobs.single()))
+        assertEquals(listOf("report.pdf"), f.cache.items.value.single().files!!.map { it.name })
+        assertTrue("outgoing copies are removed after the send", f.outgoing.walkTopDown().none { it.isFile })
+    }
+
+    @Test
+    fun sendMultipleWithAPngAndAPdfBecomesOneClipWithTwoBlobs() {
+        f.respondWith { f.echo(it, "f") }
+        val png = SenderFixture.png(4, 4)
+        val a = stream("content://media/external/images/media/9", png)
+        val b = stream("content://com.example.docs/document/notes.pdf", byteArrayOf(1, 2, 3))
+
+        assertEquals("Sent to your devices", share(shareMultiple(a, b)))
+
+        assertEquals(1, f.server.requestCount)
+        val upload = f.uploaded(f.server.takeRequest())
+        assertEquals("file", upload.meta.kind)
+        assertEquals(2, upload.blobs.size)
+        assertEquals(listOf("9", "notes.pdf"), upload.files!!.map { it.name })
+        assertEquals(listOf(png.size.toLong(), 3L), upload.files!!.map { it.size })
+    }
+
+    @Test
+    fun aSinglePngStillSendsAnImage() {
+        f.respondWith { f.echo(it, "i") }
+        val uri = stream("content://media/external/images/media/8", SenderFixture.png(6, 6))
+
+        assertEquals("Sent to your devices", share(Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri)))
+
+        assertEquals("image", f.uploaded(f.server.takeRequest()).meta.kind)
+    }
+
+    @Test
+    fun fileSharesRefuseOwnFileProviderAndFileUris() {
+        val own = android.net.Uri.parse("content://xyz.ficdev.privatepaste.files/files/c1/a.pdf")
+        val path = android.net.Uri.parse("file:///data/data/xyz.ficdev.privatepaste/files/session.bin")
+        for (intent in listOf(
+            Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, own),
+            Intent(Intent.ACTION_SEND).setType("application/octet-stream").putExtra(Intent.EXTRA_STREAM, path),
+            shareMultiple(stream("content://com.example.docs/document/ok.pdf", byteArrayOf(1)), own),
+        )) {
+            ShadowToast.reset()
+            assertEquals("Couldn't read the files", share(intent))
+        }
+        assertEquals(0, f.server.requestCount)
+    }
+
+    @Test
+    fun filesOverTheLimitAreNotSent() {
+        f.limits = ServerLimits(textKb = 1024, imageMb = 20, fileMb = 1)
+        val a = stream("content://com.example.docs/document/a.bin", ByteArray(700 * 1024))
+        val b = stream("content://com.example.docs/document/b.bin", ByteArray(400 * 1024))
+
+        assertEquals("Files over 1 MB aren't synced.", share(shareMultiple(a, b)))
+
+        assertEquals(0, f.server.requestCount)
+        assertTrue(f.outgoing.walkTopDown().none { it.isFile })
+    }
+
+    @Test
+    fun anOldServerGetsNoFiles() {
+        f.kinds = listOf("text", "link", "image")
+        val uri = stream("content://com.example.docs/document/report.pdf", byteArrayOf(1))
+
+        assertEquals(
+            "Update your PrivatePaste server to sync files.",
+            share(Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, uri)),
+        )
+        assertEquals(0, f.server.requestCount)
+    }
+
+    @Test
+    fun offlineFilesAreNeverQueued() {
+        f.respondWith { f.problem(503, "down") }
+        val uri = stream("content://com.example.docs/document/report.pdf", byteArrayOf(1, 2))
+
+        assertEquals(
+            "Couldn't send the files. Share them again when you're online.",
+            share(Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, uri)),
+        )
+        assertTrue("nothing is queued", f.queue.isEmpty)
+        assertTrue(f.outgoing.walkTopDown().none { it.isFile })
+
+        // Unreachable before the upload (the server's limits can't be read): the same message, nothing read or queued.
+        ShadowToast.reset()
+        f.limitsError = xyz.ficdev.privatepaste.api.ApiException.Transient("offline")
+        val again = stream("content://com.example.docs/document/report2.pdf", byteArrayOf(3))
+        assertEquals(
+            "Couldn't send the files. Share them again when you're online.",
+            share(Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, again)),
+        )
+        assertTrue(f.queue.isEmpty)
     }
 
     @Test

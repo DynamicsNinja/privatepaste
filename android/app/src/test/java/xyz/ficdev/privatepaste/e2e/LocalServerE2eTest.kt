@@ -115,6 +115,7 @@ class LocalServerE2eTest {
         val capture = LocalCaptureClock()
         val sender = ClipSender(
             phoneApi, { codec }, { phoneApi.serverInfo()!!.limits }, queue, cache, capture, { }, Clock.systemUTC(),
+            kinds = { phoneApi.serverInfo()!!.kinds }, outgoing = tmp.newFolder("outgoing"),
         )
         val engine = SyncEngine(
             api = phoneApi, cache = cache, queue = queue, thumbs = thumbs,

@@ -153,6 +153,7 @@ private fun KindTile(kind: ClipKind) {
         ClipKind.TEXT -> R.drawable.ic_kind_text to R.string.history_kind_text
         ClipKind.LINK -> R.drawable.ic_kind_link to R.string.history_kind_link
         ClipKind.IMAGE -> R.drawable.ic_kind_image to R.string.history_kind_image
+        ClipKind.FILE -> R.drawable.ic_kind_text to R.string.history_kind_unknown   // placeholder: Task 7 adds the file icon
         ClipKind.UNKNOWN -> R.drawable.ic_kind_text to R.string.history_kind_unknown
     }
     Box(
