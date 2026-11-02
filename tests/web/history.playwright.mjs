@@ -335,6 +335,60 @@ try {
     assert.equal(text, i === 0 ? 'first file' : 'second file');
   }
 
+  step('type chips: one at a time, inside search and the tab, search older keeps the type, a reload starts at All');
+  const chip = kind => page.locator(`#filters .chip[data-filter="${kind}"]`);
+  const pressed = async () => page.locator('#filters .chip[aria-pressed="true"]').evaluateAll(els => els.map(e => e.dataset.filter));
+  assert.deepEqual(await page.locator('#filters .chip').evaluateAll(els => els.map(e => e.textContent.trim())),
+    ['All', 'Text', 'Links', 'Images', 'Files']);
+  assert.equal(await page.locator('#filters .chip svg').count(), 4);
+  assert.deepEqual(await pressed(), ['all']);
+  await chip('file').click();
+  assert.deepEqual(await pressed(), ['file']);
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  assert.equal(await fileRow.isVisible(), true);
+  await page.fill('#search-input', 'notes');
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  await page.fill('#search-input', 'filler');
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  assert.equal(await text('#history-empty'), 'No clips match that search.');
+  // The Files filter paged to the end of the history; reload so "Search older clips" has something left to fetch.
+  await page.reload();
+  await fileRow.waitFor();
+  await page.fill('#search-input', 'needle');
+  await chip('text').click();
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  await page.waitForSelector('#search-older:not([hidden])');
+  await page.click('#search-older');
+  await page.waitForSelector('#search-older', { state: 'hidden' });
+  await row(needleId).waitFor();
+  assert.equal(await page.locator('.clip:visible').count(), 1);
+  await chip('link').click();
+  assert.equal(await page.locator('.clip:visible').count(), 0);
+  await page.fill('#search-input', '');
+  await chip('link').click();
+  assert.deepEqual(await pressed(), ['all']);
+  for (const kind of ['text', 'link', 'image', 'file']) {
+    await chip(kind).click();
+    const kinds = await page.locator('.clip:visible').evaluateAll(els => [...new Set(els.map(e => e.dataset.kind))]);
+    assert.deepEqual(kinds, [kind]);
+  }
+  await chip('all').click();
+  assert.deepEqual(await pressed(), ['all']);
+  assert.ok(await page.locator('.clip:visible').count() > 50);
+  await chip('link').focus();
+  await page.keyboard.press('Enter');
+  assert.deepEqual(await pressed(), ['link']);
+  await shoot('history-filter');
+  await page.click('.tabs a:has-text("Pinned")');
+  await page.waitForSelector('#clips-view:not([hidden])');
+  assert.deepEqual(await pressed(), ['all']);
+  await chip('file').click();
+  await page.waitForSelector('#history-empty:not([hidden])');
+  assert.equal(await text('#history-empty'), 'No pinned files');
+  await page.goto(`${url}/`);
+  await row(fileId).waitFor();
+  assert.deepEqual(await pressed(), ['all']);
+
   step('a loaded clip under another key means encryption was reset in another tab: the key goes');
   await page.route('**/api/clips?*', async route => {
     const response = await route.fetch();
@@ -427,6 +481,19 @@ try {
   await page.fill('#unlock-passphrase', passphrase);
   await page.click('#unlock-form button');
   await until(id => document.querySelector(`.clip[data-id="${id}"] img.thumb`)?.naturalWidth > 0, imageId);
+
+  step('a type whose matches sit beyond the first page loads older pages by itself, never a blank list with Load more');
+  const newer = await upload(Array.from({ length: 50 }, (_, i) => ({ kind: 'text', text: `newer clip ${i}` })));
+  await page.reload();
+  await row(newer[49]).waitFor({ timeout: 30000 });
+  assert.equal(await page.locator('.clip[data-kind="image"]').count(), 0);
+  await page.locator('#filters .chip[data-filter="image"]').click();
+  await until(() => document.querySelectorAll('.clip[data-kind="image"]:not([hidden])').length === 2);
+  assert.equal(await page.locator('.clip:visible').count(), 2);
+  assert.equal(await visible('#history-empty'), false);
+  assert.equal(await visible('#load-more'), false);
+  await shoot('history-filter-older');
+  await page.locator('#filters .chip[data-filter="all"]').click();
 
   // ---- Settings: the encryption panels ----
   const unlockWith = async phrase => {
@@ -573,6 +640,10 @@ try {
   assert.deepEqual(pageErrors, []);
 
   console.log('history.playwright.mjs: all checks passed');
+} catch (error) {
+  // Closing the browser below would otherwise bury this under a TargetClosedError.
+  console.error(error);
+  process.exitCode = 1;
 } finally {
   await browser.close();
 }

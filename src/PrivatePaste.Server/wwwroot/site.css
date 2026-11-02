@@ -183,6 +183,19 @@ button.copy.done .done-icon { display: inline; }
 .tabs a:hover { color: var(--text); background: var(--raised); }
 .tabs a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 
+/* Type filter chips under the search: one pressed at a time, styled like the tabs' selected state. */
+.search:has(+ .filters) { margin-bottom: .75rem; }
+.filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.25rem; }
+.chip {
+    display: inline-flex; align-items: center; gap: .35rem; font-size: .85rem; font-weight: 600; line-height: 1.2;
+    padding: .35rem .7rem; border-radius: 8px; background: var(--surface); color: var(--muted);
+}
+.chip:hover { color: var(--text); border-color: var(--line); }
+.chip[aria-pressed="true"] { color: var(--text); background: var(--accent-soft); border-color: var(--accent); }
+.chip[aria-pressed="true"] .chip-icon { color: var(--accent); }
+.chip-icon { display: inline-flex; }
+.chip-icon svg { width: 14px; height: 14px; }
+
 /* Pin: a marker on pinned rows in History, and the toggle in every row's actions. */
 .pin-icon { width: 1.15em; height: 1.15em; vertical-align: -.2em; flex: none; }
 .pin-marker { color: var(--accent); margin-right: .35em; }
@@ -269,6 +282,9 @@ dialog .hint { margin: .15rem 0 .5rem; }
 
 @media (max-width: 34rem) {
     .clip { flex-wrap: wrap; }
+    /* All five chips on one line at 360px. */
+    .filters { gap: .3rem; }
+    .chip { padding: .35rem .5rem; gap: .25rem; font-size: .8rem; }
     .actions { width: 100%; justify-content: flex-end; }
     .bar .wordmark { display: none; }
     nav { gap: 0; }

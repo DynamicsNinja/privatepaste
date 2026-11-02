@@ -47,6 +47,14 @@
             <input type="search" id="search-input" name="q" value="@Model.Q" placeholder="@searchLabel" aria-label="@searchLabel">
             <button type="submit">Search</button>
         </form>
+        @* The icons are copied from the kind-icons template by history.js; one type at a time, All is the default. *@
+        <div class="filters" id="filters" role="group" aria-label="Filter by type">
+            <button type="button" class="chip" data-filter="all" aria-pressed="true">All</button>
+            <button type="button" class="chip" data-filter="text" aria-pressed="false"><span class="chip-icon"></span>Text</button>
+            <button type="button" class="chip" data-filter="link" aria-pressed="false"><span class="chip-icon"></span>Links</button>
+            <button type="button" class="chip" data-filter="image" aria-pressed="false"><span class="chip-icon"></span>Images</button>
+            <button type="button" class="chip" data-filter="file" aria-pressed="false"><span class="chip-icon"></span>Files</button>
+        </div>
         <p class="muted empty" id="history-empty" hidden></p>
         <ul class="clips" id="clips"></ul>
         <div class="list-footer">

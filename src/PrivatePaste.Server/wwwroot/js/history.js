@@ -28,6 +28,7 @@ const pageError = $('history-error');
 const loadMore = $('load-more');
 const searchOlder = $('search-older');
 const searchInput = $('search-input');
+const chips = [...document.querySelectorAll('#filters .chip')];
 
 let vault = null;
 let entries = []; // { clip, content, row, thumbUrl }, in list order
@@ -36,6 +37,10 @@ let cursor = null;
 let exhausted = false;
 // Bumped on Lock, so a page or thumbnail still in flight is dropped instead of drawn into the locked page.
 let generation = 0;
+// 'all' or a kind. Not remembered: opening the page starts at All.
+let filter = 'all';
+let visibleCount = 0;
+let filling = false;
 
 /**
  * True, after asking vault-ui.js to forget the key, when the server holds a clip sealed under another key: the owner
@@ -249,17 +254,41 @@ function refresh() {
   const query = searchInput.value.trim().toLowerCase();
   let visible = 0;
   entries.forEach((entry, index) => {
-    // For a file clip, text is its file names.
-    const match = !query || (entry.content.text ?? '').toLowerCase().includes(query);
+    // For a file clip, text is its file names. The type filter applies before the search, so a search runs inside it.
+    const match = e2e.matchesFilter(entry.clip.kind, filter)
+      && (!query || (entry.content.text ?? '').toLowerCase().includes(query));
     entry.row.hidden = !match;
     // Only the true top of the list gets the "just arrived" highlight, not the first search hit.
-    entry.row.classList.toggle('newest', index === 0 && !query);
+    entry.row.classList.toggle('newest', index === 0 && !query && filter === 'all');
     if (match) visible++;
   });
-  empty.textContent = query ? NO_MATCH : pinnedTab ? EMPTY_PINNED : EMPTY_HISTORY;
+  visibleCount = visible;
+  empty.textContent = query ? NO_MATCH : filter !== 'all' ? e2e.filterEmptyText(filter, pinnedTab)
+    : pinnedTab ? EMPTY_PINNED : EMPTY_HISTORY;
   empty.hidden = visible > 0 || (!query && !exhausted);
   loadMore.hidden = exhausted || Boolean(query);
   searchOlder.hidden = exhausted || !query;
+  fillFiltered();
+}
+
+/**
+ * With a type chosen and fewer than a page of it loaded, keeps loading older pages (until the server has no more), so the
+ * list is never blank with a Load more button. Load more shows disabled meanwhile, and the empty text waits for the end.
+ */
+async function fillFiltered() {
+  if (filling || filter === 'all' || searchInput.value.trim() || exhausted || !vault || visibleCount >= PAGE_SIZE) return;
+  filling = true;
+  const at = generation;
+  loadMore.disabled = true;
+  try {
+    while (at === generation && vault && filter !== 'all' && !searchInput.value.trim() && !exhausted && visibleCount < PAGE_SIZE)
+      await loadPage();
+  } catch (error) {
+    fail(error);
+  } finally {
+    filling = false;
+    loadMore.disabled = false;
+  }
 }
 
 async function loadPage() {
@@ -383,6 +412,17 @@ searchOlder.addEventListener('click', () => whileBusy(searchOlder, async () => {
   while (!exhausted && vault) await loadPage();
 }));
 searchInput.addEventListener('input', refresh);
+
+for (const chip of chips) {
+  const kind = chip.dataset.filter;
+  const slot = chip.querySelector('.chip-icon');
+  if (slot) slot.append(icon('kind-icons', `[data-kind="${kind}"]`));
+  chip.addEventListener('click', () => {
+    filter = e2e.nextFilter(filter, kind);
+    for (const other of chips) other.setAttribute('aria-pressed', String(other.dataset.filter === filter));
+    refresh();
+  });
+}
 $('search').addEventListener('submit', event => {
   event.preventDefault();
   refresh();
