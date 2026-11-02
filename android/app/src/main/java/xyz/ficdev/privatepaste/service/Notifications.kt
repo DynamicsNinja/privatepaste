@@ -16,6 +16,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import xyz.ficdev.privatepaste.MainActivity
 import xyz.ficdev.privatepaste.R
+import xyz.ficdev.privatepaste.core.FileNames
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.sync.SyncState
@@ -43,6 +44,7 @@ object Notifications {
     private const val ALERT_TIMEOUT_MS = 10_000L
     private const val REQUEST_OPEN = 0
     private const val REQUEST_COPY = 1
+    private const val REQUEST_SAVE = 2
 
     /** Idempotent; call from `Application.onCreate`. */
     fun createChannels(context: Context) {
@@ -91,10 +93,10 @@ object Notifications {
     }
 
     /**
-     * Posts (or replaces: one id for all) the heads-up for [clip] with its Copy action. False when notifications are
-     * not allowed, so the engine does not record the clip as applied.
+     * Posts (or replaces: one id for all) the heads-up for [clip] with its Copy action, and a Save action when [save]
+     * (file clips). False when notifications are not allowed, so the engine does not record the clip as applied.
      */
-    fun postClip(context: Context, clip: ClipDto): Boolean {
+    fun postClip(context: Context, clip: ClipDto, copy: Boolean = true, save: Boolean = false): Boolean {
         val device = clip.sourceDeviceName ?: "another device"
         val title = clip.sourceUserName?.takeIf { it.isNotBlank() }
             ?.let { context.getString(R.string.notification_new_clip_from_person, it, device) }
@@ -102,25 +104,22 @@ object Notifications {
         val body = when (clip.kind) {
             ClipKind.IMAGE -> if (clip.width != null && clip.height != null) "Image ${clip.width}×${clip.height}" else "Image"
             ClipKind.TEXT, ClipKind.LINK -> preview(clip.text.orEmpty())
+            ClipKind.FILE -> clip.files?.takeIf { it.isNotEmpty() }?.let(FileNames::rowText) ?: "Files"
             ClipKind.UNKNOWN -> "New clip"
         }
-        val copy = Intent(context, CopyActivity::class.java)
-            .putExtra(CopyActivity.EXTRA_CLIP_ID, clip.id)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val copyIntent = PendingIntent.getActivity(
-            context, REQUEST_COPY, copy, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
         // Clips can be passwords: the lock screen shows only that a clip arrived.
         val public = NotificationCompat.Builder(context, CHANNEL_CLIPS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .build()
-        val n = NotificationCompat.Builder(context, CHANNEL_CLIPS)
+        val builder = NotificationCompat.Builder(context, CHANNEL_CLIPS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setContentIntent(openApp(context))
-            .addAction(0, "Copy", copyIntent)
+        if (copy) builder.addAction(0, "Copy", clipAction(context, REQUEST_COPY, CopyActivity::class.java, clip.id))
+        if (save) builder.addAction(0, "Save", clipAction(context, REQUEST_SAVE, SaveActivity::class.java, clip.id))
+        val n = builder
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -129,6 +128,14 @@ object Notifications {
             .build()
         return post(context, ID_CLIP, n, channel = CHANNEL_CLIPS)
     }
+
+    /** Both targets read the clip id from the same extra ([CopyActivity.EXTRA_CLIP_ID] = [SaveActivity.EXTRA_CLIP_ID]). */
+    private fun clipAction(context: Context, request: Int, target: Class<*>, clipId: String): PendingIntent =
+        PendingIntent.getActivity(
+            context, request,
+            Intent(context, target).putExtra(CopyActivity.EXTRA_CLIP_ID, clipId).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
     fun cancelClip(context: Context) = NotificationManagerCompat.from(context).cancel(ID_CLIP)
 

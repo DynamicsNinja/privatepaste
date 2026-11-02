@@ -28,5 +28,19 @@ object ContentHash {
         fun finish(): String = hex(digest.digest())
     }
 
+    /** One file of a file clip: its name as sent, its size in bytes and [sha256Hex] of its content. */
+    data class FileDigest(val name: String, val size: Long, val sha256Hex: String)
+
+    /** Hex of SHA-256 over UTF-8 "f:" then, per file in order, `name + NUL + size + NUL + sha256hex + LF` (ContentHash.ForFiles). */
+    fun files(files: List<FileDigest>): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update("f:".toByteArray(Charsets.UTF_8))
+        for (f in files) digest.update("${f.name}\u0000${f.size}\u0000${f.sha256Hex}\n".toByteArray(Charsets.UTF_8))
+        return hex(digest.digest())
+    }
+
+    /** Lowercase hex SHA-256 of [bytes]. */
+    fun sha256Hex(bytes: ByteArray): String = hex(MessageDigest.getInstance("SHA-256").digest(bytes))
+
     private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
 }

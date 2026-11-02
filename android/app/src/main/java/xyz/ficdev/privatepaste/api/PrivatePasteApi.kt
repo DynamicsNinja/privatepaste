@@ -18,6 +18,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -35,6 +36,7 @@ import xyz.ficdev.privatepaste.core.model.ServerInfo
 import xyz.ficdev.privatepaste.core.model.SyncPage
 import xyz.ficdev.privatepaste.core.model.VaultWrap
 import xyz.ficdev.privatepaste.sync.SyncApi
+import java.io.File
 import java.io.IOException
 import java.time.Duration
 import java.util.Base64
@@ -114,18 +116,32 @@ class PrivatePasteApi(
     /** The sealed thumbnail (ciphertext). */
     override suspend fun thumb(id: String): ByteArray = bytes(url("api/clips") { addPathSegment(id); addPathSegment("thumb") })
 
-    /** Sealed blob [n] of a clip (ciphertext). */
-    suspend fun blob(id: String, n: Int): ByteArray =
-        bytes(url("api/clips") { addPathSegment(id); addPathSegment("blobs"); addPathSegment(n.toString()) })
+    /**
+     * Sealed blob [n] of a clip (ciphertext). [expectedBytes] (a file's size) gives a large download more time, as
+     * [uploadTimeout] does an upload; 0 keeps the usual timeout.
+     */
+    suspend fun blob(id: String, n: Int, expectedBytes: Long = 0): ByteArray =
+        bytes(url("api/clips") { addPathSegment(id); addPathSegment("blobs"); addPathSegment(n.toString()) }, blobTimeout(expectedBytes))
+
+    /** The usual timeout plus 1 s per started 256 KB of [expectedBytes], the extra capped like [uploadTimeout]'s. */
+    internal fun blobTimeout(expectedBytes: Long): Duration =
+        requestTimeout.plus(uploadTimeout(expectedBytes).minus(REQUEST_TIMEOUT))
 
     /** Uploads a sealed clip: [meta], the sealed [thumb] if any, and the sealed [blobs] in order (`blob0`, `blob1`, ...). */
-    suspend fun uploadClip(meta: ClipUploadMeta, thumb: ByteArray?, blobs: List<ByteArray>): ClipDto {
+    suspend fun uploadClip(meta: ClipUploadMeta, thumb: ByteArray?, blobs: List<ByteArray>): ClipDto =
+        upload(meta, thumb, blobs.map { it.toRequestBody(binaryType) })
+
+    /** Uploads a sealed file clip whose blobs are the sealed [blobs] files, streamed in order. */
+    suspend fun uploadFileClip(meta: ClipUploadMeta, blobs: List<File>): ClipDto =
+        upload(meta, null, blobs.map { it.asRequestBody(binaryType) })
+
+    private suspend fun upload(meta: ClipUploadMeta, thumb: ByteArray?, blobs: List<RequestBody>): ClipDto {
         val form = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("meta", null, jsonBody(ClipUploadMeta.serializer(), meta))
         if (thumb != null) form.addFormDataPart("thumb", "thumb", thumb.toRequestBody(binaryType))
-        blobs.forEachIndexed { i, blob -> form.addFormDataPart("blob$i", "blob$i", blob.toRequestBody(binaryType)) }
+        blobs.forEachIndexed { i, blob -> form.addFormDataPart("blob$i", "blob$i", blob) }
         val request = request("api/clips").post(form.build()).build()
-        val size = meta.payload.length.toLong() + (thumb?.size ?: 0) + blobs.sumOf { it.size.toLong() }
+        val size = meta.payload.length.toLong() + (thumb?.size ?: 0) + blobs.sumOf { it.contentLength() }
         return execute(request, uploadTimeout(size)) { decode(it, ClipDto.serializer()) }
     }
 
@@ -177,8 +193,8 @@ class PrivatePasteApi(
         return wsClient.newWebSocket(request, listener)
     }
 
-    private suspend fun bytes(url: HttpUrl): ByteArray =
-        execute(get(url), requestTimeout) {
+    private suspend fun bytes(url: HttpUrl, timeout: Duration = requestTimeout): ByteArray =
+        execute(get(url), timeout) {
             try {
                 it.body.bytes()
             } catch (e: IOException) {

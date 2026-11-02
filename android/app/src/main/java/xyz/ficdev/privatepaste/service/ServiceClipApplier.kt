@@ -15,7 +15,8 @@ import xyz.ficdev.privatepaste.sync.ClipApplier
  * Delivers a clip from another device the way the settings say, read on every clip so a change applies at once:
  * [DeliveryMode.AUTOMATIC] writes the clipboard; [DeliveryMode.NOTIFICATION] posts the Copy notification. Image
  * clips are fetched first in both modes (in notification mode the PNG is kept in [files] for the Copy action); a
- * failed fetch returns false; [fetchImage] returns the opened PNG. [ClipKind.UNKNOWN] clips are never delivered. A 401 propagates, so the engine treats it as a revoke. Runs on the engine's IO scope.
+ * failed fetch returns false; [fetchImage] returns the opened PNG. A file clip is never downloaded on arrival: it posts
+ * its notification with Save (and Copy in notification mode), which download on demand. [ClipKind.UNKNOWN] clips are never delivered. A 401 propagates, so the engine treats it as a revoke. Runs on the engine's IO scope.
  */
 class ServiceClipApplier(
     private val context: Context,
@@ -29,6 +30,10 @@ class ServiceClipApplier(
         // A kind from a newer client, or a clip that didn't open: whatever text it carries never reaches the clipboard.
         if (clip.kind == ClipKind.UNKNOWN) return false
         val mode = deliveryMode()
+        if (clip.kind == ClipKind.FILE) {
+            if (clip.files.isNullOrEmpty()) return false
+            return Notifications.postClip(context, clip, copy = mode == DeliveryMode.NOTIFICATION, save = true)
+        }
         if (clip.kind == ClipKind.IMAGE) {
             val png = fetch(clip.id) ?: return false
             return when (mode) {

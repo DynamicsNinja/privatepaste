@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Images placed on the clipboard (ClipImageFiles). Nothing else is shared. -->
+<!-- Images placed on the clipboard (ClipImageFiles) and the opened files of file clips (ClipFileStore). Nothing else is shared. -->
 <paths>
     <cache-path name="clipboard" path="clipboard/" />
+    <cache-path name="files" path="files/" />
 </paths>

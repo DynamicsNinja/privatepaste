@@ -299,6 +299,24 @@ class HistoryViewModelTest {
     }
 
     @Test
+    fun searchMatchesEveryFileName() = runTest(dispatcher) {
+        val files = clip("f", 3, text = null, kind = ClipKind.FILE).copy(
+            files = listOf(
+                xyz.ficdev.privatepaste.core.model.ClipFileInfo("report.pdf", 1, "application/pdf"),
+                xyz.ficdev.privatepaste.core.model.ClipFileInfo("Holiday.JPG", 2, "image/jpeg"),
+            ),
+        )
+        cache.value = listOf(files, clip("t", 1, "a report"))
+        val vm = collecting(vm())
+        vm.onQueryChange("holiday")
+        advanceUntilIdle()
+        assertEquals(listOf("f"), vm.ids())
+        vm.onQueryChange("report")
+        advanceUntilIdle()
+        assertEquals(listOf("f", "t"), vm.ids())
+    }
+
+    @Test
     fun pagingAppends() = runTest(dispatcher) {
         cache.value = listOf(clip("b", 20), clip("a", 19))
         remote.pages["|"] = ClipPage(listOf(clip("b", 20), clip("a", 19), clip("p1", 18)), "c1")

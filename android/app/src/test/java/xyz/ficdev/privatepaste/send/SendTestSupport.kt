@@ -18,6 +18,7 @@ import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.crypto.SealedBox
 import xyz.ficdev.privatepaste.core.crypto.VaultKey
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ClipUploadMeta
 import xyz.ficdev.privatepaste.core.model.ProtocolJson
@@ -46,8 +47,13 @@ class TestSenderApp : Application(), SenderProvider {
     }
 }
 
-/** One `POST /api/clips` as the server receives it; [text] is the opened payload text (null for an image). */
-class Upload(val meta: ClipUploadMeta, val text: String?, val parts: Map<String, ByteArray>)
+/**
+ * One `POST /api/clips` as the server receives it; [text] is the opened payload text (null for an image or files),
+ * [files] the opened file list of a file clip.
+ */
+class Upload(val meta: ClipUploadMeta, val text: String?, val parts: Map<String, ByteArray>, val files: List<ClipFileInfo>? = null) {
+    val blobs: List<ByteArray> get() = generateSequence(0) { it + 1 }.map { parts["blob$it"] }.takeWhile { it != null }.map { it!! }.toList()
+}
 
 /** A ClipSender wired to a MockWebServer and real (temp-dir) storage, sealing under [vaultKey]. */
 class SenderFixture(val dir: File) {
@@ -67,6 +73,12 @@ class SenderFixture(val dir: File) {
     @Volatile var codec: ClipCodec? = ClipCodec(vaultKey)
     @Volatile var limits = ServerLimits(textKb = 1024, imageMb = 20)
 
+    /** The kinds the server says it takes (`/api/server-info`). */
+    @Volatile var kinds = listOf("text", "link", "image", "file")
+
+    /** Where shared files are copied while the URI grant lasts. */
+    val outgoing = File(dir, "outgoing")
+
     /** Set: asking for the limits fails with it, as when the server can't be reached. */
     @Volatile var limitsError: Exception? = null
     val keyResets = AtomicInteger()
@@ -79,6 +91,7 @@ class SenderFixture(val dir: File) {
     fun sender(isEnding: () -> Boolean = { false }) = ClipSender(
         api, { codec }, { limitsError?.let { throw it }; limits }, queue, cache, capture, { notices += it }, Clock.fixed(now, ZoneOffset.UTC),
         onKeyReset = { resetKeyIds += it; keyResets.incrementAndGet() }, isEnding = isEnding,
+        kinds = { limitsError?.let { throw it }; kinds }, outgoing = outgoing,
     )
 
     /** A clip as the server returns it: [text] sealed in its payload under [vaultKey]. */
@@ -91,9 +104,10 @@ class SenderFixture(val dir: File) {
 
     /** Answers an upload with the clip the server would store from it. */
     fun echo(request: RecordedRequest, id: String = "c-${request.sequenceNumber}"): MockResponse {
-        val meta = uploaded(request).meta
+        val upload = uploaded(request)
+        val meta = upload.meta
         return json(
-            """{"id":"$id","seq":5,"kind":"${meta.kind}","hash":"${meta.hash}","sizeBytes":${meta.sizeBytes},""" +
+            """{"id":"$id","seq":5,"kind":"${meta.kind}","hash":"${meta.hash}","sizeBytes":${meta.sizeBytes},"blobCount":${upload.blobs.size},""" +
                 """"sourceDeviceId":"d","sourceDeviceName":"Phone","lastCopiedAt":"2026-10-28T12:00:05+00:00",""" +
                 """"payload":"${meta.payload}","keyId":"${meta.keyId}"}""",
         )
@@ -111,13 +125,14 @@ class SenderFixture(val dir: File) {
             }
         }
         val meta = ProtocolJson.json.decodeFromString(ClipUploadMeta.serializer(), parts.getValue("meta").decodeToString())
-        val text = if (meta.kind == "image") null else ClipCodec(vaultKey).decode(
+        val opened = ClipCodec(vaultKey).decode(
             ClipDto(
-                id = "x", seq = 1, kind = ClipKind.TEXT, hash = meta.hash, sizeBytes = meta.sizeBytes,
-                lastCopiedAt = now, payload = meta.payload, keyId = meta.keyId,
+                id = "x", seq = 1, kind = if (meta.kind == "file") ClipKind.FILE else ClipKind.TEXT, hash = meta.hash,
+                sizeBytes = meta.sizeBytes, lastCopiedAt = now, payload = meta.payload, keyId = meta.keyId,
+                blobCount = parts.keys.count { it.startsWith("blob") },
             ),
-        ).text
-        return Upload(meta, text, parts)
+        )
+        return Upload(meta, opened.text.takeIf { meta.kind != "image" }, parts, opened.files)
     }
 
     fun json(body: String, code: Int = 200) =
