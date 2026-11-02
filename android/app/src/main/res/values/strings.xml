@@ -92,6 +92,10 @@
     <string name="history_kind_text">Text</string>
     <string name="history_kind_link">Link</string>
     <string name="history_kind_image">Image</string>
+    <string name="history_kind_file">File</string>
+    <string name="history_save_action">Save</string>
+    <string name="history_share_action">Share</string>
+    <string name="history_files_offline">Files need a connection to download</string>
     <string name="history_kind_unknown">Unknown clip</string>
     <string name="history_unknown_clip">Update PrivatePaste to see this clip</string>
     <string name="history_search_older">Search older clips</string>

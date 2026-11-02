@@ -72,6 +72,7 @@ import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.sync.VaultState
 import xyz.ficdev.privatepaste.ui.UiDeps
 import xyz.ficdev.privatepaste.ui.UiText
+import xyz.ficdev.privatepaste.ui.history.ClipFileActions
 import java.io.File
 import java.io.IOException
 import java.security.GeneralSecurityException
@@ -503,6 +504,11 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override fun api(): PrivatePasteApi? = _current.value?.api
         override fun codec(): ClipCodec? = this@AppGraph.codec().takeIf { _current.value != null }
         override val clipboard = this@AppGraph.clipboard
+        override val fileActions = object : ClipFileActions {
+            override suspend fun copy(clipId: String) = copyClip(clipId)
+            override suspend fun save(clipId: String) = saveClipFiles(clipId)
+            override suspend fun share(clipId: String) = shareClipFiles(clipId)
+        }
         override val settings = this@AppGraph.settings
         override val startService: () -> Unit = { SyncService.start(app) }
         override val isBatteryExempt: () -> Boolean = { BatteryOptimization.isExempt(app) }

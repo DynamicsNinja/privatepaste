@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import xyz.ficdev.privatepaste.R
+import xyz.ficdev.privatepaste.core.FileNames
 import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.ui.RelativeTime
@@ -103,7 +104,7 @@ fun ClipRow(
                     )
                 } else {
                     Text(
-                        text = preview(clip.text),
+                        text = if (clip.kind == ClipKind.FILE) fileRowText(clip) else preview(clip.text),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.onSurface,
                         maxLines = 1,
@@ -153,7 +154,7 @@ private fun KindTile(kind: ClipKind) {
         ClipKind.TEXT -> R.drawable.ic_kind_text to R.string.history_kind_text
         ClipKind.LINK -> R.drawable.ic_kind_link to R.string.history_kind_link
         ClipKind.IMAGE -> R.drawable.ic_kind_image to R.string.history_kind_image
-        ClipKind.FILE -> R.drawable.ic_kind_text to R.string.history_kind_unknown   // placeholder: Task 7 adds the file icon
+        ClipKind.FILE -> R.drawable.ic_kind_file to R.string.history_kind_file
         ClipKind.UNKNOWN -> R.drawable.ic_kind_text to R.string.history_kind_unknown
     }
     Box(
@@ -230,3 +231,6 @@ internal fun preview(text: String?): String =
     text.orEmpty().lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty().take(PREVIEW_MAX)
 
 private const val PREVIEW_MAX = 200
+
+/** The row text of a file clip, e.g. report.pdf +2 more, 3.4 MB (the same on every platform). */
+internal fun fileRowText(clip: ClipDto): String = FileNames.rowText(clip.files.orEmpty())
