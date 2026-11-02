@@ -77,6 +77,9 @@ import xyz.ficdev.privatepaste.ui.theme.Live
 /** The history screen's top bar (brand mark, connection chip, settings button); for tests and screenshots. */
 const val HISTORY_TOP_BAR_TAG = "history_top_bar"
 
+/** Each visible filter chip (inside its hit box); for tests. */
+const val FILTER_CHIP_TAG = "history_filter_chip"
+
 @Composable
 fun HistoryScreen(
     vm: HistoryViewModel,
@@ -398,23 +401,24 @@ private fun FilterKindChip(label: Int, icon: Int?, selected: Boolean, onClick: (
     val shape = RoundedCornerShape(8.dp)
     val tint = if (selected) colors.primary else colors.onSurfaceVariant
     // Tighter than a stock FilterChip (which pads 8 dp around a 8 dp icon gap) so all five fit a 411 dp phone.
-    // The outer box is the 48 x 48 dp minimum hit area (wider only as the chip is, so the row keeps its gutter).
+    // The outer box is the hit area, 48 dp tall; the chip is at least 48 dp wide, so the box is too.
     Box(
         modifier = Modifier
             .heightIn(min = 48.dp)
-            .widthIn(min = 48.dp)
             .selectable(selected = selected, role = Role.Tab, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             modifier = Modifier
+                .testTag(FILTER_CHIP_TAG)
                 .heightIn(min = 36.dp)
+                .widthIn(min = 48.dp)   // the hit box and the visible chip coincide, so the row starts at the gutter
                 .clip(shape)
                 .background(if (selected) colors.primary.copy(alpha = 0.24f) else colors.surfaceVariant)
                 .border(1.dp, if (selected) colors.primary else colors.outline, shape)
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
         ) {
             if (icon != null) Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(14.dp), tint = tint)
             Text(stringResource(label), style = MaterialTheme.typography.labelMedium, color = tint)

@@ -9,6 +9,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -26,6 +27,7 @@ import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.ui.history.FILTER_CHIP_TAG
 import xyz.ficdev.privatepaste.ui.history.HistoryContent
 import xyz.ficdev.privatepaste.ui.history.HistoryState
 import xyz.ficdev.privatepaste.ui.history.HistoryTab
@@ -112,6 +114,16 @@ class HistoryScreenTest {
             val bounds = chip.getUnclippedBoundsInRoot()
             assertTrue("$label is ${bounds.right - bounds.left} wide", bounds.right - bounds.left >= 48.dp)
         }
+    }
+
+    @Test
+    fun filterRowStartsAtTheSameGutterAsTheTabs() {
+        showFiltered(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        // The visible chip, not its hit box: "All" is the first one.
+        val all = compose.onAllNodesWithTag(FILTER_CHIP_TAG, useUnmergedTree = true)[0].getUnclippedBoundsInRoot()
+        val history = compose.onNodeWithText("History").getUnclippedBoundsInRoot()
+        assertEquals(history.left.value, all.left.value, 0.5f)
+        assertTrue("the visible All chip is ${all.right - all.left} wide", all.right - all.left >= 48.dp)
     }
 
     @Test
