@@ -103,7 +103,17 @@ test('retryThumbs passes through, and the history version answers without touchi
 test('copy answers whether the engine wrote the clip', async () => {
   const engine = fakeEngine({ copy: id => id === 'text' });
   assert.deepEqual(await handleEngineMessage(engine, { type: 'engine.copy', id: 'text' }), { ok: true, value: true });
-  assert.deepEqual(await handleEngineMessage(engine, { type: 'engine.copy', id: 'image' }), { ok: true, value: false });
+  assert.deepEqual(await handleEngineMessage(engine, { type: 'engine.copy', id: 'file' }), { ok: true, value: false });
+});
+
+test('copy of an image hands out a blob URL of the PNG the engine decrypted, for the popup to write', async () => {
+  const png = new Uint8Array([137, 80, 78, 71, 1, 2]);
+  const engine = fakeEngine({ copy: () => ({ png }) });
+  const { urls, made } = fakeUrls();
+  const answer = await handleEngineMessage(engine, { type: 'engine.copy', id: 'image' }, urls);
+  assert.deepEqual(answer, { ok: true, value: { url: 'blob:test/1' } });
+  assert.deepEqual(new Uint8Array(await made[0].arrayBuffer()), png);
+  assert.equal(urls.issued.has('blob:test/1'), true, 'released like a download');
 });
 
 // Blob URLs without a browser: records what was made, revoked and scheduled.

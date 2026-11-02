@@ -11,8 +11,9 @@
 //                                                                  -> {rows, nextCursor}; image rows carry
 //                                                                     thumbPngBase64, or only hasThumb with thumbs false
 //   {type: 'engine.historyVersion'}                                -> a string that changes with the history cache
-//   {type: 'engine.copy', id}                                      -> true once written; false for an image (the popup
-//                                                                     writes it), a file or an unknown clip
+//   {type: 'engine.copy', id}                                      -> true once written; for an image {url}, a blob URL
+//                                                                     of its PNG for the popup to write (released like
+//                                                                     a download's); false for a file or unknown clip
 //   {type: 'engine.download', id, n}                               -> {url, name, mime?}: a blob URL of this page,
 //                                                                     revoked on engine.release or after a minute
 //   {type: 'engine.release', url}                                  -> true
@@ -56,18 +57,28 @@ const handlers = {
       pinned: !!m.pinned, cursor: m.cursor ?? null, query: m.query ?? '', retryThumbs: !!m.retryThumbs,
     }), m.thumbs !== false),
   'engine.historyVersion': engine => engine.historyVersion(),
-  'engine.copy': async (engine, m) => !!(await engine.copy(m.id)),
+  'engine.copy': async (engine, m, urls) => {
+    const copied = await engine.copy(m.id);
+    // An image: the PNG the engine just decrypted, for the popup to write (it can't be written from here).
+    if (copied?.png instanceof Uint8Array) return { url: issue(urls, copied.png) };
+    return !!copied;
+  },
   'engine.download': async (engine, m, urls) => {
     const { bytes, name, mime } = await engine.download(m.id, m.n ?? 0);
-    // application/octet-stream, so the browser never opens or runs a file, whatever its name or the sender's mime.
-    const url = urls.create(new Blob([bytes], { type: 'application/octet-stream' }));
-    urls.issued.add(url);
-    urls.setTimeout(() => release(urls, url), URL_LIFETIME_MS);
-    return { url, name, mime };
+    return { url: issue(urls, bytes), name, mime };
   },
   // Only URLs handed out here; anything else is ignored.
   'engine.release': (_engine, m, urls) => release(urls, m.url),
 };
+
+/** A blob URL of these bytes, revoked on release or after a minute. */
+function issue(urls, bytes) {
+  // application/octet-stream, so the browser never opens or runs a file, whatever its name or the sender's mime.
+  const url = urls.create(new Blob([bytes], { type: 'application/octet-stream' }));
+  urls.issued.add(url);
+  urls.setTimeout(() => release(urls, url), URL_LIFETIME_MS);
+  return url;
+}
 
 function release(urls, url) {
   if (!urls.issued.delete(url)) return false;

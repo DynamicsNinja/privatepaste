@@ -897,9 +897,10 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     },
 
     /**
-     * Puts a clip on the clipboard. True for text and links once written. False for an image (the extension can't
-     * write one from the background: the popup writes it, after download(id, 0); its hash is remembered here so the
-     * poll reading it back isn't uploaded again), and for files and unknown clips, which never go on the clipboard.
+     * Puts a clip on the clipboard. True for text and links once written. For an image, `{png}`: the extension can't
+     * write one from the background, so the popup writes these decrypted bytes; their hash is remembered here so the
+     * poll reading them back isn't uploaded again. False when that fails, and for files and unknown clips, which never
+     * go on the clipboard.
      */
     async copy(id) {
       if (!vault) return false;
@@ -907,15 +908,19 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       if (!wire) return false;
       const decoded = await decodeClip(wire, vault);
       if (decoded.kind === 'text' || decoded.kind === 'link') return serial(() => writeOwnText(decoded.text));
-      if (decoded.kind === 'image') {
-        try {
-          const png = await decryptBlob(vault, await currentApi().blob(id, 0));
-          const { rgba, width, height } = await pngToRgba(png);
-          const hash = await contentHashPixels(rgba, width, height);
-          await serial(() => { rememberEcho(hash); know(hash); });
-        } catch { /* the popup's own write still works; it may come back as a new copy */ }
+      if (decoded.kind !== 'image') return false;
+      let png;
+      try {
+        png = await decryptBlob(vault, await currentApi().blob(id, 0));
+      } catch {
+        return false;
       }
-      return false;
+      try {
+        const { rgba, width, height } = await pngToRgba(png);
+        const hash = await contentHashPixels(rgba, width, height);
+        await serial(() => { rememberEcho(hash); know(hash); });
+      } catch { /* still written by the popup; the poll may take it as a new copy */ }
+      return { png };
     },
 
     /**

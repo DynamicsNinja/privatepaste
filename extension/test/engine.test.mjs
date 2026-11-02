@@ -562,12 +562,13 @@ test('copy writes text as its own write, and leaves images to the popup', async 
   assert.equal(await env.engine.copy('t'), true);
   assert.deepEqual(env.clipboard.written, ['again']);
   await env.engine.onLocalChange({ text: 'again' });
-  assert.equal(await env.engine.copy('i'), false);
+  // An image comes back decrypted for the popup to write, fetched and decrypted once.
+  assert.deepEqual(await env.engine.copy('i'), { png });
+  assert.equal(env.server.count('blob'), 1);
   assert.deepEqual(env.clipboard.images, []);
   // The popup writes it; the poll reading it back is not uploaded.
   await env.engine.onLocalChange({ png });
   assert.equal(env.server.uploads.length, 0);
-  assert.deepEqual((await env.engine.download('i', 0)).bytes, png);
 });
 
 test('download gives the decrypted file and its safe name', async () => {
