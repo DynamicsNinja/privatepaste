@@ -14,51 +14,17 @@
 // PP_WS_DEBUG=1 shows the server's request log (the request line only, never the subprotocol header).
 // Prints no token, key or clip content. Uses Playwright from scripts/readme (run `npm ci` there once).
 
-import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
-import { createRequire } from 'node:module';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as e2e from '../../src/PrivatePaste.Server/wwwroot/js/e2e.js';
+import { apiClient, buildFakeExtension, extensionWorker, launchEdge, startServer } from './helpers/local.mjs';
 
-const require = createRequire(new URL('../../scripts/readme/package.json', import.meta.url));
-const { chromium } = require('playwright');
-
-const repo = fileURLToPath(new URL('../..', import.meta.url));
 const work = mkdtempSync(join(tmpdir(), 'pp-ext-ws-'));
-const port = await new Promise(resolve => {
-  const probe = createServer().listen(0, 'localhost', () => { const p = probe.address().port; probe.close(() => resolve(p)); });
-});
-const server = `http://localhost:${port}`;
-const host = spawn('dotnet', ['run', '--project', join(repo, 'src', 'PrivatePaste.Server'), '--no-launch-profile', '--urls', server], {
-  env: {
-    ...process.env, PP_DB_KEY: '0123456789abcdef0123', PP_PASSWORD: 'dev', PP_DATA_DIR: join(work, 'data'),
-    ...(process.env.PP_WS_DEBUG ? { 'Logging__LogLevel__Microsoft.AspNetCore': 'Information' } : {}),
-  },
-  stdio: process.env.PP_WS_DEBUG ? ['ignore', 'inherit', 'inherit'] : 'ignore',
-});
-const stopServer = () => {
-  try { execFileSync('taskkill', ['/PID', String(host.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { host.kill(); }
-};
-process.on('exit', stopServer);
-for (let i = 0; ; i++) {
-  try { if ((await fetch(`${server}/api/server-info`)).ok) break; } catch { /* starting */ }
-  if (i > 240) { stopServer(); throw new Error('The local server did not start.'); }
-  await new Promise(r => setTimeout(r, 500));
-}
-
-const PROTOCOL = { 'X-PrivatePaste-Protocol': '2' };
-async function call(method, path, { token, json, body } = {}) {
-  const headers = { ...PROTOCOL };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (json) headers['Content-Type'] = 'application/json';
-  const r = await fetch(server + path, { method, headers, body: json ? JSON.stringify(json) : body });
-  if (!r.ok) throw new Error(`${method} ${path}: ${r.status}`);
-  return r.status === 204 ? null : r.json();
-}
-const login = deviceName => call('POST', '/api/auth/login', { json: { username: 'owner', password: 'dev', deviceName, platform: deviceName === 'Edge' ? 'extension' : 'android' } });
+const host = await startServer({ dataDir: join(work, 'data'), verbose: !!process.env.PP_WS_DEBUG });
+const server = host.url;
+const { call, login: loginAs } = apiClient(server);
+const login = deviceName => loginAs(deviceName, deviceName === 'Edge' ? 'extension' : 'android');
 
 // ---- the server: encryption and two devices ----
 const vk = crypto.getRandomValues(new Uint8Array(32));
@@ -69,32 +35,12 @@ const extension = await login('Edge');
 const phone = await login('Phone');
 
 // ---- the extension ----
-const ext = fileURLToPath(new URL('..', import.meta.url));
 const out = join(work, 'ext');
-execFileSync(process.execPath, [join(ext, 'build.mjs'), '--version', '0.0.1', '--fake-clipboard', '--out', out], { stdio: 'inherit' });
-// Test only: the popup asks for the server's origin at sign-in; here nobody can click the prompt.
-const manifestPath = join(out, 'manifest.json');
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-manifest.host_permissions = ['http://localhost/*', 'http://127.0.0.1/*'];
-writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+buildFakeExtension(out);
 
-async function waitUntilChrome(worker) {
-  for (let i = 0; i < 50; i++) {
-    if (await worker.evaluate(() => typeof chrome !== 'undefined' && !!chrome.runtime?.id)) return;
-    await new Promise(r => setTimeout(r, 100));
-  }
-  throw new Error('The service worker has no chrome API.');
-}
-
-const context = await chromium.launchPersistentContext(join(work, 'profile'), {
-  channel: 'msedge',
-  headless: false,
-  args: [`--disable-extensions-except=${out}`, `--load-extension=${out}`],
-});
+const context = await launchEdge(join(work, 'profile'), out);
 try {
-  const isOurs = w => w.url().startsWith('chrome-extension://') && w.url().endsWith('/sw.js');
-  const sw = context.serviceWorkers().find(isOurs) ?? await context.waitForEvent('serviceworker', { predicate: isOurs });
-  await waitUntilChrome(sw);
+  const sw = await extensionWorker(context);
 
   await sw.evaluate(async ({ serverUrl, token, deviceId, vkBytes }) => {
     globalThis.__statuses = [];
@@ -169,7 +115,6 @@ try {
   }
 } finally {
   await context.close();
-  stopServer();
-  await new Promise(r => setTimeout(r, 1000));
+  await host.stop();
   try { rmSync(work, { recursive: true, force: true }); } catch { /* Edge or the server may still hold a file */ }
 }

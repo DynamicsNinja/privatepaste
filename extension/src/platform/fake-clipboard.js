@@ -1,10 +1,12 @@
 // In-memory stand-in for clipboard.js, swapped in by `build.mjs --fake-clipboard` for automated end-to-end tests, which
 // must never touch the OS clipboard (the owner's desktop app syncs it). Tests drive it with runtime messages:
 //   {type: 'test.clipboard.set', text?, pngBase64?}  a copy made in another app
-//   {type: 'test.clipboard.get'}                      → {text?, pngBase64?}, what the extension last wrote
+//   {type: 'test.clipboard.get'}                      → {text?, pngBase64?, writes}, what is on it now, and how many
+//                                                       times the extension wrote it since this page started
 // Never part of a release build.
 
 let current = {};
+let writes = 0;
 
 const toBase64 = bytes => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''));
 const fromBase64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -15,6 +17,7 @@ export async function readClipboard() {
 
 export async function writeText(text) {
   current = { text };
+  writes++;
   return true;
 }
 
@@ -30,7 +33,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     if (message.pngBase64) current.png = fromBase64(message.pngBase64);
     reply({ ok: true });
   } else if (message?.type === 'test.clipboard.get') {
-    const out = {};
+    const out = { writes };
     if (current.text) out.text = current.text;
     if (current.png) out.pngBase64 = toBase64(current.png);
     reply(out);
