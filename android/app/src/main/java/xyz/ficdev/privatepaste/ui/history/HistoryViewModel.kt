@@ -295,7 +295,7 @@ class HistoryViewModel(
             val result = withContext(io) { api.clips(cursor, PAGE_SIZE, pinned) }
             remotePages.update {
                 if (!it.mine()) it
-                else it.copy(items = it.items + result.items, next = result.nextCursor, loaded = true, loading = false)
+                else it.copy(items = it.items + result.items, next = result.nextCursor, loaded = true, loading = false, failed = false)
             }
         } catch (e: CancellationException) {
             remotePages.update { if (it.mine()) it.copy(loading = false) else it }

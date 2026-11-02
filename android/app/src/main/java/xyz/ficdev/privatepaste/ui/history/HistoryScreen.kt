@@ -186,7 +186,7 @@ fun HistoryContent(
 
             TabRow(state.tab, onTab, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
 
-            FilterRow(state.filter, onFilter, modifier = Modifier.padding(bottom = 8.dp))
+            FilterRow(state.filter, onFilter, modifier = Modifier.padding(bottom = 4.dp))
 
             if (state.items.isEmpty()) {
                 Box(
@@ -397,19 +397,26 @@ private fun FilterKindChip(label: Int, icon: Int?, selected: Boolean, onClick: (
     val shape = RoundedCornerShape(8.dp)
     val tint = if (selected) colors.primary else colors.onSurfaceVariant
     // Tighter than a stock FilterChip (which pads 8 dp around a 8 dp icon gap) so all five fit a 411 dp phone.
-    Row(
+    // The outer box is the 48 dp tall hit area (as wide as the chip, so the row keeps its gutter); the chip is compact.
+    Box(
         modifier = Modifier
-            .heightIn(min = 40.dp)   // touch target
-            .clip(shape)
-            .background(if (selected) colors.primary.copy(alpha = 0.24f) else colors.surfaceVariant)
-            .border(1.dp, if (selected) colors.primary else colors.outline, shape)
-            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .heightIn(min = 48.dp)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        if (icon != null) Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(14.dp), tint = tint)
-        Text(stringResource(label), style = MaterialTheme.typography.labelMedium, color = tint)
+        Row(
+            modifier = Modifier
+                .heightIn(min = 36.dp)
+                .clip(shape)
+                .background(if (selected) colors.primary.copy(alpha = 0.24f) else colors.surfaceVariant)
+                .border(1.dp, if (selected) colors.primary else colors.outline, shape)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (icon != null) Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(14.dp), tint = tint)
+            Text(stringResource(label), style = MaterialTheme.typography.labelMedium, color = tint)
+        }
     }
 }
 

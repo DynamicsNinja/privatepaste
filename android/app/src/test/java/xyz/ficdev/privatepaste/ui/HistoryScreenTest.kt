@@ -4,6 +4,8 @@ import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTouchHeightIsEqualTo
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
@@ -99,6 +101,14 @@ class HistoryScreenTest {
         compose.onNodeWithText("Links").performClick()
         compose.onNodeWithText("Files").performClick()
         assertEquals(listOf(ClipKind.LINK, ClipKind.FILE), filters)
+    }
+
+    @Test
+    fun filterChipsKeepA48DpTouchTarget() {
+        showFiltered(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
+        for (label in listOf("All", "Text", "Links", "Images", "Files")) {
+            compose.onNodeWithText(label).assertTouchHeightIsEqualTo(48.dp)
+        }
     }
 
     @Test
