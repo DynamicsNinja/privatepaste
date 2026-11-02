@@ -14,16 +14,10 @@
 // origin granted and shows no prompt (Playwright can't click a browser prompt).
 
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { createServer } from 'node:net';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const require = createRequire(new URL('../../scripts/readme/package.json', import.meta.url));
-const { chromium } = require('playwright');
+import { buildFakeExtension, launchEdge, startServer } from './helpers/local.mjs';
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -33,60 +27,18 @@ const passphrase = 'purple walrus eats pancakes at dawn';
 const shots = process.env.PP_SCREENSHOT_DIR;
 if (shots) mkdirSync(shots, { recursive: true });
 
-const repo = fileURLToPath(new URL('../..', import.meta.url));
 const work = mkdtempSync(join(tmpdir(), 'pp-ext-popup-'));
 const out = join(work, 'ext');
 const profile = join(work, 'profile');
 const step = name => console.log(`- ${name}`);
 
-async function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
-    s.on('error', reject);
-  });
-}
-
 let server;
-async function startServer() {
-  const port = await freePort();
-  const url = `http://localhost:${port}`;
-  const dataDir = join(work, 'data');
-  mkdirSync(dataDir);
-  server = spawn('dotnet', ['run', '--project', join(repo, 'src', 'PrivatePaste.Server'), '--no-launch-profile', '--urls', url], {
-    env: { ...process.env, PP_DB_KEY: '0123456789abcdef0123', PP_PASSWORD: 'dev', PP_DATA_DIR: dataDir },
-    stdio: 'ignore',
-  });
-  const end = Date.now() + 240000;
-  for (;;) {
-    try {
-      const r = await fetch(`${url}/api/server-info`, { headers: { 'X-PrivatePaste-Protocol': '2' } });
-      if (r.ok) return url;
-    } catch { /* not up yet */ }
-    if (Date.now() > end) throw new Error('The local server did not start.');
-    await new Promise(r => setTimeout(r, 500));
-  }
-}
-
-function stopServer() {
-  if (!server) return;
-  try { execFileSync('taskkill', ['/pid', String(server.pid), '/t', '/f'], { stdio: 'ignore' }); } catch { server.kill(); }
-}
-
-const url = arg('url', null) ?? await startServer();
+const url = arg('url', null) ?? (server = await startServer({ dataDir: join(work, 'data') })).url;
 if (/ficdev\.xyz/i.test(url)) throw new Error('Never run this against the live server.');
 
-execFileSync(process.execPath, [join(repo, 'extension', 'build.mjs'), '--version', '0.0.1', '--fake-clipboard', '--out', out], { stdio: 'inherit' });
-const manifestPath = join(out, 'manifest.json');
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-manifest.host_permissions = ['http://localhost/*'];
-writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+buildFakeExtension(out);
 
-const ctx = await chromium.launchPersistentContext(profile, {
-  channel: 'msedge',
-  headless: false,
-  acceptDownloads: true,
-  args: [`--disable-extensions-except=${out}`, `--load-extension=${out}`],
-});
+const ctx = await launchEdge(profile, out, { acceptDownloads: true });
 
 let failed = false;
 try {
@@ -366,7 +318,7 @@ try {
   // Closing Edge rejects Playwright's wait for a tab Edge opened on its own (TargetClosedError); that's not a failure.
   process.on('unhandledRejection', e => { if (e?.name !== 'TargetClosedError') throw e; });
   await ctx.close().catch(() => {});
-  stopServer();
+  await server?.stop().catch(() => {});
   rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
 }
 process.exitCode = failed ? 1 : 0;
