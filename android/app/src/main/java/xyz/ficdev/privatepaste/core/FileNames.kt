@@ -9,6 +9,8 @@ import xyz.ficdev.privatepaste.core.model.ClipFileInfo
  */
 object FileNames {
     private const val MAX_LENGTH = 200
+    private const val MAX_BYTES = 200
+    private const val MAX_EXTENSION_BYTES = 32
     private const val FALLBACK = "file"
     private const val OCTET = "application/octet-stream"
     private const val FORBIDDEN = "<>:\"|?*"
@@ -38,7 +40,8 @@ object FileNames {
     /**
      * The part after the last / or \; control characters and `<>:"|?*` dropped; trailing dots and spaces trimmed;
      * "file" when nothing usable is left; a Windows reserved device name (CON, NUL, COM1, ...) prefixed with _; cut to
-     * 200 UTF-16 units keeping the extension (never splitting a surrogate pair, the stem re-trimmed).
+     * 200 UTF-16 units keeping the extension (never splitting a surrogate pair, the stem re-trimmed), then to 200 UTF-8
+     * bytes the same way (an extension over 32 bytes is cut with the stem).
      */
     fun safe(name: String): String {
         val leaf = name.substring(name.lastIndexOfAny(charArrayOf('/', '\\')) + 1)
@@ -58,7 +61,45 @@ object FileNames {
             val stem = s.substring(0, keep).trimEnd('.', ' ')
             s = (stem.ifEmpty { FALLBACK }) + ext
         }
+
+        // ext4, f2fs and APFS allow 255 bytes per name: the UTF-8 length is capped at 200 bytes too (room for " (99)"
+        // and ".part"), cutting the stem by whole code points; an extension over 32 bytes is cut with it as one stem.
+        if (utf8Length(s) > MAX_BYTES) {
+            var ext = extensionOf(s)
+            if (utf8Length(ext) > MAX_EXTENSION_BYTES) ext = ""
+            val stemEnd = s.length - ext.length
+            val budget = MAX_BYTES - utf8Length(ext)
+            var keep = 0
+            var bytes = 0
+            while (keep < stemEnd) {
+                val (units, size) = codePointAt(s, keep)
+                if (bytes + size > budget) break
+                keep += units
+                bytes += size
+            }
+            val stem = s.substring(0, keep).trimEnd('.', ' ')
+            s = stem.ifEmpty { FALLBACK } + ext
+        }
         return s
+    }
+
+    private fun utf8Length(s: String): Int {
+        var bytes = 0
+        var i = 0
+        while (i < s.length) {
+            val (units, size) = codePointAt(s, i)
+            i += units
+            bytes += size
+        }
+        return bytes
+    }
+
+    // UTF-16 units and UTF-8 bytes of the code point at i, counted as FileNames.cs does: a pair is 4 bytes, a lone
+    // surrogate 3 (String.toByteArray would write it as one "?" byte, so it isn't used here).
+    private fun codePointAt(s: String, i: Int): Pair<Int, Int> {
+        val c = s[i]
+        if (Character.isHighSurrogate(c) && i + 1 < s.length && Character.isLowSurrogate(s[i + 1])) return 2 to 4
+        return 1 to if (c.code < 0x80) 1 else if (c.code < 0x800) 2 else 3
     }
 
     /** [safeName] if nothing by that name is [taken], else "name (2).ext", "name (3).ext", ... */
