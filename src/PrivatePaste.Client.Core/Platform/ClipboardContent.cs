@@ -13,4 +13,7 @@ public abstract record ClipboardContent
     public sealed record Text(string Value) : ClipboardContent;
 
     public sealed record Image(byte[] Png) : ClipboardContent;
+
+    /// <summary>Files copied in a file manager: absolute paths, as on the clipboard (folders among them are skipped when sending).</summary>
+    public sealed record Files(IReadOnlyList<string> Paths) : ClipboardContent;
 }

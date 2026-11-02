@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using PrivatePaste.Client.Core.Api;
+using PrivatePaste.Client.Core.Files;
 using PrivatePaste.Client.Core.Images;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Sync;
@@ -23,7 +24,7 @@ public sealed class ClipCodecTests : IDisposable
 
     /// <summary>The clip a server stores for an upload: everything it can see, nothing it can't.</summary>
     private static ClipDto Stored(ClipUpload upload, long seq = 1) =>
-        new(Guid.NewGuid(), seq, upload.Meta.Kind switch { "text" => ClipKind.Text, "link" => ClipKind.Link, _ => ClipKind.Image },
+        new(Guid.NewGuid(), seq, upload.Meta.Kind switch { "text" => ClipKind.Text, "link" => ClipKind.Link, "file" => ClipKind.File, _ => ClipKind.Image },
             null, upload.Meta.Hash, null, null, upload.Meta.SizeBytes, Guid.NewGuid(), "B", T0)
         {
             Payload = upload.Meta.Payload,
@@ -153,6 +154,52 @@ public sealed class ClipCodecTests : IDisposable
         await Assert.ThrowsAsync<ClipTooLargeException>(() =>
             codec.EncodeAsync(new ClipboardContent.Text(new string('é', 513)), null, false, new ServerLimitsDto(1, 20), default));
         Assert.Equal("Clip too large to sync (text over 1 MB).", ClipCodec.TextTooLargeMessage(1024));
+    }
+
+    [Fact]
+    public async Task File_clip_round_trips_through_encode_and_decode()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pp-codec-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var report = Path.Combine(dir, "report.pdf");
+            var empty = Path.Combine(dir, "empty.txt");
+            var content = RandomNumberGenerator.GetBytes(1024 * 1024 + 7);   // two chunks
+            await File.WriteAllBytesAsync(report, content);
+            await File.WriteAllBytesAsync(empty, []);
+            var files = new List<LocalFile>
+            {
+                await LocalFile.ReadAsync(report, default),
+                await LocalFile.ReadAsync(empty, default),
+            };
+            Assert.Equal(new LocalFile(report, "report.pdf", content.Length, Convert.ToHexStringLower(SHA256.HashData(content))), files[0]);
+
+            var codec = new ClipCodec(_key);
+            var upload = await codec.EncodeFilesAsync(files, T0, default);
+
+            Assert.Equal("file", upload.Meta.Kind);
+            Assert.Equal(KeyedHash.For(_key, ContentHash.ForFiles(files.Select(f => (f.Name, f.Size, f.Sha256Hex)).ToList())),
+                upload.Meta.Hash);
+            Assert.Equal(content.Length, upload.Meta.SizeBytes);
+            Assert.Equal(T0, upload.Meta.CopiedAt);
+            Assert.False(upload.Meta.Backfill);
+            Assert.Null(upload.Thumb);
+            Assert.Equal(2, upload.Blobs.Count);
+            Assert.DoesNotContain("report", Encoding.UTF8.GetString(Convert.FromBase64String(upload.Meta.Payload)));
+            Assert.Equal(content, await codec.DecodeBlobAsync(upload.Blobs[0], default));
+            Assert.Empty(await codec.DecodeBlobAsync(upload.Blobs[1], default));
+
+            var clip = codec.Decode(Stored(upload));
+            Assert.Equal(ClipKind.File, clip.Kind);
+            Assert.Null(clip.Text);
+            Assert.Equal([new ClipFileInfo("report.pdf", content.Length, "application/pdf"), new ClipFileInfo("empty.txt", 0, "text/plain")],
+                clip.Files);
+
+            // The payload must describe every blob: a count that doesn't match is not a clip this app can open.
+            Assert.Equal(ClipKind.Unknown, codec.Decode(Stored(upload) with { BlobCount = 1 }).Kind);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
     [Fact]

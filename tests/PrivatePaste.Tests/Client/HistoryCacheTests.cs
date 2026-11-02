@@ -77,6 +77,22 @@ public class HistoryCacheTests : IDisposable
     }
 
     [Fact]
+    public void Search_matches_file_names()
+    {
+        var c = new HistoryCache(FilePath, NewKey());
+        c.Upsert(Clip(1, "notes", 1));
+        var files = Clip(2, null, 2, kind: ClipKind.File) with
+        {
+            Files = [new ClipFileInfo("report.pdf", 5, "application/pdf"), new ClipFileInfo("Budget 2026.xlsx", 7, "application/octet-stream")],
+        };
+        c.Upsert(files);
+        Assert.Equal(files.Id, Assert.Single(c.Search("REPORT")).Clip.Id);
+        Assert.Equal(files.Id, Assert.Single(c.Search("budget")).Clip.Id);
+        Assert.Equal("notes", Assert.Single(c.Search("note")).Clip.Text);
+        Assert.Empty(c.Search("application/pdf"));   // only names are searched
+    }
+
+    [Fact]
     public void Persists_the_source_device_platform()
     {
         var key = NewKey();

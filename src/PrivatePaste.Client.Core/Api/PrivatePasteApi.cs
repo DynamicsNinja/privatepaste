@@ -159,11 +159,16 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
         });
 
     /// <summary>A clip's sealed thumbnail (<see cref="Vault.ClipCodec.DecodeThumb"/> opens it).</summary>
-    public Task<byte[]> GetThumbAsync(Guid id, CancellationToken ct = default) => GetBytesAsync($"api/clips/{id}/thumb", ct);
+    public Task<byte[]> GetThumbAsync(Guid id, CancellationToken ct = default) => GetBytesAsync($"api/clips/{id}/thumb", RequestTimeout, ct);
 
-    /// <summary>A clip's sealed blob <paramref name="n"/> (<see cref="Vault.ClipCodec.DecodeBlobAsync"/> opens it).</summary>
-    public Task<byte[]> GetBlobAsync(Guid id, int n, CancellationToken ct = default) =>
-        GetBytesAsync($"api/clips/{id}/blobs/{n.ToString(CultureInfo.InvariantCulture)}", ct);
+    /// <summary>
+    /// A clip's sealed blob <paramref name="n"/> (<see cref="Vault.ClipCodec.DecodeBlobAsync(byte[], CancellationToken)"/> opens it).
+    /// With <paramref name="expectedBytes"/> (a file's size) the timeout grows with it as an upload's does
+    /// (<see cref="UploadTimeout"/>), so a large file on a slow link isn't cut off.
+    /// </summary>
+    public Task<byte[]> GetBlobAsync(Guid id, int n, CancellationToken ct = default, long expectedBytes = 0) =>
+        GetBytesAsync($"api/clips/{id}/blobs/{n.ToString(CultureInfo.InvariantCulture)}",
+            expectedBytes > 0 && UploadTimeout(expectedBytes) is var scaled && scaled > RequestTimeout ? scaled : RequestTimeout, ct);
 
     public Task<SyncResponse> SyncAsync(long afterSeq, int limit = 200, CancellationToken ct = default) =>
         GetJsonAsync<SyncResponse>(
@@ -209,8 +214,8 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
         catch (ApiException e) when (e.Status == HttpStatusCode.NotFound) { return null; }
     }
 
-    private Task<byte[]> GetBytesAsync(string url, CancellationToken ct) =>
-        WithTimeoutAsync(RequestTimeout, ct, async t =>
+    private Task<byte[]> GetBytesAsync(string url, TimeSpan timeout, CancellationToken ct) =>
+        WithTimeoutAsync(timeout, ct, async t =>
         {
             using var req = Request(HttpMethod.Get, url);
             using var res = await SendAsync(req, t).ConfigureAwait(false);
