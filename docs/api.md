@@ -100,7 +100,11 @@ A backfilled upload is refused with `410` (problem title `Cleared`) and nothing 
 
 ## WebSocket
 
-Connect to `/ws` with the bearer token and the protocol header in the upgrade request. Messages are JSON text frames:
+Connect to `/ws` with the bearer token and the protocol header in the upgrade request.
+
+A browser can't set headers on a WebSocket upgrade, so a browser client (the Edge extension) offers two subprotocols instead: `privatepaste.v2` (counts as the protocol header) and `privatepaste.auth.<token>` (the device token, used only when there is no `Authorization` header), as in `new WebSocket(url, ['privatepaste.v2', 'privatepaste.auth.' + token])`. The server selects `privatepaste.v2` and never echoes the token entry. An offered token without `privatepaste.v2` gets 426, a wrong one 401; elsewhere than `/ws` the subprotocols mean nothing. The token then travels in the `Sec-WebSocket-Protocol` header, which some proxies log: keep that in mind when choosing what sits in front of the server.
+
+Messages are JSON text frames:
 
 - `{"type":"clip.created","clip":{...},"live":true}`: a clip was added, bumped or restored. `live` is `false` for backfilled clips, for pin changes (the clip arrives again with the new `pinnedAt`) and when clips are re-sent because a person's name changed or people were added or removed (the clip arrives again with the new `sourceUserName`).
 - `{"type":"clip.deleted","id":"...","seq":123}`: a clip was deleted.
@@ -203,7 +207,7 @@ The server never sees `otk`. A code works once and only for 10 minutes, so a pho
 
 ### Test vectors
 
-[`e2e-test-vectors.json`](e2e-test-vectors.json) holds the vectors every client must reproduce: the subkeys and `keyId` of a fixed VK, Argon2id outputs (including the NFC and NFD spellings of the same passphrase), a passphrase wrap, a sealed payload and thumbnail, a two-chunk blob and an empty one, a keyed hash, the content hash of two files, the safe-name, size and row-text rules of [file clips](#file-clips), and two handovers with their QR text. They are written by `tests/PrivatePaste.Tests/Protocol/VaultCryptoTests.cs` (with `PP_WRITE_VECTORS=1`) and checked by the .NET tests, the Android JVM tests and the browser module's Node test (`tests/web/e2e.test.mjs`).
+[`e2e-test-vectors.json`](e2e-test-vectors.json) holds the vectors every client must reproduce: the subkeys and `keyId` of a fixed VK, Argon2id outputs (including the NFC and NFD spellings of the same passphrase), a passphrase wrap, a sealed payload and thumbnail, a two-chunk blob and an empty one, a keyed hash, the content hash of two files, hand-built PNGs with the content hash of their decoded pixels (`pngHash`, for a client that decodes PNGs itself), the safe-name, size and row-text rules of [file clips](#file-clips), and two handovers with their QR text. They are written by `tests/PrivatePaste.Tests/Protocol/VaultCryptoTests.cs` (with `PP_WRITE_VECTORS=1`) and checked by the .NET tests, the Android JVM tests and the browser module's Node test (`tests/web/e2e.test.mjs`).
 
 [`classifier-test-vectors.json`](classifier-test-vectors.json) lists texts and whether a client uploads each as `link` or `text` (one absolute http or https URL, no whitespace, with the host and port rules of .NET's `System.Uri`). The .NET and Android tests check it.
 

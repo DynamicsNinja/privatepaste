@@ -29,6 +29,9 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   extension's CSP, and what polling costs. It only reads the clipboard and prints no content. Needs Playwright from
   `scripts/readme` (`npm ci` there once). The text and image checks skip when the clipboard holds no text or no PNG,
   so before a release run it once with text on the clipboard and once with a large screenshot (it reports ms per read).
+- Real Edge, by hand: `node extension/test/socket.playwright.mjs` starts its own local server (throwaway data), loads a
+  fake-clipboard build and checks that the sync socket opens with the subprotocol token and that a clip from another
+  device reaches the (fake) clipboard through it. `PP_WS_DEBUG=1` adds the server's request log.
 
 ## How it works
 
