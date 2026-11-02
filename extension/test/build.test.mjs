@@ -21,7 +21,7 @@ test('build writes the manifest with the given version, permissions and CSP', t 
   const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.version, '1.2.3');
-  assert.deepEqual(manifest.permissions, ['offscreen', 'clipboardRead', 'clipboardWrite', 'alarms', 'declarativeNetRequestWithHostAccess']);
+  assert.deepEqual(manifest.permissions, ['offscreen', 'clipboardRead', 'clipboardWrite', 'alarms']);
   assert.deepEqual(manifest.optional_host_permissions, ['http://*/*', 'https://*/*']);
   assert.equal(manifest.content_security_policy.extension_pages, "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'");
   assert.equal(manifest.background.service_worker, 'sw.js');

@@ -41,7 +41,6 @@ async function clip({ id, seq, at, text = `text ${id}`, kind = 'text', device = 
 
 /** A signed-in, unlocked engine over a memory store (unless `signedIn` is false). */
 async function setup({ signedIn = true, state = {}, store = openStore(memoryBackend()), wrap = { keyId: keys.keyId } } = {}) {
-  const wsAuth = { calls: [], set: async (url, token) => { wsAuth.calls.push(['set', url, token]); }, clear: async () => { wsAuth.calls.push(['clear']); } };
   const clock = fakeClock();
   const server = fakeServer({ wrap, now: () => clock.now() });
   const clipboard = fakeClipboard();
@@ -53,9 +52,9 @@ async function setup({ signedIn = true, state = {}, store = openStore(memoryBack
   }
   const statuses = [];
   const engine = createEngine({
-    api: server.api, store, clipboard, clock, WebSocket: ws.FakeWebSocket, wsAuth, onStatus: s => statuses.push(s),
+    api: server.api, store, clipboard, clock, WebSocket: ws.FakeWebSocket, onStatus: s => statuses.push(s),
   });
-  return { engine, store, clock, server, clipboard, ws, statuses, wsAuth };
+  return { engine, store, clock, server, clipboard, ws, statuses };
 }
 
 /** Starts the engine and waits until its socket is open and it says Syncing. */
@@ -659,24 +658,25 @@ test('catch-up applies only the newest (poll)', async () => {
   assert.deepEqual(env.clipboard.written, ['third']);
 });
 
-// ---- the socket's headers (ruling R-X6) ----
+// ---- the socket's credentials (ruling R-X8) ----
 
-test('the socket headers are asked for before each socket, and removed on sign-out', async () => {
+test('the socket offers the protocol version and the token as subprotocols', async () => {
   const env = await setup();
-  await connected(env);
-  assert.deepEqual(env.wsAuth.calls, [['set', 'ws://localhost:5202/ws', 'tok']]);
+  const socket = await connected(env);
+  assert.equal(socket.url, 'ws://localhost:5202/ws');
+  assert.deepEqual(socket.protocols, ['privatepaste.v2', 'privatepaste.auth.tok']);
   assert.equal(env.engine.status().link, 'socket');
   await env.engine.signOut();
-  assert.deepEqual(env.wsAuth.calls.at(-1), ['clear']);
   assert.equal(env.engine.status().link, null);
 });
 
-test('a revoke removes the socket headers', async () => {
-  const env = await setup();
-  const socket = await connected(env);
-  socket.close(1008);
-  await until(() => env.engine.status().state === 'signedOut', 'signed out');
-  assert.deepEqual(env.wsAuth.calls.at(-1), ['clear']);
+test('after a sign-in the socket offers the new token', async () => {
+  const env = await setup({ signedIn: false, wrap: vectors.passphraseWrap[0].wrap });
+  await env.engine.start();
+  await env.engine.signIn(SERVER, 'owner', 'dev', 'Edge');
+  await env.engine.unlock(vectors.passphraseWrap[0].passphrase);
+  await until(() => env.ws.open().length === 1, 'the socket');
+  assert.deepEqual(env.ws.open()[0].protocols, ['privatepaste.v2', 'privatepaste.auth.tok-new']);
 });
 
 test('the status says when it polls instead of using the socket', async () => {

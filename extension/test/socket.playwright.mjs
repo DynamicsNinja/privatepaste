@@ -1,7 +1,7 @@
-// Real-Edge check that the sync socket authenticates through the service worker's declarativeNetRequest rule (ruling
-// R-X6), run by hand (not in CI, and not by `node --test`):
+// Real-Edge check that the sync socket authenticates with the subprotocols `privatepaste.v2` and
+// `privatepaste.auth.<token>` (ruling R-X8), run by hand (not in CI, and not by `node --test`):
 //
-//   node extension/test/ws-auth.playwright.mjs
+//   node extension/test/socket.playwright.mjs
 //
 // It starts its own LOCAL server (PP_PASSWORD=dev, a throwaway PP_DATA_DIR, a free localhost port), sets up encryption
 // (owner/dev), signs in three devices through the API (under the server's 5 sign-ins per minute), builds the extension
@@ -9,9 +9,9 @@
 // it into Edge (headed, throwaway profile). It hands the extension one device's token and vault through its IndexedDB,
 // restarts the offscreen document, and checks:
 //   1. the engine reaches Syncing over the socket (status link 'socket'), which only happens once the server accepted
-//      the upgrade, i.e. the rule put the token on it;
+//      the upgrade, i.e. took the offered token and selected privatepaste.v2;
 //   2. a text clip uploaded live by another device lands on the fake clipboard (over the socket, or by polling).
-// PP_WS_DEBUG=1 shows the server's request log and probes whether the session rules reach a fetch and a socket upgrade.
+// PP_WS_DEBUG=1 shows the server's request log (the request line only, never the subprotocol header).
 // Prints no token, key or clip content. Uses Playwright from scripts/readme (run `npm ci` there once).
 
 import { execFileSync, spawn } from 'node:child_process';
@@ -144,34 +144,6 @@ try {
   };
 
   await waitFor('Syncing', async () => (await statuses()).some(s => s.state === 'syncing'));
-  const rules = await sw.evaluate(async () => (await chrome.declarativeNetRequest.getSessionRules())
-    .map(r => ({ url: r.condition.urlFilter, types: r.condition.resourceTypes, headers: r.action.requestHeaders.map(h => h.header) })));
-  console.log('session rules:', JSON.stringify(rules));
-  if (process.env.PP_WS_DEBUG) {
-    const { createServer: createHttp } = await import('node:http');
-    const echo = createHttp();
-    echo.on('upgrade', (req, sock) => { console.log('upgrade headers seen:', Object.keys(req.headers).join(', ')); sock.destroy(); });
-    await new Promise(r => echo.listen(0, 'localhost', r));
-    await sw.evaluate(p => { globalThis.__echoPort = p; }, echo.address().port);
-    console.log('probe:', JSON.stringify(await sw.evaluate(async ({ serverUrl, token }) => {
-      const out = {};
-      out.plainFetch = (await fetch(serverUrl + '/api/me')).status;
-      await chrome.declarativeNetRequest.updateSessionRules({ addRules: [{ id: 99, priority: 1,
-        action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Authorization', operation: 'set', value: 'Bearer ' + token }] },
-        condition: { urlFilter: '/api/me', resourceTypes: ['xmlhttprequest', 'other'] } }] });
-      out.ruledFetch = (await fetch(serverUrl + '/api/me')).status;
-      out.echoSocket = await new Promise(resolve => {
-        const ws = new WebSocket('ws://localhost:' + globalThis.__echoPort + '/ws');
-        ws.onclose = e => resolve('closed ' + e.code);
-      });
-      out.socket = await new Promise(resolve => {
-        const ws = new WebSocket(serverUrl.replace('http', 'ws') + '/ws');
-        ws.onopen = () => { ws.close(); resolve('open'); };
-        ws.onclose = e => resolve('closed ' + e.code);
-      });
-      return out;
-    }, { serverUrl: server, token: extension.token })));
-  }
   const linked = (await statuses()).filter(s => s.state === 'syncing').at(-1).link;
   console.log('link:', linked);
 
@@ -190,9 +162,9 @@ try {
     (await sw.evaluate(() => chrome.runtime.sendMessage({ type: 'test.clipboard.get' })))?.text === text, 10000);
   console.log(`clip applied after ${Date.now() - sentAt} ms, link ${(await statuses()).at(-1).link}`);
   if (linked === 'socket') {
-    console.log('PASS: the socket authenticated through the session rule and delivered the clip live.');
+    console.log('PASS: the socket authenticated with the offered token and delivered the clip live.');
   } else {
-    console.log('FAIL: Edge did not put the headers on the socket upgrade (the server answered 401); the engine polled instead.');
+    console.log('FAIL: the socket did not open; the engine polled /api/sync instead.');
     process.exitCode = 1;
   }
 } finally {

@@ -3,11 +3,10 @@
 //
 // Per connection: read server-info (404: the server is too old), check the vault key id against GET /api/vault, catch up
 // with /api/sync (applying at most the newest caught-up clip), flush the offline queue, then follow the WebSocket, pinging
-// every 20 s. A browser can't put the bearer token on the upgrade request; before each socket the engine asks `wsAuth`
-// (the service worker's declarativeNetRequest rule, ws-auth.js) to add it. Edge 156 doesn't apply that rule to socket
-// upgrades (measured with ws-auth.playwright.mjs), so in practice the socket fails and the connection polls /api/sync
-// every 2 s instead, trying the socket again every minute. Any failure goes offline and reconnects after 1, 2, 5, 10,
-// then 30 s.
+// every 20 s. A browser can't put headers on the upgrade request, so the socket offers the subprotocols
+// `privatepaste.v2` and `privatepaste.auth.<token>` instead (docs/api.md). When it can't be opened (a server from before
+// that answers 401) the connection polls /api/sync every 2 s instead, trying the socket again every minute. Any failure
+// goes offline and reconnects after 1, 2, 5, 10, then 30 s.
 //
 // A clip from another device is never written over a copy made here that the engine hasn't handled yet: not while a
 // local change waits its turn, and not when the clipboard, read just before the write, holds a copy the poller hasn't
@@ -55,6 +54,10 @@ export const ECHO_WINDOW_MS = 10000;
 export const DROP_AFTER_ATTEMPTS = 10;
 const SERVER_CURSOR = 'server:';
 const REVOKED_CLOSE = 1008;
+export const SOCKET_PROTOCOL = 'privatepaste.v2';
+export const SOCKET_AUTH_PREFIX = 'privatepaste.auth.';
+/** What a browser offers instead of the headers it can't set: the version, and the token (never echoed back). */
+export const socketProtocols = token => [SOCKET_PROTOCOL, SOCKET_AUTH_PREFIX + token];
 
 const time = iso => (typeof iso === 'string' ? Date.parse(iso) || 0 : 0);
 const utf8 = new TextEncoder();
@@ -87,7 +90,7 @@ function stopOf(e) {
  * @param deps.WebSocket  a WebSocket constructor
  * @param deps.onStatus   called with a copy of status() on every change
  */
-export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket, wsAuth = null, onStatus = () => {} }) {
+export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket, onStatus = () => {} }) {
   let session = null;
   let vault = null;
   let state = null;
@@ -213,11 +216,6 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       return stop ? { stop } : {};
     }
     if (g !== gen) return {};
-    // The browser can't put headers on the upgrade request: the service worker adds them with a session rule.
-    if (wsAuth) {
-      try { await wsAuth.set(api.socketUrl(), session.token); } catch { /* the socket fails and polling takes over */ }
-      if (g !== gen) return {};
-    }
     const ws = await openSocket(g, api);
     if (g !== gen) return {};
     return ws ? followSocket(g, api, ws) : poll(g, api);
@@ -240,7 +238,7 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
     return new Promise(resolve => {
       let ws;
       try {
-        ws = new WebSocket(api.socketUrl());
+        ws = new WebSocket(api.socketUrl(), socketProtocols(session.token));
       } catch {
         return resolve(null);
       }
@@ -377,7 +375,6 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
   /** Signed out or revoked: the token, vault keys, history cache and queue all go. */
   async function forget() {
     endConnection();
-    if (wsAuth) try { await wsAuth.clear(); } catch { /* the rule dies with the browser session anyway */ }
     session = null;
     vault = null;
     await store.clearAll();

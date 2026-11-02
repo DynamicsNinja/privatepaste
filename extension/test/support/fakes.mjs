@@ -67,8 +67,9 @@ export function fakeSockets() {
   const sockets = [];
   const control = { refuse: false };
   class FakeWebSocket {
-    constructor(url) {
+    constructor(url, protocols) {
       this.url = url;
+      this.protocols = protocols;
       this.sent = [];
       this.readyState = 0;
       sockets.push(this);
