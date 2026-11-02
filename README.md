@@ -21,7 +21,8 @@
 <p align="center">
   <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=desktop-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=desktop-v*&label=desktop&style=flat-square&color=5B45D6" alt="Desktop release"></a>
   <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=android-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=android-v*&label=android&style=flat-square&color=5B45D6" alt="Android release"></a>
-  <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-B7A5FF?style=flat-square" alt="Platforms: Windows, macOS, Linux, Android">
+  <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=extension-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=extension-v*&label=edge%20extension&style=flat-square&color=5B45D6" alt="Edge extension release"></a>
+  <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20Edge-B7A5FF?style=flat-square" alt="Platforms: Windows, macOS, Linux, Android, Edge">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-B7A5FF?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/self--hosted-Docker-B7A5FF?style=flat-square&logo=docker&logoColor=white" alt="Self-hosted with Docker">
 </p>
@@ -42,7 +43,7 @@
 - **Multiple people, one shared history.** Add the people you share a server with (a household, a small team). Each signs in with their own name and password, everyone sees the same history, and each clip shows who copied it. The owner can sign someone out or remove them without changing a password for everyone. [Details](docs/self-hosting.md#people)
 - **Only on your server.** One small container. No cloud relay, no push service, no analytics, no third-party requests.
 - **End-to-end encrypted.** Clips are encrypted on your devices with a key that only they hold, unlocked with a passphrase. The server stores ciphertext: someone who steals it, its configuration and backups made since end-to-end encryption still can't read your clips. [Details](#security)
-- **Native on every device.** A tray app with a history popup (Ctrl+Shift+V) on Windows, macOS and Linux, an Android app with a Quick Settings tile and a Share target, and a web UI for everything else.
+- **Native on every device.** A tray app with a history popup (Ctrl+Shift+V) on Windows, macOS and Linux, an Android app with a Quick Settings tile and a Share target, and an Edge extension for computers where you can't install the app, and a web UI for everything else.
 - **Knows where a clip came from.** Each clip carries its device's name and platform icon (and, once a second person is added, a chip with the name of who copied it), and the desktop app can show a small notification when a clip from another device lands.
 
 ## Apps
@@ -53,6 +54,7 @@
 | macOS | `osx-arm64` / `osx-x64` `.zip` | Apple Silicon and Intel. Not notarized yet. [Details](docs/desktop.md#macos-and-linux) |
 | Linux | `linux-x64.tar.gz` | Best on X11. [Details](docs/desktop.md#macos-and-linux) |
 | Android | `.apk` | Android 10 or newer, sideloaded. [Details](docs/android.md) |
+| Edge extension | `privatepaste-extension-<version>.zip` | Loaded unpacked in Edge (Developer mode). Syncs while Edge runs. [Details](docs/extension.md) |
 | Web | Built into the server | Any modern browser. |
 
 ## Quick start
@@ -123,6 +125,7 @@ Each device signs in with a person's name and password once and gets its own dev
 | [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, end-to-end encryption and its reset, backups, clearing history and auto-delete, proxies, local development |
 | [Desktop app](docs/desktop.md) | Install, upgrade, unlocking, adding a device, hotkey, the type filter, pause, pinned clips, copying and saving files, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
 | [Android app](docs/android.md) | Install, unlocking by passphrase or code, adding a device, sharing and receiving files, the type filter, pinned clips, background delivery, battery settings by phone maker, building and releasing |
+| [Edge extension](docs/extension.md) | Install (Load unpacked), signing in and unlocking, what it syncs and what it can't (password managers, Explorer files, only while Edge runs), the store listing sentence, building and releasing |
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules, end-to-end encryption formats and test vectors, and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 
