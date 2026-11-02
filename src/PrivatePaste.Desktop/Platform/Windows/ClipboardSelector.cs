@@ -3,11 +3,12 @@ using PrivatePaste.Client.Core.Platform;
 
 namespace PrivatePaste.Desktop.Platform.Windows;
 
-public enum ClipboardFormat { Png, DibV5, Dib, UnicodeText }
+public enum ClipboardFormat { Png, DibV5, Dib, UnicodeText, HDrop }
 
 /// <summary>
-/// Decides what the clipboard "contains" from the formats present. Text wins when it is not whitespace-only (Excel/Word put text
-/// plus a synthesized bitmap on the clipboard); otherwise PNG, then DIBV5, then DIB. Pure logic, testable without a clipboard.
+/// Decides what the clipboard "contains" from the formats present. A file list (CF_HDROP) wins: Explorer offers the names as
+/// text too. Then text when it is not whitespace-only (Excel/Word put text plus a synthesized bitmap on the clipboard);
+/// otherwise PNG, then DIBV5, then DIB. Pure logic, testable without a clipboard.
 /// </summary>
 public static class ClipboardSelector
 {
@@ -18,6 +19,11 @@ public static class ClipboardSelector
     public static Dictionary<ClipboardFormat, byte[]> Capture(Func<ClipboardFormat, byte[]?> get)
     {
         var captured = new Dictionary<ClipboardFormat, byte[]>();
+        if (get(ClipboardFormat.HDrop) is { } drop && DropFiles.Parse(drop).Count > 0)
+        {
+            captured[ClipboardFormat.HDrop] = drop;
+            return captured;
+        }
         if (get(ClipboardFormat.UnicodeText) is { } raw)
         {
             captured[ClipboardFormat.UnicodeText] = raw;
@@ -39,6 +45,9 @@ public static class ClipboardSelector
 
     public static ClipboardContent? Select(Func<ClipboardFormat, byte[]?> get, Action<string>? log)
     {
+        if (get(ClipboardFormat.HDrop) is { } drop && DropFiles.Parse(drop) is { Count: > 0 } paths)
+            return new ClipboardContent.Files(paths);
+
         if (get(ClipboardFormat.UnicodeText) is { } raw)
         {
             var text = FromUtf16Z(raw);

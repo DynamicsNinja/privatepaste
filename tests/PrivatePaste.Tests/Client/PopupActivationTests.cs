@@ -136,6 +136,21 @@ public class PopupActivationTests
     }
 
     [Fact]
+    public async Task Paused_file_clip_is_not_fetched_and_says_files()
+    {
+        _paused = true;
+        var a = Create();
+        var files = new ClipDto(Guid.NewGuid(), 1, ClipKind.File, null, "h", null, null, 100, null, "PC", DateTimeOffset.UtcNow)
+        {
+            Files = [new ClipFileInfo("report.pdf", 100, "application/pdf")],
+            BlobCount = 1,
+        };
+        await RunAsync(a, files);
+        Assert.Empty(_log);
+        Assert.Equal(["Sync is paused. Resume it to paste files."], _toasts);
+    }
+
+    [Fact]
     public async Task Pausing_during_restore_aborts_instead_of_pasting_stale_clipboard()
     {
         var a = Create();

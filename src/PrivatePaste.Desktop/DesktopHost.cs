@@ -61,8 +61,9 @@ public sealed class DesktopHost : IAsyncDisposable
     private string _cachePath;
     private string _queuePath;
     private string? _ephemeralDirectory;
-    // File clips from other devices, written before they go on the clipboard.
-    private readonly ClipFileStore _files;
+    // File clips from other devices, written before they go on the clipboard. In the temp folder while ephemeral (like the
+    // history), so nothing received then outlives the session; replaced with the data directory's by LeaveEphemeralMode.
+    private ClipFileStore _files;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly SemaphoreSlim _pauseGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -85,7 +86,6 @@ public sealed class DesktopHost : IAsyncDisposable
         _transport = transport ?? HostTransport.Default;
         Platform = platform;
         DataDirectory = dataDirectory;
-        _files = new ClipFileStore(Path.Combine(dataDirectory, "files"));
         _notifier = notifier;
         _log = log;
         _time = time ?? TimeProvider.System;
@@ -120,6 +120,9 @@ public sealed class DesktopHost : IAsyncDisposable
         Cache = HistoryCache.Load(_cachePath, _cacheKey);
         Cache.Changed += OnCacheChanged;
         _queue = OutboundQueue.Load(_queuePath, _cacheKey);
+        // Received files are kept only while their clips are in the history (the coordinator prunes again on every apply).
+        _files = new ClipFileStore(Path.Combine(_ephemeralDirectory ?? dataDirectory, "files"));
+        _files.Prune(Cache.Items.Select(i => i.Clip.Id).ToHashSet());
 
         // ---- Clipboard, network and power ----
         platform.Clipboard.Changed += OnClipboardChanged;
@@ -723,8 +726,10 @@ public sealed class DesktopHost : IAsyncDisposable
         }
     }
 
+    /// <summary>The history and the files received with it (sign-in, sign-out, an encryption reset, first contact).</summary>
     private void ClearHistory()
     {
+        _files.Clear();
         if (!Cache.Clear()) throw new IOException("The history file could not be removed.");
     }
 
@@ -1082,6 +1087,44 @@ public sealed class DesktopHost : IAsyncDisposable
         }
     }
 
+    // ======================================================================== Saving received files
+
+    public const string CouldNotSaveFiles = "Couldn't save the files.";
+    public const string SaveWhilePaused = "Sync is paused. Resume it to save files.";
+
+    /// <summary>A test seam: where <see cref="SaveFilesAsync"/> saves instead of the real Downloads folder.</summary>
+    internal string? DownloadsOverride { get; set; }
+
+    private sealed class PausedException() : Exception("Paused.");
+
+    /// <summary>
+    /// Save in the popup: writes a file clip's files (fetching what isn't here yet; while paused only what is) and copies
+    /// them into Downloads. Returns the toast ("Saved report.pdf to Downloads", "Saved 3 files to Downloads", or why not),
+    /// or null for a clip that isn't a file clip. Never throws; a failure is logged by type only, never with a name.
+    /// </summary>
+    public async Task<string?> SaveFilesAsync(ClipDto clip, CancellationToken ct = default)
+    {
+        if (clip.Kind != ClipKind.File || clip.Files is not { Count: > 0 } described) return null;
+        if (_session is not { } session || Codec is not { } codec) return CouldNotSaveFiles;
+        try
+        {
+            var paths = await _files.MaterializeAsync(clip, (n, t) =>
+                // Pause means nothing enters the machine: files already here can still be saved.
+                _paused ? throw new PausedException() : session.Api.GetBlobAsync(clip.Id, n, t, described[n].Size), codec, ct);
+            var saved = DownloadsOverride is { } folder
+                ? await DownloadsFolder.SaveAsync(paths, folder, ct)
+                : await DownloadsFolder.SaveAsync(paths, ct);
+            return saved.Count == 1 ? $"Saved {Path.GetFileName(saved[0])} to Downloads" : $"Saved {saved.Count} files to Downloads";
+        }
+        catch (PausedException) { return SaveWhilePaused; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return null; }
+        catch (Exception e)
+        {
+            _log.Error($"Could not save received files ({e.GetType().Name}).");
+            return CouldNotSaveFiles;
+        }
+    }
+
     // ======================================================================== Cache key and queue
 
     /// <summary>
@@ -1142,6 +1185,7 @@ public sealed class DesktopHost : IAsyncDisposable
             (key, Path.Combine(DataDirectory, "cache.dat"), Path.Combine(DataDirectory, "queue.dat"), null);
         Cache = new HistoryCache(_cachePath, _cacheKey);
         Cache.Changed += OnCacheChanged;
+        _files = new ClipFileStore(Path.Combine(DataDirectory, "files"));   // the sign-in that follows clears it
         try { Directory.Delete(ephemeral, recursive: true); }
         catch (Exception) { }
         _log.Info("Replaced the unreadable cache key; local history is kept again.");

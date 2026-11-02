@@ -78,6 +78,21 @@ public class WindowsClipboardTests : IDisposable
     }
 
     [Fact]
+    public async Task Windows_file_list_roundtrip()
+    {
+        if (!Enabled) return;
+        Directory.CreateDirectory(_dir);
+        var a = Path.Combine(_dir, "résumé.pdf");
+        var b = Path.Combine(_dir, "報告 (2).txt");
+        File.WriteAllText(a, "a");
+        File.WriteAllText(b, "b");
+        using var clip = new WindowsClipboard();
+        await clip.WriteAsync(new ClipboardContent.Files([a, b]), default);
+        var read = await clip.ReadAsync(default);
+        Assert.Equal([a, b], Assert.IsType<ClipboardContent.Files>(read).Paths);
+    }
+
+    [Fact]
     public async Task Windows_change_event_fires()
     {
         if (!Enabled) return;
@@ -291,4 +306,41 @@ public class WindowsClipboardTests : IDisposable
             _thread.Join(TimeSpan.FromSeconds(2));
         }
     }
+}
+
+/// <summary>The CF_HDROP byte layout (DROPFILES), built and read without a clipboard.</summary>
+public class DropFilesTests
+{
+    [Fact]
+    public void Two_paths_with_non_ascii_names_round_trip()
+    {
+        string[] paths = [@"C:\Users\Ana\Résumé.pdf", @"D:\データ\報告 (2).txt"];
+        var bytes = DropFiles.Build(paths);
+
+        Assert.Equal(20, BitConverter.ToInt32(bytes, 0));    // pFiles: the list starts right after the 20-byte header
+        Assert.Equal(0, BitConverter.ToInt32(bytes, 4));     // pt.x
+        Assert.Equal(0, BitConverter.ToInt32(bytes, 8));     // pt.y
+        Assert.Equal(0, BitConverter.ToInt32(bytes, 12));    // fNC
+        Assert.Equal(1, BitConverter.ToInt32(bytes, 16));    // fWide: UTF-16 names
+        var list = System.Text.Encoding.Unicode.GetString(bytes, 20, bytes.Length - 20);
+        Assert.Equal(string.Join('\0', paths) + "\0\0", list);   // each name ends with a NUL, the list with one more
+
+        Assert.Equal(paths, DropFiles.Parse(bytes));
+    }
+
+    [Fact]
+    public void An_ansi_list_is_read_too()
+    {
+        var names = System.Text.Encoding.ASCII.GetBytes("C:\\a.txt\0C:\\b.txt\0\0");
+        var bytes = new byte[20 + names.Length];
+        BitConverter.GetBytes(20).CopyTo(bytes, 0);
+        names.CopyTo(bytes, 20);
+        Assert.Equal([@"C:\a.txt", @"C:\b.txt"], DropFiles.Parse(bytes));
+    }
+
+    [Theory]
+    [InlineData(new byte[] { })]
+    [InlineData(new byte[] { 1, 2, 3 })]
+    [InlineData(new byte[] { 200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 65, 0 })]   // pFiles past the end
+    public void A_malformed_list_reads_as_empty(byte[] bytes) => Assert.Empty(DropFiles.Parse(bytes));
 }

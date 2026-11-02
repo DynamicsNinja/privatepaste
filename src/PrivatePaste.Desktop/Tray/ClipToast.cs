@@ -22,15 +22,20 @@ public sealed record ClipToast(PlatformIcon Platform, string Title, string Previ
         return new ClipToast(PlatformIcons.For(clip.SourceDevicePlatform), title, FormatPreview(clip));
     }
 
-    /// <summary>"Image {w}×{h}", or the first non-empty line of the text, cut to <see cref="PreviewLength"/> chars with "…".</summary>
+    /// <summary>
+    /// "Image {w}×{h}", a file clip's row text ("report.pdf +2 more · 3.4 MB"), or the first non-empty line of the text;
+    /// cut to <see cref="PreviewLength"/> chars with "…".
+    /// </summary>
     public static string FormatPreview(ClipDto clip)
     {
         if (clip.Kind == ClipKind.Image)
             return clip is { Width: { } w, Height: { } h } ? $"Image {w}×{h}" : "Image";
-        var line = (clip.Text ?? "")
-            .Split('\n')
-            .Select(l => l.Trim())
-            .FirstOrDefault(l => l.Length > 0) ?? "";
+        var line = clip.Kind == ClipKind.File
+            ? FileNames.RowText(clip.Files ?? [])
+            : (clip.Text ?? "")
+                .Split('\n')
+                .Select(l => l.Trim())
+                .FirstOrDefault(l => l.Length > 0) ?? "";
         if (line.Length <= PreviewLength) return line;
         var cut = PreviewLength - 1;
         if (char.IsHighSurrogate(line[cut - 1])) cut--;   // never split an emoji (surrogate pair)

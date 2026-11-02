@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Net.WebSockets;
 using Microsoft.Extensions.DependencyInjection;
+using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Security;
 using PrivatePaste.Client.Core.Sync;
@@ -980,6 +981,96 @@ public class DesktopHostTests : IAsyncLifetime
         await UploadAsync("three");
         await WaitUntilAsync(() => arrived.Count == 2);
         Assert.Equal(["one", "three"], arrived.Select(c => c.Text));
+    }
+
+    // ---- File clips ----
+
+    private string FilesRoot => Path.Combine(_dir, "files");
+
+    /// <summary>Another device sends <paramref name="name"/>; returns the clip once this host put it on the clipboard.</summary>
+    private async Task<ClipDto> ReceiveFileAsync(DesktopHost host, string name, string content)
+    {
+        var source = Path.Combine(_dir, "phone", name);
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        await File.WriteAllTextAsync(source, content);
+        var api = new PrivatePasteApi(new HttpClient(_server.Server.CreateHandler()) { BaseAddress = new Uri("http://localhost/") });
+        api.Token = (await api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "Phone", "android")).Token;
+        var codec = new ClipCodec(VaultKey.FromBytes(_vaultKey.Export()));
+        var stored = codec.Decode(await api.UploadClipAsync(
+            await codec.EncodeFilesAsync([await PrivatePaste.Client.Core.Files.LocalFile.ReadAsync(source, default)], null, default)));
+        await WaitUntilAsync(() => _clipboard.Current is ClipboardContent.Files);
+        return host.Cache.Items.Single(i => i.Clip.Id == stored.Id).Clip;
+    }
+
+    [Fact]
+    public async Task Received_files_are_kept_while_in_the_history_and_cleared_on_sign_out()
+    {
+        var host = await SignedInHostAsync();
+        var clip = await ReceiveFileAsync(host, "report.pdf", "pdf bytes");
+        var written = Assert.Single(((ClipboardContent.Files)_clipboard.Current!).Paths);
+        Assert.Equal(Path.Combine(FilesRoot, clip.Id.ToString("N"), "report.pdf"), written);
+        await host.DisposeAsync();
+        _hosts.Remove(host);
+
+        // A restart prunes what the history no longer holds, and keeps the rest.
+        var stray = Path.Combine(FilesRoot, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(stray);
+        File.WriteAllText(Path.Combine(stray, "old.txt"), "gone");
+        var again = NewHost();
+        Assert.False(Directory.Exists(stray));
+        Assert.True(File.Exists(written));
+
+        Assert.True(await again.StartAsync());
+        await WaitUntilAsync(() => again.State == SyncState.Connected);
+        await again.SignOutAsync();
+        Assert.False(Directory.Exists(FilesRoot));
+    }
+
+    [Fact]
+    public async Task A_key_reset_clears_the_received_files()
+    {
+        var host = await SignedInHostAsync();
+        await ReceiveFileAsync(host, "report.pdf", "pdf bytes");
+        Assert.True(Directory.Exists(FilesRoot));
+
+        var phone = await _server.LoginAsync("Web");
+        using var newKey = VaultKey.Create();
+        (await phone.PostAsJsonAsync("/api/vault/reset", PrivatePasteFactory.RandomWrap(newKey.KeyId), ProtocolJson.Options))
+            .EnsureSuccessStatusCode();   // the server sends vault.reset
+
+        await WaitUntilAsync(() => host.VaultState == VaultState.Locked);
+        Assert.False(Directory.Exists(FilesRoot));
+    }
+
+    [Fact]
+    public async Task Save_copies_the_files_into_downloads_and_says_where()
+    {
+        var host = await SignedInHostAsync();
+        var downloads = Path.Combine(_dir, "Downloads");
+        host.DownloadsOverride = downloads;
+        var clip = await ReceiveFileAsync(host, "report.pdf", "pdf bytes");
+        Directory.Delete(Path.Combine(FilesRoot, clip.Id.ToString("N")), recursive: true);   // gone: Save downloads it again
+
+        Assert.Equal("Saved report.pdf to Downloads", await host.SaveFilesAsync(clip));
+        Assert.Equal("pdf bytes", File.ReadAllText(Path.Combine(downloads, "report.pdf")));
+        Assert.Equal("Saved report (2).pdf to Downloads", await host.SaveFilesAsync(clip));
+
+        var text = clip with { Kind = ClipKind.Text, Text = "x", Files = null };
+        Assert.Null(await host.SaveFilesAsync(text));   // not a file clip: nothing to say
+    }
+
+    [Fact]
+    public async Task Save_that_cannot_write_names_no_file()
+    {
+        var host = await SignedInHostAsync();
+        var blocker = Path.Combine(_dir, "not-a-folder");
+        File.WriteAllText(blocker, "x");
+        host.DownloadsOverride = Path.Combine(blocker, "Downloads");   // a file where the folder should be
+        var clip = await ReceiveFileAsync(host, "secret-name.pdf", "pdf bytes");
+
+        Assert.Equal(DesktopHost.CouldNotSaveFiles, await host.SaveFilesAsync(clip));
+        var log = File.ReadAllText(Path.Combine(_dir, "logs", "privatepaste.log"));
+        Assert.DoesNotContain("secret-name", log);
     }
 
     private sealed class BlockedUiContext : SynchronizationContext

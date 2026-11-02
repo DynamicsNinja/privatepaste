@@ -2,7 +2,7 @@ using SharpHook.Data;
 
 namespace PrivatePaste.Desktop.Input;
 
-public enum PopupKeyAction { Pass, Swallow, Up, Down, PageUp, PageDown, Paste, Close, Backspace, Type, SwitchTab, TogglePin }
+public enum PopupKeyAction { Pass, Swallow, Up, Down, PageUp, PageDown, Paste, Close, Backspace, Type, SwitchTab, TogglePin, Save }
 
 /// <summary>What a key press does while the popup is open; <see cref="Text"/> is set for <see cref="PopupKeyAction.Type"/>.</summary>
 public readonly record struct PopupKey(PopupKeyAction Action, string? Text = null);
@@ -46,6 +46,8 @@ public static class PopupKeyRouter
             case KeyCode.VcTab when plain: return new PopupKey(PopupKeyAction.SwitchTab);
             // Ctrl+P alone: with Shift or Alt it stays swallowed like every other shortcut.
             case KeyCode.VcP when ctrl && !alt && (mask & EventMask.Shift) == 0: return new PopupKey(PopupKeyAction.TogglePin);
+            // Ctrl+S alone saves a file row; the popup decides whether the selected row is one.
+            case KeyCode.VcS when ctrl && !alt && (mask & EventMask.Shift) == 0: return new PopupKey(PopupKeyAction.Save);
         }
 
         // Plain or shifted text, or AltGr (which Windows reports as Ctrl+Alt). Control characters (Ctrl+letter) are not text.

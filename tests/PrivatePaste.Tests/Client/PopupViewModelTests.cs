@@ -448,4 +448,98 @@ public class PopupViewModelTests
         Assert.Equal("Ana", vm.Items.Single(i => i.Clip.Text == "a").Person);
         Assert.Null(vm.Items.Single(i => i.Clip.Text == "b").Person);
     }
+
+    // ---- File clips ----
+
+    private readonly List<ClipDto> _saved = [];
+    private string? _saveReply = "Saved report.pdf to Downloads";
+
+    private static ClipDto FileClip(int minutesAgo, long seq, params (string Name, long Size)[] files) =>
+        new(Guid.NewGuid(), seq, ClipKind.File, null, "filehash" + seq, null, null, files.Sum(f => f.Size), null, "PC-work",
+            Now.AddMinutes(-minutesAgo))
+        {
+            Files = files.Select(f => new ClipFileInfo(f.Name, f.Size, "application/octet-stream")).ToList(),
+            BlobCount = files.Length,
+        };
+
+    private PopupViewModel CreateWithSave(HistoryCache cache) => new(
+        cache,
+        Older,
+        clip => { _activated.Add(clip); return Task.CompletedTask; },
+        _time,
+        notify: _toasts.Add,
+        save: clip => { _saved.Add(clip); return Task.FromResult(_saveReply); });
+
+    [Fact]
+    public void File_rows_show_the_first_name_the_count_and_the_total_size()
+    {
+        var vm = Create(CacheWith(FileClip(1, 1, ("report.pdf", 3_000_000), ("a.txt", 300_000), ("b.txt", 265_000))));
+        var row = Assert.Single(vm.Items);
+        Assert.True(row.IsFile);
+        Assert.False(row.IsText || row.IsImage || row.IsLink || row.IsUnknown);
+        Assert.Equal("report.pdf +2 more · 3.4 MB", row.Preview);
+        Assert.Equal("one.txt · 12 B", PopupViewModel.FormatPreview(FileClip(1, 2, ("one.txt", 12))));
+    }
+
+    [Fact]
+    public void Footer_offers_save_only_while_a_file_row_is_selected()
+    {
+        const string plain = "Enter to paste   Tab for Pinned   Ctrl+P to pin";
+        var vm = CreateWithSave(CacheWith(Text("text", 1, 2), FileClip(2, 1, ("report.pdf", 10))));
+        Assert.Equal(plain, vm.FooterHint);
+        var changes = new List<string?>();
+        vm.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+
+        vm.MoveSelection(1);
+        Assert.Equal(plain + "   Ctrl+S to save", vm.FooterHint);
+        Assert.Contains(nameof(PopupViewModel.FooterHint), changes);
+
+        changes.Clear();
+        vm.Query = "text";   // the list changes under the same index
+        Assert.Equal(plain, vm.FooterHint);
+        Assert.Contains(nameof(PopupViewModel.FooterHint), changes);
+    }
+
+    [Fact]
+    public async Task Save_runs_only_on_a_file_row_and_shows_the_reply()
+    {
+        var file = FileClip(2, 1, ("report.pdf", 10));
+        var vm = CreateWithSave(CacheWith(Text("text", 1, 2), file));
+
+        await vm.SaveSelectedAsync();   // a text row: nothing happens
+        Assert.Empty(_saved);
+        Assert.Empty(_toasts);
+
+        vm.MoveSelection(1);
+        await vm.SaveSelectedAsync();
+        Assert.Equal(file.Id, Assert.Single(_saved).Id);
+        Assert.Equal(["Saved report.pdf to Downloads"], _toasts);
+        Assert.Empty(_activated);   // saving never pastes
+
+        _saveReply = null;          // nothing to say
+        await vm.SaveSelectedAsync();
+        Assert.Single(_toasts);
+    }
+
+    [Fact]
+    public async Task Save_without_a_save_delegate_or_a_failing_one_never_throws()
+    {
+        var file = FileClip(2, 1, ("report.pdf", 10));
+        await Create(CacheWith(file)).SaveSelectedAsync();
+        Assert.Empty(_toasts);
+
+        var failing = new PopupViewModel(CacheWith(file), null, _ => Task.CompletedTask, _time, notify: _toasts.Add,
+            save: _ => throw new IOException("C:\\secret\\report.pdf"));
+        await failing.SaveSelectedAsync();
+        Assert.Equal([PopupViewModel.CouldNotSaveText], _toasts);
+    }
+
+    [Fact]
+    public async Task Enter_on_a_file_row_pastes_it()
+    {
+        var file = FileClip(2, 1, ("report.pdf", 10));
+        var vm = Create(CacheWith(file));
+        await vm.ActivateSelectedAsync();
+        Assert.Equal(file.Id, Assert.Single(_activated).Id);
+    }
 }

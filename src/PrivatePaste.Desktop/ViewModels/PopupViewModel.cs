@@ -41,6 +41,7 @@ public sealed record PopupItem(ClipDto Clip, string Preview, string Meta, byte[]
     public bool IsImage => Clip.Kind == ClipKind.Image;
     public bool IsLink => Clip.Kind == ClipKind.Link;
     public bool IsText => Clip.Kind == ClipKind.Text;
+    public bool IsFile => Clip.Kind == ClipKind.File;
     public bool IsPinned => Clip.PinnedAt is not null;
 
     /// <summary>Tooltip and screen-reader name of the row's pin button.</summary>
@@ -64,6 +65,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private const int ServerLimit = 50;
     public const string SearchingOlderText = "Searching older clips…";
     public const string UnreachableText = "Can't reach the server.";
+    public const string CouldNotSaveText = "Couldn't save the files.";
 
     private readonly HistoryCache _cache;
     private readonly Func<string, CancellationToken, IAsyncEnumerable<ClipDto>>? _searchOlder;
@@ -72,6 +74,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private readonly Func<Guid, bool, Task<ClipDto>>? _setPinned;
     private readonly Func<string, CancellationToken, Task<IReadOnlyList<ClipDto>>>? _serverPinned;
     private readonly Action<string>? _notify;
+    private readonly Func<ClipDto, Task<string?>>? _save;
     private CancellationTokenSource? _search;
     /// <summary>The query an older-clip search ran for (or runs for), and whether it reached the end.</summary>
     private string? _olderQuery;
@@ -80,6 +83,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private bool _olderUnavailable;
 
     /// <param name="searchOlder">(query, ct) → the server's older clips that match, newest first; null: no such search.</param>
+    /// <param name="save">Saves a file clip's files to Downloads and returns what to tell the user (null: nothing).</param>
     public PopupViewModel(
         HistoryCache cache,
         Func<string, CancellationToken, IAsyncEnumerable<ClipDto>>? searchOlder,
@@ -87,15 +91,19 @@ public sealed partial class PopupViewModel : ObservableObject
         TimeProvider time,
         Func<Guid, bool, Task<ClipDto>>? setPinned = null,
         Func<string, CancellationToken, Task<IReadOnlyList<ClipDto>>>? serverPinned = null,
-        Action<string>? notify = null)
+        Action<string>? notify = null,
+        Func<ClipDto, Task<string?>>? save = null)
     {
         _setPinned = setPinned;
         _serverPinned = serverPinned;
         _notify = notify;
+        _save = save;
         _cache = cache;
         _searchOlder = searchOlder;
         _activate = activate;
         _time = time;
+        // The footer follows the selected row, which can change kind under the same index when the list changes.
+        Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(FooterHint));
         Reset(cache.Search(""), highlightNewest: true);
     }
 
@@ -103,6 +111,7 @@ public sealed partial class PopupViewModel : ObservableObject
     private string _query = "";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FooterHint))]
     private int _selectedIndex;
 
     public ObservableCollection<PopupItem> Items { get; } = [];
@@ -123,7 +132,10 @@ public sealed partial class PopupViewModel : ObservableObject
     public bool IsHistoryTab => Tab == PopupTab.History;
     public bool IsPinnedTab => Tab == PopupTab.Pinned;
 
-    public string FooterHint => $"Enter to paste   Tab for {(Tab == PopupTab.History ? "Pinned" : "History")}   Ctrl+P to pin";
+    public string FooterHint => $"Enter to paste   Tab for {(Tab == PopupTab.History ? "Pinned" : "History")}   Ctrl+P to pin"
+        + (Selected is { IsFile: true } ? "   Ctrl+S to save" : "");
+
+    private PopupItem? Selected => SelectedIndex >= 0 && SelectedIndex < Items.Count ? Items[SelectedIndex] : null;
 
     public void SwitchTab() => ShowTab(Tab == PopupTab.History ? PopupTab.Pinned : PopupTab.History);
 
@@ -211,8 +223,13 @@ public sealed partial class PopupViewModel : ObservableObject
     private IReadOnlyList<CachedClip> CachedFor(string query) =>
         Tab == PopupTab.History
             ? _cache.Search(query)
-            : _cache.Pinned.Where(c => query.Length == 0
-                || c.Clip.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase)).ToArray();
+            : _cache.Pinned.Where(c => Matches(c.Clip, query)).ToArray();
+
+    /// <summary>Whether a clip matches a search: its text, or any of its file names.</summary>
+    public static bool Matches(ClipDto clip, string query) =>
+        query.Length == 0
+        || clip.Text is { } t && t.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || clip.Files is { } files && files.Any(f => f.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
 
     private async Task ListServerPinsAsync(string query, CancellationToken ct)
     {
@@ -253,6 +270,7 @@ public sealed partial class PopupViewModel : ObservableObject
     {
         if (clip.Kind == ClipKind.Image) return $"Image {clip.Width}×{clip.Height}";
         if (clip.Kind == ClipKind.Unknown) return PopupItem.UnknownText;
+        if (clip.Kind == ClipKind.File) return FileNames.RowText(clip.Files ?? []);
         var line = (clip.Text ?? "")
             .Split('\n')
             .Select(l => l.Trim())
@@ -335,6 +353,19 @@ public sealed partial class PopupViewModel : ObservableObject
         for (var i = 0; i < Items.Count; i++)
             if (Items[i].Clip.Id == id) return i;
         return -1;
+    }
+
+    /// <summary>
+    /// Ctrl+S: saves the selected file clip's files to Downloads (downloading them if needed) and says where. Does nothing on
+    /// any other row. Never throws, and never pastes.
+    /// </summary>
+    public async Task SaveSelectedAsync()
+    {
+        if (_save is null || Selected is not { IsFile: true } item) return;
+        string? message;
+        try { message = await _save(item.Clip); }
+        catch (Exception) { message = CouldNotSaveText; }   // the error may name a file: never shown or logged
+        if (message is not null) _notify?.Invoke(message);
     }
 
     /// <summary>Enter or a click: pastes the selected clip, or runs the older-clip search on that row. An unknown clip does nothing.</summary>

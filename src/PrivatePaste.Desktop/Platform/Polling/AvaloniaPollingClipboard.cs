@@ -1,8 +1,10 @@
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Desktop.Platform.Linux;
@@ -12,7 +14,7 @@ namespace PrivatePaste.Desktop.Platform.Polling;
 
 /// <summary>
 /// The <see cref="IClipboardAccess"/> for macOS and Linux: Avalonia's clipboard polled every 500 ms.
-/// Text wins when both text and an image are present. Text is compared by value; images are compared by their PNG bytes when the platform exposes <c>image/png</c> on the
+/// Copied files win (file managers offer their names as text too), then text over an image. Text is compared by value; images are compared by their PNG bytes when the platform exposes <c>image/png</c> on the
 /// clipboard (macOS and most X11 clients do); where it does not, the clipboard is text-only.
 /// </summary>
 public static class AvaloniaPollingClipboard
@@ -28,21 +30,25 @@ public static class AvaloniaPollingClipboard
 internal sealed class AvaloniaClipboardBackend(Action<string>? log = null) : IClipboardBackend, IDisposable
 {
     private static readonly DataFormat<byte[]> Png = DataFormat.CreateBytesPlatformFormat("image/png");
+    private static readonly DataFormat<byte[]> UriList = DataFormat.CreateBytesPlatformFormat("text/uri-list");
+    private static readonly DataFormat<byte[]> GnomeCopiedFiles = DataFormat.CreateBytesPlatformFormat("x-special/gnome-copied-files");
+    private static readonly DataFormat<byte[]> MacFileUrl = DataFormat.CreateBytesPlatformFormat("public.file-url");
 
     private static readonly TimeSpan SourceAppTimeout = TimeSpan.FromSeconds(1);
 
     private Window? _hidden;
     private int _detectionFailureLogged;
 
-    /// <summary>The fingerprint read of every tick: text or PNG only, no detection work.</summary>
+    /// <summary>The fingerprint read of every tick: files, text or PNG only, no detection work.</summary>
     public Task<ClipboardContent?> PeekAsync(CancellationToken ct) =>
         Dispatcher.UIThread.InvokeAsync<ClipboardContent?>(async () =>
         {
             if (GetClipboard() is not { } clipboard) return null;
-            var text = await clipboard.TryGetTextAsync();
+            var files = await TryReadFilesAsync(clipboard);
+            var text = files.Count > 0 ? null : await clipboard.TryGetTextAsync();
             // Text first (office apps put text plus a bitmap); the PNG is only fetched when there is no usable text.
-            var png = string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(clipboard) : null;
-            return ClipboardSelection.Choose(text, () => png);
+            var png = files.Count == 0 && string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(clipboard) : null;
+            return ClipboardSelection.Choose(text, () => png, files);
         });
 
     /// <summary>
@@ -60,9 +66,10 @@ internal sealed class AvaloniaClipboardBackend(Action<string>? log = null) : ICl
             using (data)
             {
                 if (data is null) return (null, false);
-                var text = await data.TryGetTextAsync();
-                var png = string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(data) : null;
-                var chosen = ClipboardSelection.Choose(text, () => png);
+                var files = await TryReadFilesAsync(data);
+                var text = files.Count > 0 ? null : await data.TryGetTextAsync();
+                var png = files.Count == 0 && string.IsNullOrWhiteSpace(text) ? await TryReadPngAsync(data) : null;
+                var chosen = ClipboardSelection.Choose(text, () => png, files);
                 return (chosen, chosen is not null && await IsPrivateAsync(data));
             }
         });
@@ -138,10 +145,88 @@ internal sealed class AvaloniaClipboardBackend(Action<string>? log = null) : ICl
             {
                 case ClipboardContent.Text t: data.Add(DataTransferItem.CreateText(t.Value)); break;
                 case ClipboardContent.Image i: data.Add(DataTransferItem.Create(Png, i.Png)); break;
+                case ClipboardContent.Files f:
+                    // A failed write is logged: whatever went wrong, the message must not carry a received file's name.
+                    try
+                    {
+                        AddFiles(data, f.Paths);
+                        await clipboard.SetDataAsync(data);
+                    }
+                    catch (Exception e) { throw new IOException($"Could not put the files on the clipboard ({e.GetType().Name})."); }
+                    return;
                 default: return;
             }
             await clipboard.SetDataAsync(data);
         });
+
+    /// <summary>
+    /// The platform's own file-list formats, written as bytes: one <c>public.file-url</c> item per file on macOS; on Linux
+    /// <c>text/uri-list</c> plus GNOME's <c>x-special/gnome-copied-files</c> ("copy", so a paste copies). Unverified on
+    /// real machines.
+    /// </summary>
+    private static void AddFiles(DataTransfer data, IReadOnlyList<string> paths)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            foreach (var path in paths) data.Add(DataTransferItem.Create(MacFileUrl, Encoding.UTF8.GetBytes(FileUris.ToUri(path))));
+            return;
+        }
+        var item = new DataTransferItem();
+        item.Set(UriList, Encoding.UTF8.GetBytes(FileUris.ToUriList(paths)));
+        item.Set(GnomeCopiedFiles, Encoding.UTF8.GetBytes(FileUris.ToGnomeCopiedFiles(paths)));
+        data.Add(item);
+    }
+
+    private static async Task<IReadOnlyList<string>> TryReadFilesAsync(IClipboard clipboard)
+    {
+        try
+        {
+            using var data = await clipboard.TryGetDataAsync();
+            return data is null ? [] : await TryReadFilesAsync(data);
+        }
+        catch (Exception) { return []; }
+    }
+
+    /// <summary>
+    /// The local paths of copied files: Avalonia's own file format first, then the platform formats it may not map
+    /// (GNOME's list, text/uri-list, public.file-url). Empty when there are none or they can't be read; never throws.
+    /// Best effort and unverified on real macOS and Linux machines.
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> TryReadFilesAsync(IAsyncDataTransfer data)
+    {
+        try
+        {
+            var formats = data.Formats;
+            if (formats.Contains(DataFormat.File) && await data.TryGetFilesAsync() is { Length: > 0 } items)
+            {
+                var local = items.Select(i => i.TryGetLocalPath()).OfType<string>().ToList();
+                if (local.Count > 0) return local;
+            }
+            if (formats.Contains(GnomeCopiedFiles) && await ReadBytesAsync(data, GnomeCopiedFiles) is { } gnome
+                && FileUris.ParseGnomeCopiedFiles(Encoding.UTF8.GetString(gnome)) is { Count: > 0 } copied)
+                return copied;
+            if (formats.Contains(UriList) && await ReadBytesAsync(data, UriList) is { } list
+                && FileUris.ParseUriList(Encoding.UTF8.GetString(list)) is { Count: > 0 } listed)
+                return listed;
+            if (formats.Contains(MacFileUrl))
+            {
+                var urls = new List<string>();
+                foreach (var item in data.Items)
+                    if (await item.TryGetRawAsync(MacFileUrl) is byte[] bytes && FileUris.ToPath(Encoding.UTF8.GetString(bytes).Trim('\0', ' ', '\n')) is { } path)
+                        urls.Add(path);
+                return urls;
+            }
+        }
+        catch (Exception) { }
+        return [];
+    }
+
+    private static async Task<byte[]?> ReadBytesAsync(IAsyncDataTransfer data, DataFormat<byte[]> format)
+    {
+        foreach (var item in data.Items)
+            if (await item.TryGetRawAsync(format) is byte[] { Length: > 0 } bytes) return bytes;
+        return null;
+    }
 
     private static async Task<byte[]?> TryReadPngAsync(IClipboard clipboard)
     {
