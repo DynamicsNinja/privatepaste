@@ -369,11 +369,12 @@ function copy(row, button) {
   button.disabled = true;
   let done;
   if (row.kind === 'image') {
-    // The background can't write an image, so the popup does, while it has the focus and the click. The engine is told
-    // first, so the clipboard poller doesn't send the image back as a new copy.
+    // The background can't write an image, so the popup does, while it has the focus and the click. The engine hands
+    // over the PNG it decrypted and remembers it, so the clipboard poller doesn't send the image back as a new copy.
     const png = (async () => {
-      await ask({ type: 'engine.copy', id: row.id });
-      const { url } = await ask({ type: 'engine.download', id: row.id, n: 0 });
+      const copied = await ask({ type: 'engine.copy', id: row.id });
+      if (!copied?.url) throw new Error('Not copied.');
+      const { url } = copied;
       try {
         // The offscreen document's blob URL: same extension origin, so the popup can read it.
         return new Blob([await (await fetch(url)).arrayBuffer()], { type: 'image/png' });

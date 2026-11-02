@@ -402,6 +402,21 @@ test('sign in, then unlock with the passphrase', async () => {
   assert.equal(vault.encKey.extractable, false);
 });
 
+test('plain http is refused except for this computer, before anything is sent', async () => {
+  const env = await setup({ signedIn: false, wrap: vectors.passphraseWrap[0].wrap });
+  await env.engine.start();
+  for (const url of ['http://192.168.1.20:8080', 'HTTP://paste.example.com', ' http://10.0.0.2/ ']) {
+    await assert.rejects(() => env.engine.signIn(url, 'owner', 'dev', 'Edge'),
+      { message: 'The server address must use https:// (http:// is only allowed for localhost).' });
+  }
+  await assert.rejects(() => env.engine.signIn('paste.example.com', 'owner', 'dev', 'Edge'),
+    { message: 'Enter a full server address starting with https://' });
+  assert.deepEqual(env.server.calls, []);
+  for (const url of ['http://127.0.0.1:5202', 'http://[::1]:5202', 'https://paste.example.com']) {
+    assert.equal((await env.engine.signIn(url, 'owner', 'dev', 'Edge')).state, 'locked');
+  }
+});
+
 test('without a vault, someone other than the owner is told to ask the owner', async () => {
   const env = await setup({ signedIn: false, wrap: null });
   env.server.isOwner = false;
@@ -547,12 +562,13 @@ test('copy writes text as its own write, and leaves images to the popup', async 
   assert.equal(await env.engine.copy('t'), true);
   assert.deepEqual(env.clipboard.written, ['again']);
   await env.engine.onLocalChange({ text: 'again' });
-  assert.equal(await env.engine.copy('i'), false);
+  // An image comes back decrypted for the popup to write, fetched and decrypted once.
+  assert.deepEqual(await env.engine.copy('i'), { png });
+  assert.equal(env.server.count('blob'), 1);
   assert.deepEqual(env.clipboard.images, []);
   // The popup writes it; the poll reading it back is not uploaded.
   await env.engine.onLocalChange({ png });
   assert.equal(env.server.uploads.length, 0);
-  assert.deepEqual((await env.engine.download('i', 0)).bytes, png);
 });
 
 test('download gives the decrypted file and its safe name', async () => {
@@ -686,6 +702,97 @@ test('the clipboard as it was at start is the baseline, not a new copy', async (
   await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
   assert.deepEqual(env.clipboard.written, ['incoming']);
   assert.equal(env.server.uploads.length, 0);
+});
+
+// ---- copies made while not syncing, and the poller's baseline ----
+
+for (const reported of [true, false]) {
+  test(`a copy made while paused is never uploaded (${reported ? 'reported by the poller' : 'never read'})`, async () => {
+    const env = await setup();
+    await connected(env);
+    await userCopies(env, 'before');
+    await env.engine.setPaused(true);
+    env.clipboard.copyHere('secret');
+    if (reported) await env.engine.onLocalChange({ text: 'secret' });
+    await env.engine.setPaused(false);
+    await until(() => env.engine.status().state === 'syncing' && env.ws.open().length === 1, 'syncing');
+    await live(env.ws.open()[0], await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+    assert.equal(env.server.uploads.length, 1);
+    assert.deepEqual(await e2e.openPayload(keys, env.server.uploads[0].meta.payload), { text: 'before' });
+    // Newest wins, as after the first catch-up: the incoming clip goes on the clipboard.
+    assert.deepEqual(env.clipboard.written, ['incoming']);
+  });
+}
+
+test('a copy made while locked is never uploaded after unlocking', async () => {
+  const wrapCase = vectors.passphraseWrap[0];
+  const env = await setup({ wrap: wrapCase.wrap });
+  const socket = await connected(env);
+  await userCopies(env, 'before');
+  socket.receive({ type: 'vault.reset' });
+  await until(() => env.engine.status().state === 'locked', 'locked');
+  await userCopies(env, 'secret');
+  await env.engine.unlock(wrapCase.passphrase);
+  await until(() => env.engine.status().state === 'syncing' && env.ws.open().length === 1, 'syncing');
+  await live(env.ws.open()[0], await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+  assert.equal(env.server.uploads.length, 1);
+  assert.deepEqual(env.clipboard.written, ['incoming']);
+});
+
+test('the clipboard is wanted only while syncing or offline', async () => {
+  const env = await setup();
+  assert.equal(env.engine.wantsClipboard(), false, 'before start');
+  await connected(env);
+  assert.equal(env.engine.wantsClipboard(), true);
+  await env.engine.setPaused(true);
+  assert.equal(env.engine.wantsClipboard(), false, 'paused');
+  await env.engine.setPaused(false);
+  assert.equal(env.engine.wantsClipboard(), true);
+  await until(() => env.ws.open().length === 1, 'the socket');
+  env.ws.open()[0].receive({ type: 'vault.reset' });
+  await until(() => env.engine.status().state === 'locked', 'locked');
+  assert.equal(env.engine.wantsClipboard(), false, 'locked');
+  await env.engine.signOut();
+  assert.equal(env.engine.wantsClipboard(), false, 'signed out');
+});
+
+for (const before of ['there before', null]) {
+  test(`a copy made before the first poll after start is not overwritten (${before ? 'text' : 'empty'} at start)`, async () => {
+    const env = await setup();
+    if (before) env.clipboard.copyHere(before);
+    const socket = await connected(env);
+    await env.engine.setBaseline(before ? { text: before } : {});   // the poller's first read
+    env.clipboard.copyHere('copied right after start');
+    await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+    assert.deepEqual(env.clipboard.written, []);
+    assert.equal(env.server.uploads.length, 1);
+    assert.deepEqual(await e2e.openPayload(keys, env.server.uploads[0].meta.payload), { text: 'copied right after start' });
+  });
+}
+
+test('a copy made right after resuming, before the poller reads again, is uploaded', async () => {
+  const env = await setup();
+  await connected(env);
+  await env.engine.setPaused(true);
+  env.clipboard.copyHere('copied while paused');
+  await env.engine.setPaused(false);
+  await until(() => env.engine.status().state === 'syncing', 'syncing');
+  env.clipboard.copyHere('copied right after');
+  await env.engine.setBaseline({ text: 'copied right after' });   // the poller's first read since the pause
+  assert.equal(env.server.uploads.length, 1);
+  assert.deepEqual(await e2e.openPayload(keys, env.server.uploads[0].meta.payload), { text: 'copied right after' });
+});
+
+test('a baseline read after the engine already knows the clipboard is a copy when it differs', async () => {
+  const env = await setup();
+  const socket = await connected(env);
+  await live(socket, await clip({ id: 'p1', seq: 1, at: env.clock.now() + 1000, text: 'incoming' }));
+  assert.deepEqual(env.clipboard.written, ['incoming']);
+  await env.engine.setBaseline({ text: 'incoming' });
+  assert.equal(env.server.uploads.length, 0);
+  env.clipboard.copyHere('copied before the poll');
+  await env.engine.setBaseline({ text: 'copied before the poll' });
+  assert.equal(env.server.uploads.length, 1);
 });
 
 test('catch-up applies only the newest (poll)', async () => {

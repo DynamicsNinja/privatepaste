@@ -7,9 +7,12 @@ import { startPollingWith } from './core/poller.js';
 import { startEngine } from './engine-host.js';
 import { handleEngineMessage, replyWith } from './messages.js';
 
-/** Calls `onChange({text?, png?})` for each new copy, reading the clipboard every `intervalMs`. */
-export const startPolling = (onChange, intervalMs = 1000) =>
-  startPollingWith({ read: clipboard.readClipboard, onChange, intervalMs });
+/**
+ * Calls `onChange({text?, png?})` for each new copy, reading the clipboard every `intervalMs`, and only while `wants()`;
+ * `onBaseline(item)` hears each first read (core/poller.js).
+ */
+export const startPolling = (onChange, intervalMs = 1000, { wants, onBaseline } = {}) =>
+  startPollingWith({ read: clipboard.readClipboard, onChange, onBaseline, wants, intervalMs });
 
 const engine = startEngine({ clipboard, startPolling });
 

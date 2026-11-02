@@ -2,6 +2,7 @@
 // filter and the file-row text are the web UI's (e2e.js), so the popup and the history page can't drift apart.
 
 import { fileRowText, matchesFilter, filterEmptyText } from '../js/e2e.js';
+import { normalizeServerUrl } from '../core/server-url.js';
 
 const PLATFORMS = new Set(['windows', 'macos', 'linux', 'android', 'web', 'extension']);
 const TITLE_LENGTH = 200;
@@ -97,12 +98,11 @@ export const listSignature = rows => rows.map(r => `${r.id}|${r.lastCopiedAt}|${
 
 /**
  * The host permission to ask for at sign-in: the server's scheme and host, any port (match patterns take no port).
- * Null for anything but an http(s) address; the engine then says what to enter.
+ * Null for an address the engine refuses (not https://, or plain http:// to another computer); it then says why.
  */
 export function originPattern(serverUrl) {
   try {
-    const url = new URL(String(serverUrl ?? '').trim());
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    const url = new URL(normalizeServerUrl(serverUrl));
     return `${url.protocol}//${url.hostname}/*`;
   } catch {
     return null;
