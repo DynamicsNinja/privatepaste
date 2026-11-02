@@ -1,5 +1,6 @@
 package xyz.ficdev.privatepaste.ui.history
 
+import android.content.ActivityNotFoundException
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -63,6 +64,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import xyz.ficdev.privatepaste.R
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.BrandMark
 import xyz.ficdev.privatepaste.ui.BrandMarkSize
@@ -84,6 +86,15 @@ fun HistoryScreen(
     LaunchedEffect(vm) {
         vm.messages.collect { Toast.makeText(context, it.resolve(context), Toast.LENGTH_SHORT).show() }
     }
+    LaunchedEffect(vm) {
+        vm.shares.collect {
+            try {
+                context.startActivity(it)
+            } catch (_: ActivityNotFoundException) {
+                // No app to share with: the chooser itself normally says so.
+            }
+        }
+    }
     // Re-renders the relative times once a minute.
     val minuteTick by produceState(0) {
         while (true) {
@@ -99,6 +110,8 @@ fun HistoryScreen(
         onDelete = vm::delete,
         onTab = vm::onTab,
         onTogglePin = vm::togglePin,
+        onSave = vm::save,
+        onShare = vm::share,
         onNearEnd = vm::onNearEnd,
         onOpenSettings = onOpenSettings,
         thumbnails = thumbnails,
@@ -120,6 +133,8 @@ fun HistoryContent(
     minuteTick: Int = 0,
     onTab: (HistoryTab) -> Unit = {},
     onTogglePin: (ClipDto) -> Unit = {},
+    onSave: (ClipDto) -> Unit = {},
+    onShare: (ClipDto) -> Unit = {},
     onSearchOlder: () -> Unit = {},
 ) {
     var pendingDelete by remember { mutableStateOf<ClipDto?>(null) }
@@ -240,6 +255,22 @@ fun HistoryContent(
                                         onTogglePin(clip)
                                     },
                                 )
+                                if (clip.kind == ClipKind.FILE) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.history_save_action)) },
+                                        onClick = {
+                                            menuFor = null
+                                            onSave(clip)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.history_share_action)) },
+                                        onClick = {
+                                            menuFor = null
+                                            onShare(clip)
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.history_delete), color = MaterialTheme.colorScheme.error) },
                                     onClick = {

@@ -19,6 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import xyz.ficdev.privatepaste.core.model.ClipDto
+import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.sync.SyncState
 import xyz.ficdev.privatepaste.ui.history.HistoryContent
@@ -46,6 +47,7 @@ class HistoryScreenTest {
     private val copied = mutableListOf<String>()
     private val deleted = mutableListOf<String>()
 
+    private val fileEvents = mutableListOf<String>()
     private val pinnedEvents = mutableListOf<String>()
     private val tabs = mutableListOf<HistoryTab>()
 
@@ -61,6 +63,8 @@ class HistoryScreenTest {
                 onOpenSettings = {},
                 onTab = { tabs += it },
                 onTogglePin = { pinnedEvents += it.id },
+                onSave = { fileEvents += "save:${it.id}" },
+                onShare = { fileEvents += "share:${it.id}" },
             )
         }
     }
@@ -149,6 +153,34 @@ class HistoryScreenTest {
         assertEquals(listOf("a"), pinnedEvents)
         compose.onNodeWithText("Pin").assertDoesNotExist()
         assertEquals(emptyList<String>(), copied)
+    }
+
+    private val fileClip = clip.copy(
+        id = "f", kind = ClipKind.FILE, text = null,
+        files = listOf(ClipFileInfo("report.pdf", 3_400_000, "application/pdf"), ClipFileInfo("b.txt", 5, "text/plain")),
+    )
+
+    @Test
+    fun fileRowShowsNamesAndSize() {
+        show(HistoryState(items = listOf(fileClip), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("report.pdf +1 more · 3.2 MB").assertIsDisplayed()
+        compose.onNodeWithContentDescription("File").assertExists()
+    }
+
+    @Test
+    fun longPressMenuOffersSaveAndShareOnFileRowsOnly() {
+        show(HistoryState(items = listOf(fileClip, clip), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("report.pdf +1 more · 3.2 MB").performTouchInput { longClick() }
+        compose.onNodeWithText("Save").assertIsDisplayed()
+        compose.onNodeWithText("Share").assertIsDisplayed()
+        compose.onNodeWithText("Share").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("share:f"), fileEvents)
+
+        compose.onNodeWithText("hello from the desk").performTouchInput { longClick() }
+        compose.onNodeWithText("Pin").assertIsDisplayed()
+        compose.onNodeWithText("Save").assertDoesNotExist()
+        compose.onNodeWithText("Share").assertDoesNotExist()
     }
 
     @Test

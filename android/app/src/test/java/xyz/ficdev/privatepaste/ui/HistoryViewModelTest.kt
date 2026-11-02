@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -26,10 +27,13 @@ import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ClipPage
 import xyz.ficdev.privatepaste.sync.SyncState
+import xyz.ficdev.privatepaste.core.model.ClipFileInfo
 import xyz.ficdev.privatepaste.ui.history.ClipCopier
+import xyz.ficdev.privatepaste.ui.history.ClipFileActions
 import xyz.ficdev.privatepaste.ui.history.ClipRemote
 import xyz.ficdev.privatepaste.ui.history.HistoryTab
 import xyz.ficdev.privatepaste.ui.history.HistoryViewModel
+import android.content.Intent
 import java.io.IOException
 import java.time.Instant
 
@@ -59,6 +63,15 @@ class HistoryViewModelTest {
         }
     }
 
+    private var fileCopyWorks = true
+    private var fileSaveWorks = true
+    private var shareIntent: Intent? = Intent("share")
+    private val files = object : ClipFileActions {
+        override suspend fun copy(clipId: String): Boolean { events += "copyFiles:$clipId"; return fileCopyWorks }
+        override suspend fun save(clipId: String): Boolean { events += "saveFiles:$clipId"; return fileSaveWorks }
+        override suspend fun share(clipId: String): Intent? { events += "shareFiles:$clipId"; return shareIntent }
+    }
+
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
     @After fun tearDown() = Dispatchers.resetMain()
 
@@ -76,6 +89,7 @@ class HistoryViewModelTest {
         cachedImage = { localImages[it] },
         io = dispatcher,
         onUnauthorized = { unauthorizedCalls++ },
+        files = files,
     )
 
     /** Keeps [HistoryViewModel.state] collected, like the screen does. */
@@ -370,6 +384,74 @@ class HistoryViewModelTest {
         vm.copy(image)
         advanceUntilIdle()
         assertEquals(listOf("image:img", "copyImage:img:7", "restore:img"), events)
+    }
+
+    private fun fileClip(id: String) = clip(id, 1, text = null, kind = ClipKind.FILE)
+        .copy(files = listOf(ClipFileInfo("a.pdf", 10, "application/pdf")))
+
+    @Test
+    fun tapOnAFileClipCopiesTheFilesThenRestores() = runTest(dispatcher) {
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.copy(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf("copyFiles:f", "restore:f"), events)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copied)), messages)
+    }
+
+    @Test
+    fun copyingFilesThatCannotBeHadOfflineSaysTheyNeedAConnection() = runTest(dispatcher) {
+        fileCopyWorks = false
+        sync.value = SyncState.OFFLINE
+        val vm = collecting(vm(online = false))
+        val messages = messagesOf(vm)
+        vm.copy(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf("copyFiles:f"), events)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_files_offline)), messages)
+    }
+
+    @Test
+    fun copyingFilesThatFailWhileOnlineSaysCopyFailed() = runTest(dispatcher) {
+        fileCopyWorks = false
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.copy(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf<UiText>(UiText.Res(R.string.copy_failed)), messages)
+        assertEquals(listOf("copyFiles:f"), events)
+    }
+
+    @Test
+    fun saveToastsSavedOrFailed() = runTest(dispatcher) {
+        val vm = collecting(vm())
+        val messages = messagesOf(vm)
+        vm.save(fileClip("f"))
+        advanceUntilIdle()
+        fileSaveWorks = false
+        vm.save(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf<UiText>(UiText.Res(R.string.saved_to_downloads), UiText.Res(R.string.save_failed)), messages)
+    }
+
+    @Test
+    fun shareEmitsTheIntentAndFailureToasts() = runTest(dispatcher) {
+        val vm = collecting(vm())
+        val shared = mutableListOf<Intent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.shares.collect { shared += it } }
+        val messages = messagesOf(vm)
+        vm.share(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(1, shared.size)
+        assertSame(shareIntent, shared[0])
+        assertEquals(emptyList<UiText>(), messages)
+
+        shareIntent = null
+        sync.value = SyncState.OFFLINE
+        vm.share(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(1, shared.size)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_files_offline)), messages)
     }
 
     @Test

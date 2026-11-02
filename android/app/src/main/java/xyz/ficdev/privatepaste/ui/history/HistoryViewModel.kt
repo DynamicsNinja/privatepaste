@@ -1,5 +1,6 @@
 package xyz.ficdev.privatepaste.ui.history
 
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -72,6 +73,18 @@ fun ClipboardWriter.asClipCopier(): ClipCopier = object : ClipCopier {
     override fun writeImage(clipId: String, png: ByteArray) = this@asClipCopier.writeImage(clipId, png)
 }
 
+/** What a file clip's Copy, Save and Share do on this phone; production adapts the app graph, tests pass a fake. */
+interface ClipFileActions {
+    /** Puts the clip's files on the clipboard, downloading them first when needed. False when that fails. */
+    suspend fun copy(clipId: String): Boolean = false
+
+    /** Saves the clip's files to Downloads. False when that fails. */
+    suspend fun save(clipId: String): Boolean = false
+
+    /** The chooser for the clip's files, or null when they can't be had. */
+    suspend fun share(clipId: String): Intent? = null
+}
+
 enum class HistoryTab { HISTORY, PINNED }
 
 data class HistoryState(
@@ -107,6 +120,7 @@ class HistoryViewModel(
     private val io: CoroutineContext = Dispatchers.IO,
     /** A call got 401: this device was revoked. Routes to the app's sign-out path. */
     private val onUnauthorized: () -> Unit = {},
+    private val files: ClipFileActions = object : ClipFileActions {},
 ) : ViewModel() {
 
     /** Server pages for one tab; [loaded] once the first page arrived. */
@@ -143,6 +157,11 @@ class HistoryViewModel(
 
     /** One-shot toasts ("Copied", "Image not available offline", ...). */
     val messages: Flow<UiText> = _messages.receiveAsFlow()
+
+    private val _shares = Channel<Intent>(Channel.BUFFERED)
+
+    /** Share choosers for the screen to start. */
+    val shares: Flow<Intent> = _shares.receiveAsFlow()
 
     val state: StateFlow<HistoryState> =
         combine(cached, query, combine(remotePages, older, ::Pair), local, syncState) { cache, q, (page, old), changes, sync ->
@@ -279,7 +298,13 @@ class HistoryViewModel(
                         return@launch
                     }
                 }
-                ClipKind.FILE -> return@launch  // placeholder until the history copies files (Task 7)
+                ClipKind.FILE -> {
+                    // Downloads on the first copy; later copies work offline.
+                    if (!files.copy(clip.id)) {
+                        _messages.trySend(UiText.Res(if (isOnline()) R.string.copy_failed else R.string.history_files_offline))
+                        return@launch
+                    }
+                }
                 ClipKind.UNKNOWN -> return@launch  // a kind from a newer client: nothing this build can copy
             }
             _messages.trySend(UiText.Res(R.string.copied))
@@ -295,6 +320,26 @@ class HistoryViewModel(
                         // Best effort: the local copy already happened.
                     }
                 }
+            }
+        }
+    }
+
+    /** Long-press menu on a file clip: save its files to Downloads. */
+    fun save(clip: ClipDto) {
+        viewModelScope.launch {
+            val saved = files.save(clip.id)
+            _messages.trySend(UiText.Res(if (saved) R.string.saved_to_downloads else R.string.save_failed))
+        }
+    }
+
+    /** Long-press menu on a file clip: hands the screen a chooser for its files. */
+    fun share(clip: ClipDto) {
+        viewModelScope.launch {
+            val chooser = files.share(clip.id)
+            if (chooser != null) {
+                _shares.trySend(chooser)
+            } else {
+                _messages.trySend(UiText.Res(if (isOnline()) R.string.copy_failed else R.string.history_files_offline))
             }
         }
     }

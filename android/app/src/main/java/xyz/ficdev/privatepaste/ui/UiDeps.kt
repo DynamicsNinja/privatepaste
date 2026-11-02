@@ -7,6 +7,7 @@ import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.clipboard.ClipboardWriter
 import xyz.ficdev.privatepaste.core.model.HandoverCreated
+import xyz.ficdev.privatepaste.ui.history.ClipFileActions
 import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.SettingsStore
 import xyz.ficdev.privatepaste.storage.StoredSession
@@ -51,6 +52,9 @@ interface UiDeps {
     fun codec(): ClipCodec? = null
 
     val clipboard: ClipboardWriter
+
+    /** Copy, Save and Share of file clips (their files are downloaded on first use). */
+    val fileActions: ClipFileActions get() = object : ClipFileActions {}
 
     val settings: SettingsStore
 
