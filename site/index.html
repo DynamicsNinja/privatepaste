@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PrivatePaste: self-hosted clipboard sync</title>
-    <meta name="description" content="Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
+    <meta name="description" content="Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android, Edge and the web.">
     <meta name="color-scheme" content="dark light">
     <meta name="theme-color" content="#15122B" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#F6F4FD" media="(prefers-color-scheme: light)">
@@ -13,14 +13,14 @@
     <meta property="og:site_name" content="PrivatePaste">
     <meta property="og:url" content="https://privatepaste.ficdev.xyz/">
     <meta property="og:title" content="PrivatePaste: your clipboard on every device, kept on your own server">
-    <meta property="og:description" content="Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
+    <meta property="og:description" content="Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android, Edge and the web.">
     <meta property="og:image" content="https://privatepaste.ficdev.xyz/images/og-card.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta property="og:image:alt" content="The PrivatePaste logo and the line: Your clipboard on every device, kept on your own server.">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PrivatePaste: your clipboard on every device, kept on your own server">
-    <meta name="twitter:description" content="Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
+    <meta name="twitter:description" content="Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android, Edge and the web.">
     <meta name="twitter:image" content="https://privatepaste.ficdev.xyz/images/og-card.png">
     <meta name="twitter:image:alt" content="The PrivatePaste logo and the line: Your clipboard on every device, kept on your own server.">
     <link rel="icon" href="/favicon.ico" sizes="32x32">
@@ -33,7 +33,7 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "PrivatePaste",
-        "description": "Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.",
+        "description": "Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android, Edge and the web.",
         "applicationCategory": "UtilitiesApplication",
         "operatingSystem": "Windows, macOS, Linux, Android",
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -68,12 +68,12 @@
 <main>
     <section class="wrap hero">
         <h1>Your clipboard on every device,<br>kept on your own server.</h1>
-        <p class="intro">Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.</p>
+        <p class="intro">Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android, Edge and the web.</p>
         <div class="cta">
             <a class="btn primary" href="#deploy">Deploy your server</a>
             <a class="btn soft" href="https://github.com/DynamicsNinja/privatepaste">View on GitHub</a>
         </div>
-        <p class="trust">Free and open source (MIT) · v__SERVER_VERSION__ · Windows, macOS, Linux, Android and web · no iOS yet</p>
+        <p class="trust">Free and open source (MIT) · v__SERVER_VERSION__ · Windows, macOS, Linux, Android, Edge and web · no iOS yet</p>
 
         <!-- Wider screens get the whole hero; phones a carousel with one app per slide instead. Each picture falls back
              to a blank data: image outside its own width, so a device downloads only the one it shows. Slides 2 and 3
@@ -154,7 +154,7 @@
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
                 <h3>Private copies stay private</h3>
-                <p>On the desktop apps, copies your password manager marks as private are never uploaded, and you can block other apps too. Android only sends what you share.</p>
+                <p>On the desktop apps, copies your password manager marks as private are never uploaded, and you can block other apps too. Android only sends what you share. The Edge extension can't see those marks, so copies from password managers sync too (encrypted); it has a Pause syncing switch.</p>
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6zM9 12l2 2 4-4"/></svg></span>
@@ -402,13 +402,20 @@ networks:
             </li>
             <li>
                 <div class="pills">
+                    <a class="pill" data-platform="edge" href="https://github.com/DynamicsNinja/privatepaste/releases">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 9h16M8.5 6.5h.01M11.5 6.5h.01"/></svg>Edge extension</a>
+                </div>
+                <p>For a computer where you can't install the desktop app. Unzip it, open <code>edge://extensions</code>, turn on <b>Developer mode</b> and choose <b>Load unpacked</b>. It syncs copies while Edge is running.</p>
+            </li>
+            <li>
+                <div class="pills">
                     <span class="pill static">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM3 12h18M12 3c-2.5 2.4-3.8 5.4-3.8 9s1.3 6.6 3.8 9M12 3c2.5 2.4 3.8 5.4 3.8 9s-1.3 6.6-3.8 9"/></svg>Web</span>
                 </div>
                 <p>Nothing to install: the web app is built into your server. Open your domain in any modern browser.</p>
             </li>
         </ul>
-        <p class="note">All files, and older versions, are on <a href="https://github.com/DynamicsNinja/privatepaste/releases">GitHub Releases</a>. More in the <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/desktop.md">desktop</a> and <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/android.md">Android</a> guides.</p>
+        <p class="note">All files, and older versions, are on <a href="https://github.com/DynamicsNinja/privatepaste/releases">GitHub Releases</a>. More in the <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/desktop.md">desktop</a>, <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/android.md">Android</a> and <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/extension.md">Edge extension</a> guides.</p>
     </section>
 
     <section class="wrap" id="faq">

@@ -82,8 +82,8 @@ Draws the logo tile plus the `privatepaste` wordmark with the outlines of the bu
 The README states these facts; check them when the apps change:
 
 - The feature list under "Why PrivatePaste": multiple people with one shared history, the hotkey (Ctrl+Shift+V), the Quick Settings tile and Share target, the clip-arrival notification, "kept until you delete it", file clips (what each app does with them, the 25 MB default and `PP_MAX_FILE_MB`), the type filter chips (All, Text, Links, Images, Files).
-- The Apps table: release file names (`.msi`, `.zip`, `osx-arm64`/`osx-x64`, `linux-x64.tar.gz`, `.apk`), Android 10 minimum, signing/notarization status.
+- The Apps table: release file names (`.msi`, `.zip`, `osx-arm64`/`osx-x64`, `linux-x64.tar.gz`, `.apk`, the extension's `privatepaste-extension-<version>.zip`), Android 10 minimum, the Edge extension row (load unpacked, syncs only while Edge runs), signing/notarization status.
 - Quick start: the environment variables (`PP_PASSWORD` is the owner's password, the owner signs in as `owner`), port 8080, service name `privatepaste`, the prebuilt image name. The full list of variables (`PP_MAX_TEXT_KB`, `PP_MAX_IMAGE_MB`, `PP_MAX_FILE_MB`, ...) is in `docs/self-hosting.md`.
 - Security: Argon2id, the sign-in rate limit, what removing a person or resetting a password signs out, owner-only actions, HTTPS-only clients, end-to-end encryption (what the server can and can't see, including the file count and sizes of a file clip, why `PP_DB_KEY` still matters, the web UI caveat, and that a lost passphrase means Reset encryption and an empty history).
 - The homepage (`site/index.html`) repeats the features, "How it works" and the security facts in shorter words: keep it in step too.
-- Badges: the `desktop-v*` and `android-v*` tag filters. Release badges need the repository to be public.
+- Badges: the `desktop-v*`, `android-v*` and `extension-v*` tag filters. Release badges need the repository to be public.

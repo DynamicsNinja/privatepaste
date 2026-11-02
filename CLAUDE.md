@@ -10,6 +10,7 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 | `src/PrivatePaste.Server` | REST API, WebSocket hub (`Realtime/`), encrypted SQLite storage (`Storage/`, migrations in `PrivatePasteDb`), Razor Pages web UI (`Pages/`, `wwwroot/`). |
 | `src/PrivatePaste.Client.Core` | Desktop sync logic, UI-free: `Sync/SyncEngine`, `ClipboardCoordinator`, `Cache/HistoryCache`, settings. |
 | `src/PrivatePaste.Desktop` | Avalonia app: tray, popup, toast, settings; theme in `Theme/NightVault.axaml`; OS specifics in `Platform/`. |
+| `extension/` | Edge (Manifest V3) extension, plain ES modules, no bundler: `src/core` sync logic with injected deps (unit-tested with `node --test`), offscreen document hosting the engine, toolbar popup. `build.mjs` copies the web UI's `e2e.js` and `hash-wasm` in, never forked. |
 | `tests/PrivatePaste.Tests` | xUnit tests for all .NET projects, including headless Avalonia renders (`Client/DesktopRenderTests.cs`). |
 | `android/` | Gradle project, package `xyz.ficdev.privatepaste` (`api`, `sync`, `service`, `clipboard`, `send`, `storage`, `ui`). Port of the desktop sync engine. |
 | `installer/PrivatePaste.wxs` | Per-user WiX MSI. Dialogs in `PrivatePasteUI.wxs` (Night vault copies of the WixUI dialogs), artwork in `art/` (`scripts/make-installer-art.ps1`), UI preview MSI in `preview/`. |
@@ -21,6 +22,7 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 
 - Build and test .NET: `dotnet test` (from the repo root). `TreatWarningsAsErrors` is on: a warning fails the build.
 - Run the server locally: `PP_DB_KEY=0123456789abcdef0123 PP_PASSWORD=dev PP_DATA_DIR=./.devdata dotnet run --project src/PrivatePaste.Server`. The launch profile picks the port (http://localhost:5202) and ignores `ASPNETCORE_URLS`; for another port add `--no-launch-profile --urls http://localhost:<port>`.
+- Extension tests: `node --test "extension/test/*.test.mjs"` (Node 22 rejects the folder form). Build with `node extension/build.mjs [--version X.Y.Z] [--out <dir>]`; automated tests use `--fake-clipboard`, never the real clipboard.
 - Android tests: in `android/`, `./gradlew testDebugUnitTest` (Robolectric, sdk 35). Needs a JDK 21 in `JAVA_HOME`; on this machine `C:\Program Files\Microsoft\jdk-21.0.13.21-hotspot`.
 - Android end-to-end against a local server: `PP_E2E_URL=http://localhost:5202 ./gradlew testDebugUnitTest --tests '*LocalServerE2eTest*'`.
 - Screenshots for review: set `PP_SCREENSHOT_DIR` and run `DesktopRenderTests` (desktop) or `ScreenshotTest` (Android); PNGs land in that directory.
@@ -34,7 +36,7 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 - **Pushing `main` deploys the server.** Dokploy redeploys https://paste.ficdev.xyz on every push to `main`, including its startup DB migration. Before pushing a schema change, ask the owner to back up `/data`.
 - Protocol changes must stay compatible both ways: add fields as optional, never rename or remove. Android parses with `ignoreUnknownKeys` and `explicitNulls = false`; a field that can be missing or null on the wire must be nullable with a default there (a missing `sourceDeviceId` once broke Android sync).
 - `ContentHash` must match on every client: keep the test vectors in `docs/api.md` passing on .NET and Android.
-- Platform strings are `windows`, `macos`, `linux`, `android`, `web`; anything else is shown as an unknown device.
+- Platform strings are `windows`, `macos`, `linux`, `android`, `extension`, `web`; anything else is shown as an unknown device.
 - **Keep the README in step with the apps.** A change is not done until the README matches it (details in `scripts/readme/README.md`):
   - Changed how the web history page, the desktop history popup or the Android history screen looks (layout, colors, type, icons, row content, top bar)? Run `powershell -File scripts/readme/build.ps1`, look at both `docs/images/hero-*.png` and commit them with the change. Then run `python scripts/make-site-images.py` (it needs that build's `scripts/readme/out/` shots) and commit `site/images/` too: the homepage serves crops of the hero and a phone carousel made from the separate app shots, not the PNGs themselves.
   - Changed the logo, wordmark or brand colors? Also run `python scripts/make-lockup.py .`, `powershell -File scripts/make-installer-art.ps1` and `python scripts/make-site-images.py` (homepage social card and icons), and update `DESIGN.md` and `branding/README.md`.
@@ -64,6 +66,7 @@ Each is a tag push; CI tests, builds and creates the GitHub Release:
 |---|---|---|
 | `desktop-vX.Y.Z` | `.github/workflows/desktop.yml` | Windows MSI and zip, macOS arm64/x64 zips, Linux tar.gz |
 | `android-vX.Y.Z` | `.github/workflows/android.yml` | Signed APK (keystore from repo secrets) |
+| `extension-vX.Y.Z` | `.github/workflows/extension.yml` | `privatepaste-extension-X.Y.Z.zip` (load unpacked) |
 | `server-vX.Y.Z` | `.github/workflows/server.yml` | `ghcr.io/dynamicsninja/privatepaste:X.Y.Z` and `latest` (linux/amd64, linux/arm64) |
 
 A version with a `-` (e.g. `0.2.0-rc1`) is a prerelease. The MSI version drops the suffix, so an RC and its final share a version. When a release changes the server image, update the image tag in `deploy/dokploy/privatepaste/` too (the homepage takes its version and compose examples' tag from there).

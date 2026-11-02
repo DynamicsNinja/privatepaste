@@ -63,7 +63,7 @@ data class ClipDto(
      * name can never fail decoding a whole sync page.
      */
     val sourceDeviceName: String? = null,
-    /** Lowercase platform of the source device ("windows", "macos", "linux", "android", "web", ...); null if unknown. */
+    /** Lowercase platform of the source device ("windows", "macos", "linux", "android", "web", "extension", ...); null if unknown. */
     val sourceDevicePlatform: String? = null,
     /** Name of the person who copied it; null while the server has one person, and from older servers. */
     val sourceUserName: String? = null,

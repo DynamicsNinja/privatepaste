@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "PrivatePaste",
+  "description": "Self-hosted, end-to-end encrypted clipboard sync with your other devices.",
+  "version": "0.0.0",
+  "minimum_chrome_version": "116",
+  "permissions": ["offscreen", "clipboardRead", "clipboardWrite", "alarms"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "sw.js", "type": "module" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PrivatePaste",
+    "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" }
+  },
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

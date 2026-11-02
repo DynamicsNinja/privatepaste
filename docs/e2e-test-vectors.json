@@ -354,5 +354,59 @@
         "wrappedKey": "LIpWNUivFP4TtjI1TdWvBpV8fVQjox5VxycQFgg77KTKGkDbB770TflXiDHgXUtR"
       }
     }
-  ]
+  ],
+  "pngHash": {
+    "about": "Hand-built PNGs (tests/PrivatePaste.Tests/Protocol/PngVectors.cs; zlib with stored blocks) covering gray, RGB, palette, gray+alpha and RGBA, bit depths 2, 4, 8 and 16, every filter type, Adam7 interlacing and tRNS. contentHash is ContentHash.ForPixels of the image decoded as SkiaSharp does (ImageHashing.HashPng): RGBA8888, unpremultiplied, no colour conversion. A client that decodes PNGs itself must reproduce each hash; rgba8-filters-alpha has semi-transparent pixels, so a premultiplying decoder fails it.",
+    "cases": [
+      {
+        "name": "rgba8-filters-alpha",
+        "width": 4,
+        "height": 5,
+        "png": "89504e470d0a1a0a0000000d494844520000000400000005080600000062ad4ddb00000060494441547801015500aaff000007c8ff4314e58086210200c92e1f01011f6cfdfe430d1d81430d1dc1430d1d88021f6535041f6535801f6535401f653538033ece4e0031b9297e31b929c0b1b92901041f6535c71f0d1d041f0d1dfd430d1d8153c4191f12a53dc40000000049454e44ae426082",
+        "contentHash": "6a685400ecc838aac809a9af1cce3561c0d8b0abdfeed92b77772e998f4beaf6"
+      },
+      {
+        "name": "rgb8-adam7",
+        "width": 5,
+        "height": 5,
+        "png": "89504e470d0a1a0a0000000d4948445200000005000000050802000001750a812400000061494441547801015600a9ff000b305500c7ec1100b7dc017398bd00e90e330195badf006186ab3f64891d4267007a9fc4587da201d0f51adedede0256565656565600365b80a5caef14395e83a8cdf2173c018cb1d66f6f6f6f6f6f6f6f6f6f6f6ffce1250183c93d880000000049454e44ae426082",
+        "contentHash": "edca193a27ef0208ab718c8ab1ee57b995fb4190671cbfee1bb4bf73832acde6"
+      },
+      {
+        "name": "palette2-trns",
+        "width": 3,
+        "height": 2,
+        "png": "89504e470d0a1a0a0000000d4948445200000003000000020203000000e01a8e890000000c504c5445ff000000ff000000fffafa0a4d6b50cb0000000374524e530080ffecf7b3180000000f494441547801010400fbff001801e4013200fe9228b2b90000000049454e44ae426082",
+        "contentHash": "4f1a647b6a1994a8f653542b900d6da6a8cc9ab8fca6a259c2a4674f1368ff89"
+      },
+      {
+        "name": "gray4",
+        "width": 3,
+        "height": 2,
+        "png": "89504e470d0a1a0a0000000d49484452000000030000000204000000007defd4c700000011494441547801010600f9ff0007f00018e004f901f012d43b210000000049454e44ae426082",
+        "contentHash": "594868661850e688e171b4e27e129a49c545be0592d82dc09dced440fb5451e5"
+      },
+      {
+        "name": "gray8-trns",
+        "width": 3,
+        "height": 1,
+        "png": "89504e470d0a1a0a0000000d49484452000000030000000108000000003e8b4b680000000274524e530040004f8ca80000000f494441547801010400fbff001040f001a401414bf84f4b0000000049454e44ae426082",
+        "contentHash": "7dfcb7485d760c12dfef5b83e7d6243553b273ced998bb95a79765400180ad8e"
+      },
+      {
+        "name": "graya8",
+        "width": 2,
+        "height": 2,
+        "png": "89504e470d0a1a0a0000000d4948445200000002000000020804000000d8bfc5af00000015494441547801010a00f5ff022080ff01045f8001fe104d038541998e550000000049454e44ae426082",
+        "contentHash": "6b3aaec147222cb358c07b9d9b41a3b62901fbd531af5b7ae8c0a420638243b1"
+      },
+      {
+        "name": "rgba16",
+        "width": 2,
+        "height": 2,
+        "png": "89504e470d0a1a0a0000000d49484452000000020000000210060000002226d1670000002d494441547801012200ddff01123480ff7f80ffffeecb81817fff818103f6e5c08140bf82828100ff3fc2c03f3f4dcc12e0b6d3aae10000000049454e44ae426082",
+        "contentHash": "f05399ec6b17c409e132400863910fca164bf5d143438eba64a4109a3de16e43"
+      }
+    ]
+  }
 }

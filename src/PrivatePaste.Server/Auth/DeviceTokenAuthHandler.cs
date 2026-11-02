@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 using PrivatePaste.Server.Clips;
+using PrivatePaste.Server.Realtime;
 
 namespace PrivatePaste.Server.Auth;
 
@@ -81,10 +82,15 @@ public sealed class DeviceTokenAuthHandler(
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var header = Request.Headers.Authorization.ToString();
-        if (!header.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+        string token;
+        if (header.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+            token = header[Prefix.Length..].Trim();
+        // A browser's socket, which can't send the header, offers the token as a subprotocol (only on /ws).
+        else if (header.Length == 0 && WebSocketSubProtocols.Token(Request) is { } offered)
+            token = offered;
+        else
             return AuthenticateResult.NoResult();
 
-        var token = header[Prefix.Length..].Trim();
         if (token.Length == 0)
             return AuthenticateResult.NoResult();
         if (token.Length > MaxTokenLength)
