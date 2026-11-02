@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createPoller } from '../src/core/poller.js';
+import { createPoller, nextDelay, startPollingWith } from '../src/core/poller.js';
 
 // A clipboard whose next read is whatever the test last put there.
 function setup() {
@@ -79,4 +79,61 @@ test('stats count reads and busy time', async () => {
   await poller.poll();
   assert.equal(poller.stats().reads, 2);
   assert.equal(poller.stats().busyMs, 10);
+});
+
+test('busy time counts reading and hashing, not the engine work in onChange', async () => {
+  let now = 0;
+  let text = 'a';
+  const poller = createPoller({ read: async () => { now += 5; return { text }; }, onChange: () => { now += 100; }, now: () => now });
+  await poller.poll();
+  text = 'b';
+  assert.equal(await poller.poll(), 5);
+  assert.equal(poller.stats().busyMs, 10);
+});
+
+test('a slow read backs the poller off to a tenth of the time, and a fast one returns to the interval', async () => {
+  let now = 0;
+  let readMs = 3;
+  const delays = [];
+  let next;
+  const handle = startPollingWith({
+    read: async () => { now += readMs; return { png: new Uint8Array(4) }; },
+    onChange: () => {},
+    intervalMs: 1000,
+    now: () => now,
+    setTimer: (fn, ms) => { delays.push(ms); next = fn; return delays.length; },
+    clearTimer: () => {},
+  });
+  const scheduled = async () => { while (!next) await new Promise(r => setImmediate(r)); };
+  const tick = async () => { const fn = next; next = undefined; await fn(); };
+  await scheduled();
+  readMs = 400;
+  await tick();
+  readMs = 3;
+  await tick();
+  handle.stop();
+  assert.deepEqual(delays, [1000, 4000, 1000]);
+});
+
+test('a read that throws is retried on the next tick', async () => {
+  let calls = 0;
+  const delays = [];
+  let next;
+  const handle = startPollingWith({
+    read: async () => { calls++; throw new Error('no'); },
+    onChange: () => {},
+    now: () => 0,
+    setTimer: (fn, ms) => { delays.push(ms); next = fn; },
+    clearTimer: () => {},
+  });
+  while (!next) await new Promise(r => setImmediate(r));
+  await next();
+  handle.stop();
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [1000, 1000]);
+});
+
+test('nextDelay keeps the interval for fast reads', () => {
+  assert.equal(nextDelay(1000, 5), 1000);
+  assert.equal(nextDelay(1000, 250), 2500);
 });

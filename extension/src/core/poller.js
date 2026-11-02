@@ -2,19 +2,15 @@
 // SHA-256 and compared with the previous one, so the clip itself is never kept here.
 
 const enc = new TextEncoder();
+const hex = buf => Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
 
+// Text and image are hashed apart, straight from their own bytes: a screenshot can sit on the clipboard for minutes,
+// and copying several MB into one buffer every second would be waste.
 async function fingerprint(item, digest) {
   if (!item.text && !item.png) return 'none';
-  const text = enc.encode(item.text ?? '');
-  const png = item.png ?? new Uint8Array(0);
-  // Length-prefixed so text 'ab' + image 'c' never collides with text 'a' + image 'bc'.
-  const bytes = new Uint8Array(8 + text.length + png.length);
-  new DataView(bytes.buffer).setUint32(0, text.length);
-  bytes.set(text, 4);
-  new DataView(bytes.buffer).setUint32(4 + text.length, png.length);
-  bytes.set(png, 8 + text.length);
-  const hash = new Uint8Array(await digest(bytes));
-  return Array.from(hash, b => b.toString(16).padStart(2, '0')).join('');
+  const text = item.text ? hex(await digest(enc.encode(item.text))) : '-';
+  const png = item.png ? hex(await digest(item.png)) : '-';
+  return `t:${text} p:${png}`;
 }
 
 /**
@@ -29,46 +25,61 @@ export function createPoller({ read, onChange, digest = b => crypto.subtle.diges
   let reads = 0;
   let busyMs = 0;
   return {
+    /** @returns {Promise<number>} The ms spent reading and hashing (not in `onChange`, which is the engine's cost). */
     async poll() {
       const started = now();
+      let item;
+      let hash;
+      let costMs;
       try {
-        const item = await read();
-        if (item == null) return;
-        const hash = await fingerprint(item, digest);
-        const first = last === undefined;
-        const changed = hash !== last;
-        last = hash;
-        if (first || !changed || hash === 'none') return;
-        try {
-          await onChange(item);
-        } catch {
-          // The engine reports its own errors; a throw here must not stop the next poll.
-        }
+        item = await read();
+        if (item != null) hash = await fingerprint(item, digest);
       } finally {
+        costMs = now() - started;
         reads++;
-        busyMs += now() - started;
+        busyMs += costMs;
       }
+      if (item == null) return costMs;
+      const first = last === undefined;
+      const changed = hash !== last;
+      last = hash;
+      if (first || !changed || hash === 'none') return costMs;
+      try {
+        await onChange(item);
+      } catch {
+        // The engine reports its own errors; a throw here must not stop the next poll.
+      }
+      return costMs;
     },
     stats: () => ({ reads, busyMs }),
   };
 }
 
-/** Polls every `intervalMs` until `stop()`. A new read starts only after the previous one finished. */
-export function startPollingWith({ read, onChange, intervalMs = 1000, now }) {
+/** Delay before the next read: `intervalMs`, stretched so reading and hashing take at most a tenth of the time. */
+export const nextDelay = (intervalMs, costMs) => Math.max(intervalMs, costMs * 10);
+
+/**
+ * Polls until `stop()`. A new read starts only after the previous one finished. Small clips are read every
+ * `intervalMs`; a big image on the clipboard (each read pulls the whole PNG) backs the poller off to about 10% of a core.
+ */
+export function startPollingWith({ read, onChange, intervalMs = 1000, now = () => performance.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
   const poller = createPoller({ read, onChange, now });
   let timer;
   let stopped = false;
   const loop = async () => {
+    const started = now();
+    let costMs;
     try {
-      await poller.poll();
+      costMs = await poller.poll();
     } catch {
       // A read that throws is a failed read: try again on the next tick.
+      costMs = now() - started;
     }
-    if (!stopped) timer = setTimeout(loop, intervalMs);
+    if (!stopped) timer = setTimer(loop, nextDelay(intervalMs, costMs));
   };
   loop();
   return {
-    stop() { stopped = true; clearTimeout(timer); },
+    stop() { stopped = true; clearTimer(timer); },
     stats: poller.stats,
   };
 }

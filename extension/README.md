@@ -27,7 +27,8 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   loads it into a minimized Edge with a throwaway profile, and checks that the extension reads the current clipboard
   exactly (text against `Get-Clipboard`, a PNG against the clipboard's PNG format), that Argon2 runs under the
   extension's CSP, and what polling costs. It only reads the clipboard and prints no content. Needs Playwright from
-  `scripts/readme` (`npm ci` there once).
+  `scripts/readme` (`npm ci` there once). The text and image checks skip when the clipboard holds no text or no PNG,
+  so before a release run it once with text on the clipboard and once with a large screenshot (it reports ms per read).
 
 ## How it works
 
@@ -40,5 +41,7 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   doesn't work there, because an offscreen document never has the focus.
 - Images can't be written from the offscreen document (measured in Edge, 2026-11-02), so `writeImage` returns false:
   incoming images go to the history, and the popup's Copy writes them while the popup has the focus.
-- The poller keeps only a SHA-256 of the last read. The first read after start isn't reported, the same as the desktop
-  app, which doesn't upload what was on the clipboard before it started.
+- Each read pulls the whole image, so when reading and hashing take long (a big screenshot on the clipboard) the next
+  read waits ten times as long, keeping the poller near a tenth of a core at worst; small clips are read every second.
+- The poller keeps only SHA-256s of the last read (text and image hashed apart). The first read after start isn't
+  reported, the same as the desktop app, which doesn't upload what was on the clipboard before it started.
