@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using PrivatePaste.Client.Core.Images;
 using PrivatePaste.Client.Core.Vault;
 using PrivatePaste.Protocol;
 using PrivatePaste.Protocol.Crypto;
@@ -179,6 +180,14 @@ public class VaultCryptoTests
     [InlineData("")]
     public void Handover_RejectsMalformedQr(string text) =>
         Assert.False(Handover.TryParseQr(text, out _, out _, out _));
+
+    // Pins the "pngHash" vectors to known pixels: the semi-transparent case decodes unpremultiplied and exact.
+    [Fact]
+    public void PngVectors_SemiTransparentDecodesToItsPixels()
+    {
+        var c = PngVectors.Cases.Single(c => c.Name == "rgba8-filters-alpha");
+        Assert.Equal(ContentHash.ForPixels(PngVectors.SemiTransparentRgba, c.Width, c.Height), ImageHashing.HashPng(c.Png));
+    }
 
     // The cross-client vector file: the Kotlin and browser ports must reproduce every value in it byte for byte.
     // PP_WRITE_VECTORS=1 rewrites it; otherwise this test fails if the .NET code drifts from the committed file.
@@ -412,6 +421,25 @@ public class VaultCryptoTests
                 w.WriteEndObject();
             }
             w.WriteEndArray();
+
+            w.WriteStartObject("pngHash");
+            w.WriteString("about", string.Join(" ",
+                "Hand-built PNGs (tests/PrivatePaste.Tests/Protocol/PngVectors.cs; zlib with stored blocks) covering gray, RGB, palette, gray+alpha and RGBA, bit depths 2, 4, 8 and 16, every filter type, Adam7 interlacing and tRNS.",
+                "contentHash is ContentHash.ForPixels of the image decoded as SkiaSharp does (ImageHashing.HashPng): RGBA8888, unpremultiplied, no colour conversion.",
+                "A client that decodes PNGs itself must reproduce each hash; rgba8-filters-alpha has semi-transparent pixels, so a premultiplying decoder fails it."));
+            w.WriteStartArray("cases");
+            foreach (var c in PngVectors.Cases)
+            {
+                w.WriteStartObject();
+                w.WriteString("name", c.Name);
+                w.WriteNumber("width", c.Width);
+                w.WriteNumber("height", c.Height);
+                w.WriteString("png", Hex(c.Png));
+                w.WriteString("contentHash", ImageHashing.HashPng(c.Png));
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteEndObject();
             w.WriteEndObject();
         }
         return Encoding.UTF8.GetString(stream.ToArray()) + "\n";
