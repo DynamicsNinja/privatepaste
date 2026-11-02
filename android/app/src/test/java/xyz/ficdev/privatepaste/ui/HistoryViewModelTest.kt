@@ -401,14 +401,64 @@ class HistoryViewModelTest {
     }
 
     @Test
-    fun resetFilterReturnsToAll() = runTest(dispatcher) {
+    fun aNewViewModelStartsAtAllAndTheFilterSurvivesTheScreenLeavingAndComingBack() = runTest(dispatcher) {
         cache.value = mixed()
+        val vm = vm()
+        assertEquals(null, vm.state.value.filter)   // a fresh launch
+
+        val first = backgroundScope.launch { vm.state.collect {} }
+        vm.onFilter(ClipKind.IMAGE)
+        advanceUntilIdle()
+        first.cancel()   // rotation or Settings: the screen stops collecting, the view model stays
+        advanceUntilIdle()
+        collecting(vm)
+        advanceUntilIdle()
+        assertEquals(ClipKind.IMAGE, vm.state.value.filter)
+        assertEquals(listOf("i"), vm.ids())
+    }
+
+    @Test
+    fun aTypeFilterWithNoMatchKeepsPagingOlderClipsBeforeSayingNothing() = runTest(dispatcher) {
+        cache.value = listOf(clip("t", 9, "plain"))
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain"), clip("t2", 8, "more")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("t3", 7, "again")), "c2")
+        remote.pages["|c2"] = ClipPage(listOf(fileClip("f").copy(seq = 1)), null)
+        val vm = collecting(vm())
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), events)   // All: nothing is fetched by itself
+
+        val gate = CompletableDeferred<Unit>()
+        remote.gates["|c1"] = gate
+        vm.onFilter(ClipKind.FILE)
+        runCurrent()
+        assertEquals(emptyList<String>(), vm.ids())
+        assertTrue("the empty state waits behind the spinner", vm.state.value.loadingMore)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("clips:|", "clips:|c1", "clips:|c2"), events)
+        assertEquals(listOf("f"), vm.ids())
+    }
+
+    @Test
+    fun aTypeFilterStopsPagingAtTheEndOfTheHistoryAndOnAFailure() = runTest(dispatcher) {
+        cache.value = listOf(clip("t", 9, "plain"))
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain")), "c1")
+        remote.pages["|c1"] = ClipPage(listOf(clip("t2", 8, "more")), null)
         val vm = collecting(vm())
         vm.onFilter(ClipKind.IMAGE)
         advanceUntilIdle()
-        vm.resetFilter()
+        assertEquals(listOf("clips:|", "clips:|c1"), events)   // the whole history was read: truly none
+        assertEquals(emptyList<String>(), vm.ids())
+        assertEquals(false, vm.state.value.loadingMore)
+
+        events.clear()
+        remote.pages["|"] = ClipPage(listOf(clip("t", 9, "plain")), "c9")
+        remote.failPages += "|c9"
+        val failing = collecting(vm())
+        failing.onFilter(ClipKind.FILE)
         advanceUntilIdle()
-        assertEquals(null, vm.state.value.filter)
+        assertEquals("one try, no retry loop", listOf("clips:|", "clips:|c9"), events)
+        assertEquals(false, failing.state.value.loadingMore)
     }
 
     @Test

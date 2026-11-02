@@ -4,13 +4,11 @@ import android.content.ActivityNotFoundException
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.graphics.Color
@@ -87,8 +85,6 @@ fun HistoryScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    // The view model outlives the screen: opening it starts from All again.
-    LaunchedEffect(vm) { vm.resetFilter() }
     LaunchedEffect(vm) {
         vm.messages.collect { Toast.makeText(context, it.resolve(context), Toast.LENGTH_SHORT).show() }
     }
@@ -379,10 +375,12 @@ private fun emptyFilterText(kind: ClipKind, pinned: Boolean): Int = when (kind) 
 @Composable
 private fun FilterRow(selected: ClipKind?, onSelect: (ClipKind?) -> Unit, modifier: Modifier = Modifier) {
     Row(
+        // The gutter pads the viewport, not the scrolled content: the row lines up with the search field and list.
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 16.dp)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
+            .selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         FilterKindChip(R.string.history_filter_all, null, selected == null) { onSelect(null) }
@@ -396,34 +394,23 @@ private fun FilterRow(selected: ClipKind?, onSelect: (ClipKind?) -> Unit, modifi
 @Composable
 private fun FilterKindChip(label: Int, icon: Int?, selected: Boolean, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text(stringResource(label), style = MaterialTheme.typography.labelMedium) },
-        leadingIcon = icon?.let {
-            {
-                Icon(
-                    painter = painterResource(it),
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = if (selected) colors.primary else colors.onSurfaceVariant,
-                )
-            }
-        },
-        shape = RoundedCornerShape(8.dp),
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = colors.surfaceVariant,
-            labelColor = colors.onSurfaceVariant,
-            selectedContainerColor = colors.primary.copy(alpha = 0.16f),
-            selectedLabelColor = colors.onSurface,
-        ),
-        border = FilterChipDefaults.filterChipBorder(
-            enabled = true,
-            selected = selected,
-            borderColor = colors.outline,
-            selectedBorderColor = colors.primary,
-        ),
-    )
+    val shape = RoundedCornerShape(8.dp)
+    val tint = if (selected) colors.primary else colors.onSurfaceVariant
+    // Tighter than a stock FilterChip (which pads 8 dp around a 8 dp icon gap) so all five fit a 411 dp phone.
+    Row(
+        modifier = Modifier
+            .heightIn(min = 40.dp)   // touch target
+            .clip(shape)
+            .background(if (selected) colors.primary.copy(alpha = 0.24f) else colors.surfaceVariant)
+            .border(1.dp, if (selected) colors.primary else colors.outline, shape)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (icon != null) Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(14.dp), tint = tint)
+        Text(stringResource(label), style = MaterialTheme.typography.labelMedium, color = tint)
+    }
 }
 
 @Composable

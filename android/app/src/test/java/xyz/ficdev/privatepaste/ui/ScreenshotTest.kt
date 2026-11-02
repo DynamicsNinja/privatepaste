@@ -211,5 +211,5 @@ class ScreenshotTest {
         items = fileHistory.items.filter { it.kind == ClipKind.FILE },
     )
 
-    private val searchOlder =HistoryState(query = "invoice", canSearchOlder = true, syncState = SyncState.CONNECTED)
+    private val searchOlder = HistoryState(query = "invoice", canSearchOlder = true, syncState = SyncState.CONNECTED)
 }
