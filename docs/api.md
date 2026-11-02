@@ -4,7 +4,7 @@ The HTTP and WebSocket API the apps use. Everything here is enough to write your
 
 This is protocol 2: clips are end-to-end encrypted, and the server stores and serves only ciphertext (see [End-to-end encryption](#end-to-end-encryption)). A client encrypts before it uploads and decrypts after it downloads; the server checks only what it can see: the kind, the keyed hash, the key id and the sizes.
 
-All JSON is camelCase; enums are lowercase strings (`kind` is `text`, `link` or `image`, and later releases add more). Errors with a message are RFC 7807 problem responses. Binary values in JSON are standard base64 with padding, unless a field says otherwise.
+All JSON is camelCase; enums are lowercase strings (`kind` is `text`, `link`, `image` or `file`, and later releases add more). Errors with a message are RFC 7807 problem responses. Binary values in JSON are standard base64 with padding, unless a field says otherwise.
 
 ## Protocol version
 
@@ -29,7 +29,7 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`PUT`/`DEL
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/health` | none | Health check. |
-| `GET` | `/api/server-info` | none | `{"protocol":2,"kinds":["text","link","image"],"limits":{"textKb":<PP_MAX_TEXT_KB>,"imageMb":<PP_MAX_IMAGE_MB>}}`. Only create kinds listed in `kinds`, and use `limits` for every size check and size message. |
+| `GET` | `/api/server-info` | none | `{"protocol":2,"kinds":["text","link","image","file"],"limits":{"textKb":<PP_MAX_TEXT_KB>,"imageMb":<PP_MAX_IMAGE_MB>,"fileMb":<PP_MAX_FILE_MB>}}` (`fileMb` may be missing on an older server: assume 25). Only create kinds listed in `kinds`, and use `limits` for every size check and size message. |
 | `POST` | `/api/auth/login` | none | Body `{username, password, deviceName, platform}` (device name 1-50 chars; `username` is matched case-insensitively). Returns `{deviceId, token}`. 400 with detail `Update PrivatePaste to sign in.` when `username` is missing or blank (apps from before there were people), 401 with detail `Wrong name or password.` for an unknown name or a wrong password, 429 when rate-limited or too many logins are being checked at once. |
 | `POST` | `/api/auth/logout` | bearer | Revokes the calling device's token and closes its WebSockets. 204. |
 | `GET` | `/api/me` | bearer | `{name, isOwner}` for the person signed in. |
@@ -60,7 +60,7 @@ Everything marked bearer also accepts the web UI's session cookie, except `/ws`.
 A clip is `{id, seq, kind, text, hash, width, height, sizeBytes, sourceDeviceId, sourceDeviceName, sourceDevicePlatform, lastCopiedAt, pinnedAt, sourceUserName, payload, keyId, hasThumb, blobCount}`:
 
 - `payload` is the clip's content, sealed (see [The clip payload](#the-clip-payload)); `keyId` is the vault key that sealed it.
-- `hasThumb` says whether `GET /api/clips/{id}/thumb` has a thumbnail, and `blobCount` how many blobs `GET /api/clips/{id}/blobs/{n}` has (1 for an image, 0 for text and links).
+- `hasThumb` says whether `GET /api/clips/{id}/thumb` has a thumbnail, and `blobCount` how many blobs `GET /api/clips/{id}/blobs/{n}` has (1 for an image, one per file for a file clip, 0 for text and links).
 - `text`, `width` and `height` are always null: the text and the image size are inside the payload. They stay in the JSON so the DTO only ever grows.
 - `hash` is the keyed hash (see [Keyed hash](#keyed-hash)), and `sizeBytes` the plaintext size the uploader declared.
 - `pinnedAt` is always present: the time the clip was pinned, or null when it isn't pinned.
@@ -75,23 +75,24 @@ Uploading content that already exists (same `hash`) does not create a duplicate:
 `POST /api/clips` takes `multipart/form-data` with these parts, in any order. Each part is read into memory up to its own limit and answered with 413 as soon as it goes over; other part names are ignored.
 
 - `meta` (required): JSON `{kind, keyId, hash, payload, sizeBytes, copiedAt?, backfill}`.
-  - `kind`: `text`, `link` or `image`; anything else is 400.
+  - `kind`: `text`, `link`, `image` or `file`; anything else is 400.
   - `keyId`: the vault key the clip is sealed with. Without a vault the upload is 409 with detail `Set up encryption first.`; when it isn't the current vault's `keyId`, 409 with title `Encryption was reset` and detail `Encryption was reset. Enter the new passphrase.`
   - `hash`: the keyed hash, 64 lowercase hex characters.
   - `payload`: the sealed payload, base64.
-  - `sizeBytes`: the plaintext size: the UTF-8 byte length of the text, or the byte length of the image's PNG. Not negative.
+  - `sizeBytes`: the plaintext size: the UTF-8 byte length of the text, the byte length of the image's PNG, or the total byte length of the files. Not negative.
   - `copiedAt` (optional): ISO 8601 time the clip was copied. Only used with `backfill`.
   - `backfill`: `true` for a clip queued while offline.
 - `thumb` (optional, images only): the sealed thumbnail, at most 1 MiB (1048576 bytes).
-- `blob0`, `blob1`, ... : the encrypted blobs, numbered from 0 without gaps. An image has exactly one, `blob0`, the encrypted PNG.
+- `blob0`, `blob1`, ... : the encrypted blobs, numbered from 0 without gaps. An image has exactly one, `blob0`, the encrypted PNG. A file clip has one per file, 1 to 100, in the order of the payload's `files`.
 
-Limits, with `PP_MAX_TEXT_KB` and `PP_MAX_IMAGE_MB` (as `limits` in server info) in bytes:
+Limits, with `PP_MAX_TEXT_KB`, `PP_MAX_IMAGE_MB` and `PP_MAX_FILE_MB` (as `limits` in server info) in bytes:
 
 - **Text and link:** no thumbnail and no blobs (400 otherwise). The declared `sizeBytes` may be at most `PP_MAX_TEXT_KB` × 1024, which is the limit users see; the sealed payload may be up to 6 × that + 4096 bytes, because the payload's JSON can escape one UTF-8 byte into six (`\uXXXX`). Over either is 413 with detail `Text exceeds the <n> byte limit.`
 - **Image:** the blob may be at most `PP_MAX_IMAGE_MB` × 1 MiB plus the blob header (9 bytes) and a 16-byte tag per 1 MiB chunk; over is 413. The sealed payload (which holds only the size) may be at most 4096 bytes. Clients check the plaintext before uploading: images over 50 megapixels or over `imageMb` are refused on the device, since the server can't decode them.
-- The whole request is capped at the larger of the two cases plus some framing.
+- **File:** no thumbnail (400 `A file clip has no thumbnail.`) and 1 to 100 blobs (400 `A file clip has at least one blob.` or `A file clip has at most 100 files.`). The declared `sizeBytes` may be at most `PP_MAX_FILE_MB` × 1 MiB, the blobs together at most that limit plus, for `n` blobs, `25 × n` bytes and a 16-byte tag per 1 MiB chunk of the limit and per blob, and the sealed payload at most 64 KiB (65536 bytes). Over any of them is 413 with detail `Files over <PP_MAX_FILE_MB> MB aren't synced.` An empty file is one blob holding a single empty final chunk. Clients check the plaintext before uploading.
+- The whole request is capped at the largest of the cases plus some framing.
 
-Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers, an image clip without exactly one blob (`An image clip has exactly one blob.`), or a text or link clip with a thumbnail or blobs; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists as an image and the upload is text or link, or the other way round. A text upload onto a stored link (or a link onto a stored text) is a bump that keeps the stored kind, since platforms may disagree on whether some content is a link.
+Other answers: 400 for a body that isn't multipart, a missing or unreadable `meta`, a payload that isn't base64, a repeated part or a gap in the blob numbers, an image clip without exactly one blob (`An image clip has exactly one blob.`), or a text or link clip with a thumbnail or blobs; 409 with detail `That content was already stored as a different kind.` when the same `hash` exists with a different blob shape: as an image and the upload is text, link or file, as a file and the upload is text, link or image, or as text or link and the upload is an image or file. A text upload onto a stored link (or a link onto a stored text) is a bump that keeps the stored kind, since platforms may disagree on whether some content is a link.
 
 Live uploads always get the server's time. Backfilled uploads keep `copiedAt`, clamped to no later than the server's time, and are never applied to other devices' clipboards.
 

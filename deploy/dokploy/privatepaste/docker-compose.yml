@@ -7,6 +7,7 @@ services:
       PP_DB_KEY: ${PP_DB_KEY}
       PP_PASSWORD: ${PP_PASSWORD}
       PP_MAX_IMAGE_MB: ${PP_MAX_IMAGE_MB}
+      PP_MAX_FILE_MB: ${PP_MAX_FILE_MB}
       PP_MAX_TEXT_KB: ${PP_MAX_TEXT_KB}
       PP_TRUST_CLOUDFLARE: ${PP_TRUST_CLOUDFLARE}
     volumes:

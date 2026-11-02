@@ -25,6 +25,19 @@ public sealed class ClipRepositoryTests : IDisposable
             text.Length, null, device, platform, at ?? T0));
 
     [Fact]
+    public async Task File_kind_round_trips()
+    {
+        var created = await _repo.UpsertAsync(new NewClip(ClipKind.File, null, "h:files", null, null, 12, null, "dev",
+            "windows", T0, null, "cGF5bG9hZA==", "k1", false, 2));
+
+        var read = await _repo.GetAsync(created.Clip.Id);
+
+        Assert.Equal(ClipKind.File, read!.Kind);
+        Assert.Equal(2, read.BlobCount);
+        Assert.Equal(ClipKind.File, (await _repo.ListAsync(null, 50)).Items.Single().Kind);
+    }
+
+    [Fact]
     public async Task Same_hash_bumps_not_duplicates()
     {
         var a = await Upsert("x", device: "PC-work", at: T0);

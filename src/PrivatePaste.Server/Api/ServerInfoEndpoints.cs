@@ -13,8 +13,9 @@ public static class ServerInfoEndpoints
         // Clients read this before signing in to learn what the server supports.
         app.MapGet("/api/server-info", (ServerOptions options) => Results.Ok(new ServerInfoDto(
             ProtocolVersion,
-            ["text", "link", "image"],
-            new ServerLimitsDto((int)(options.MaxTextBytes / 1024), (int)(options.MaxImageBytes / (1024 * 1024))))))
+            ["text", "link", "image", "file"],
+            new ServerLimitsDto((int)(options.MaxTextBytes / 1024), (int)(options.MaxImageBytes / (1024 * 1024)),
+                (int)(options.MaxFileBytes / (1024 * 1024))))))
             .AllowAnonymous();
 
         app.MapGet("/api/me", async (System.Security.Claims.ClaimsPrincipal user, UserRepository users) =>

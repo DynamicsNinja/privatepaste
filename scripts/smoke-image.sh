@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke-tests a built server image: starts it, signs in, sets up a vault, posts an end-to-end encrypted text clip
-# and image clip, restarts the container and checks the encrypted database reopens with the clips. The server never
+# image clip and two-file clip, restarts the container and checks the encrypted database reopens with the clips. The server never
 # decrypts anything, so the vault wrap and the clip payloads only need to be well-formed, not real ciphertext.
 #
 #   scripts/smoke-image.sh <image> [platform]      e.g. scripts/smoke-image.sh privatepaste:smoke linux/arm64
@@ -56,14 +56,25 @@ out=$(curl -sS --fail-with-body -X POST "$base/api/clips" "${auth[@]}" \
   -F "thumb=@$thumb;type=application/octet-stream" -F "blob0=@$blob;type=application/octet-stream") \
   || fail "image upload: $out"
 
+file0=$(mktemp); file1=$(mktemp)
+head -c 2048 /dev/urandom > "$file0"; head -c 100 /dev/urandom > "$file1"
+out=$(curl -sS --fail-with-body -X POST "$base/api/clips" "${auth[@]}" \
+  -F "meta={\"kind\":\"file\",\"keyId\":\"$kid\",\"hash\":\"$(printf 'c%.0s' $(seq 64))\",\"payload\":\"$(b64 80)\",\"sizeBytes\":2148,\"backfill\":false};type=application/json" \
+  -F "blob0=@$file0;type=application/octet-stream" -F "blob1=@$file1;type=application/octet-stream") \
+  || fail "file upload: $out"
+
 docker restart "$name" >/dev/null
 wait_healthy
 curl -fs "$base/api/clips" "${auth[@]}" \
-  | jq -e --arg p "$text_payload" '[.items[].kind] == ["image","text"] and .items[1].payload == $p
-      and .items[0].hasThumb == true and .items[0].blobCount == 1 and .items[0].sourceDevicePlatform == "linux"' >/dev/null \
+  | jq -e --arg p "$text_payload" '[.items[].kind] == ["file","image","text"] and .items[2].payload == $p
+      and .items[1].hasThumb == true and .items[1].blobCount == 1 and .items[1].sourceDevicePlatform == "linux"
+      and .items[0].hasThumb == false and .items[0].blobCount == 2' >/dev/null \
   || fail "clips missing after restart"
-id=$(curl -fs "$base/api/clips" "${auth[@]}" | jq -r '.items[0].id')
+id=$(curl -fs "$base/api/clips" "${auth[@]}" | jq -r '.items[1].id')
 curl -fs "$base/api/clips/$id/blobs/0" "${auth[@]}" | cmp -s - "$blob" || fail "image blob changed after restart"
-rm -f "$blob" "$thumb"
+fid=$(curl -fs "$base/api/clips" "${auth[@]}" | jq -r '.items[0].id')
+curl -fs "$base/api/clips/$fid/blobs/0" "${auth[@]}" | cmp -s - "$file0" || fail "file blob 0 changed after restart"
+curl -fs "$base/api/clips/$fid/blobs/1" "${auth[@]}" | cmp -s - "$file1" || fail "file blob 1 changed after restart"
+rm -f "$blob" "$thumb" "$file0" "$file1"
 
-echo "OK ($platform): health, protocol gate, sign-in, vault, encrypted text and image upload, restart with data intact"
+echo "OK ($platform): health, protocol gate, sign-in, vault, encrypted text, image and file upload, restart with data intact"

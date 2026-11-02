@@ -22,8 +22,27 @@ public class ProtocolGateTests
 
         Assert.NotNull(info);
         Assert.Equal(2, info.Protocol);
-        Assert.Equal(["text", "link", "image"], info.Kinds);
-        Assert.Equal(new ServerLimitsDto(64, 3), info.Limits);
+        Assert.Equal(["text", "link", "image", "file"], info.Kinds);
+        Assert.Equal(new ServerLimitsDto(64, 3, 25), info.Limits);
+    }
+
+    [Fact]
+    public async Task ServerInfo_lists_file_kind_and_limit()
+    {
+        using var f = new PrivatePasteFactory(new Dictionary<string, string>
+        {
+            ["PP_MAX_TEXT_KB"] = "64",
+            ["PP_MAX_IMAGE_MB"] = "3",
+        });
+
+        var info = await f.CreateClient().GetFromJsonAsync<ServerInfoDto>("/api/server-info", ProtocolJson.Options);
+
+        Assert.Contains("file", info!.Kinds);
+        Assert.Equal(new ServerLimitsDto(64, 3, 25), info.Limits);
+
+        using var small = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_FILE_MB"] = "7" });
+        var smallInfo = await small.CreateClient().GetFromJsonAsync<ServerInfoDto>("/api/server-info", ProtocolJson.Options);
+        Assert.Equal(7, smallInfo!.Limits.FileMb);
     }
 
     [Fact]
