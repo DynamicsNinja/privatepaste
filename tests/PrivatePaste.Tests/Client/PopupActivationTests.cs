@@ -267,6 +267,31 @@ public class PopupActivationTests
     }
 
     [Fact]
+    public async Task A_file_download_past_the_deadline_still_copies_without_pasting()
+    {
+        var a = Create();
+        var files = new ClipDto(Guid.NewGuid(), 1, ClipKind.File, null, "h", null, null, 100, null, "PC", DateTimeOffset.UtcNow)
+        {
+            Files = [new ClipFileInfo("report.pdf", 100, "application/pdf")],
+            BlobCount = 1,
+        };
+        var downloaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _restore = (_, _) => Task.FromResult(files);
+        _apply = async (_, ct) => { await downloaded.Task.WaitAsync(ct); return true; };   // a slow download honours its token
+        var task = a.ActivateAsync(files);
+        await Task.Delay(50);
+        _time.Advance(PopupActivation.Deadline + TimeSpan.FromSeconds(5));
+        await Task.Delay(30);
+        Assert.False(task.IsCompleted);   // not cut off at the deadline
+        Assert.Empty(_toasts);
+
+        downloaded.SetResult();
+        await task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(["restore", "apply"], _log);
+        Assert.Equal([PopupActivation.CopiedToast], _toasts);
+    }
+
+    [Fact]
     public async Task Nothing_written_gives_no_paste()
     {
         var a = Create();

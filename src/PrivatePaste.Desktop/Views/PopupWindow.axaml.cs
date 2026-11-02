@@ -101,7 +101,12 @@ public partial class PopupWindow : Window
         if (vm is null) return;
         EmptyText.IsVisible = vm.Items.Count == 0;
         EmptyText.Text = vm.EmptyText;
+        // A file row's hint ("Ctrl+S to save") wraps to a second line: while the list has one, both lines stay reserved so
+        // the list doesn't resize as the selection moves on and off it. Without file rows the footer keeps one line.
+        FooterSlot.MinHeight = vm.Items.Any(i => i.IsFile) ? FooterTwoLines : 0;
     }
+
+    private const double FooterTwoLines = 32;   // two lines of the footer's 16 px line height
 
     private void ApplyTab(PopupViewModel vm)
     {

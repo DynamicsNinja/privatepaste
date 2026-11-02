@@ -4,24 +4,27 @@ using PrivatePaste.Protocol;
 namespace PrivatePaste.Client.Core.Files;
 
 /// <summary>
-/// Where file clips from other devices are written so they can be put on the clipboard: <c>root/&lt;clip id&gt;/&lt;name&gt;</c>.
-/// Names come from another device and are untrusted: each goes through <see cref="FileNames.Safe"/>, so nothing lands
-/// outside its clip's folder, and clashes inside one clip get " (2)", " (3)", ... A file is decrypted into
-/// "<c>name.part</c>" and renamed only once its final chunk authenticated, so a file under its real name is always complete.
-/// The store holds plaintext the user received; <see cref="Prune"/> keeps it to the clips still in the history and under a
-/// size cap. Never log the names or contents.
-/// </summary>
-/// <summary>
 /// A received file couldn't be written. Only the kind of failure is kept: the original exception (whose message holds the
 /// path, and so the file's name) is dropped on purpose.
 /// </summary>
 public sealed class ClipFileWriteException(Exception cause)
     : IOException($"Could not write a received file ({cause.GetType().Name}).");
 
+/// <summary>
+/// Where file clips from other devices are written so they can be put on the clipboard: <c>root/&lt;clip id&gt;/&lt;name&gt;</c>.
+/// Names come from another device and are untrusted: each goes through <see cref="FileNames.Safe"/>, so nothing lands
+/// outside its clip's folder, and clashes inside one clip get " (2)", " (3)", ... A file is decrypted into
+/// "<c>name.part</c>" and renamed only once its final chunk authenticated, so a file under its real name is always complete.
+/// The store holds plaintext the user received; <see cref="Prune"/> keeps it to the clips still in the history (and those
+/// in use) and under a size cap. Never log the names or contents.
+/// </summary>
 public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 1024)
 {
     private const string PartSuffix = ".part";
     private readonly SemaphoreSlim _gate = new(1, 1);
+    /// <summary>Clips being written or held (<see cref="Hold"/>), with how many holds each has. Also guards <see cref="_onClipboard"/>.</summary>
+    private readonly Dictionary<Guid, int> _inUse = [];
+    private Guid? _onClipboard;
 
     /// <summary>The store's folder (full path).</summary>
     public string Root { get; } = Path.GetFullPath(root);
@@ -38,6 +41,8 @@ public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 102
         ClipCodec codec, CancellationToken ct)
     {
         if (clip.Kind != ClipKind.File || clip.Files is not { Count: > 0 } files) throw new InvalidDataException("Not a file clip.");
+        // Held while waiting too, so a prune meanwhile doesn't take a folder an earlier apply left for reuse.
+        using var hold = Hold(clip.Id);
         // One at a time: the engine and a paste from the history may write the same clip (and its .part files) at once.
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -108,8 +113,9 @@ public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 102
 
     /// <summary>
     /// Deletes the folders of clips not in <paramref name="keep"/>, then the oldest (by last write) until the rest fit in
-    /// the size cap; the newest folder always stays (it may be on the clipboard). Best effort: a file in use stays for the
-    /// next prune. Never throws.
+    /// the size cap; the newest folder always stays (it may be on the clipboard from before a restart). Folders in use
+    /// (being written, held, or marked as on the clipboard) are never touched. Best effort: a file another app has open
+    /// stays for the next prune. Never throws.
     /// </summary>
     public void Prune(IReadOnlySet<Guid> keep)
     {
@@ -120,7 +126,9 @@ public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 102
         var kept = new List<(DirectoryInfo Folder, long Bytes)>();
         foreach (var folder in folders)
         {
-            if (Guid.TryParseExact(folder.Name, "N", out var id) && keep.Contains(id)) kept.Add((folder, SizeOf(folder)));
+            var isClip = Guid.TryParseExact(folder.Name, "N", out var id);
+            if (isClip && IsInUse(id)) continue;   // being written, saved or on the clipboard: never pruned
+            if (isClip && keep.Contains(id)) kept.Add((folder, SizeOf(folder)));
             else TryDeleteFolder(folder);
         }
 
@@ -132,9 +140,49 @@ public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 102
         }
     }
 
+    /// <summary>
+    /// Keeps a clip's folder from <see cref="Prune"/> until disposed: for work that reads the files after writing them
+    /// (copying them into Downloads). Writing holds the folder by itself.
+    /// </summary>
+    public IDisposable Hold(Guid clipId)
+    {
+        lock (_inUse) _inUse[clipId] = _inUse.GetValueOrDefault(clipId) + 1;
+        return new Release(this, clipId);
+    }
+
+    /// <summary>
+    /// The clip whose files are on the clipboard now: <see cref="Prune"/> keeps its folder (a paste reads it later) even
+    /// when it isn't in the history, e.g. a pinned clip or an older search hit.
+    /// </summary>
+    public void MarkOnClipboard(Guid clipId)
+    {
+        lock (_inUse) _onClipboard = clipId;
+    }
+
+    private bool IsInUse(Guid clipId)
+    {
+        lock (_inUse) return _onClipboard == clipId || _inUse.ContainsKey(clipId);
+    }
+
+    private void Unhold(Guid clipId)
+    {
+        lock (_inUse)
+        {
+            if (_inUse.GetValueOrDefault(clipId) <= 1) _inUse.Remove(clipId);
+            else _inUse[clipId]--;
+        }
+    }
+
+    private sealed class Release(ClipFileStore store, Guid clipId) : IDisposable
+    {
+        private int _done;
+        public void Dispose() { if (Interlocked.Exchange(ref _done, 1) == 0) store.Unhold(clipId); }
+    }
+
     /// <summary>Deletes everything the store holds (sign-out, history cleared, encryption reset). Never throws.</summary>
     public void Clear()
     {
+        lock (_inUse) _onClipboard = null;
         try { Directory.Delete(Root, recursive: true); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }

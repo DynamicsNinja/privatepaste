@@ -30,6 +30,7 @@ public sealed class ClipboardCoordinatorFilesTests : IDisposable
     private ClipboardCoordinator _c = null!;
     private VaultKey _vaultKey = null!;
     private ClipCodec _codec = null!;
+    private ClipFileStore _store = null!;
 
     public ClipboardCoordinatorFilesTests() => Directory.CreateDirectory(_dir);
 
@@ -50,7 +51,7 @@ public sealed class ClipboardCoordinatorFilesTests : IDisposable
         _cache = new HistoryCache(Path.Combine(_dir, "h.enc"), _key);
         _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
         _c = new ClipboardCoordinator(_clip, _api, () => _codec, _cache, _queue, new EchoGuard(_time, TimeSpan.FromSeconds(30)),
-            _notes, _time, () => false, log: _log.Add, files: new ClipFileStore(Path.Combine(_dir, "store")));
+            _notes, _time, () => false, log: _log.Add, files: _store = new ClipFileStore(Path.Combine(_dir, "store")));
     }
 
     private string MakeFile(string relative, byte[] content)
@@ -245,6 +246,47 @@ public sealed class ClipboardCoordinatorFilesTests : IDisposable
             await CopyAsync(secret);
 
         Assert.DoesNotContain("secret", string.Join("\n", _log.Concat(_notes.Messages)), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_pasted_file_clip_outside_the_history_survives_the_next_prune()
+    {
+        await StartAsync();
+        var report = MakeFile("report.pdf", "pdf bytes"u8.ToArray());
+        // Uploaded straight to the server: like a pinned or older search hit, it isn't in this device's history.
+        var stored = _codec.Decode(await _api.UploadClipAsync(
+            await _codec.EncodeFilesAsync([await LocalFile.ReadAsync(report, default)], null, default)));
+        Assert.Empty(_cache.Items);
+
+        Assert.True(await _c.ApplyRemoteAsync(stored, default));
+        _store.Prune(_cache.Items.Select(i => i.Clip.Id).ToHashSet());   // what the host does on the next cache change
+
+        var pasted = Assert.Single(((ClipboardContent.Files)_clip.Writes[^1]).Paths);
+        Assert.Equal("pdf bytes", File.ReadAllText(pasted));
+    }
+
+    [Fact]
+    public async Task Server_info_is_asked_again_after_a_reconnect()
+    {
+        await StartAsync();
+        var lacksFiles = true;
+        _handler.Respond = r => lacksFiles && r.RequestUri!.AbsolutePath == "/api/server-info"
+            ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"protocol":2,"kinds":["text","link","image"],"limits":{"textKb":1024,"imageMb":20}}""",
+                    Encoding.UTF8, "application/json"),
+            }
+            : null;
+        var a = MakeFile("a.txt", "hello"u8.ToArray());
+        await CopyAsync(a);
+        Assert.Equal(["Update your PrivatePaste server to sync files."], _notes.Messages);
+
+        lacksFiles = false;   // the server was upgraded; the sync link reconnects to it
+        _c.OnReconnected();
+        await CopyAsync(a);
+
+        Assert.Single(_handler.Uploads);
+        Assert.Equal("a.txt", Assert.Single(Assert.Single(await ServerClipsAsync()).Files!).Name);
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:PrivatePaste.Desktop.ViewModels"
         xmlns:views="using:PrivatePaste.Desktop.Views"
@@ -177,7 +177,7 @@
         </Border>
       </StackPanel>
 
-      <!-- Type filter (Alt+1 to Alt+5): All, Text, Links, Images, Files. Icons as in the rows. -->
+      <!-- Type filter (Ctrl+1 to Ctrl+5): All, Text, Links, Images, Files. Icons as in the rows. -->
       <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="6">
         <Border x:Name="FilterAllChip" Classes="chip" Classes.active="{Binding IsAllFilter}" Focusable="False">
           <TextBlock Text="All" />
@@ -310,8 +310,12 @@
       <TextBlock x:Name="EmptyText" Grid.Row="3" Text="Nothing to paste yet." IsVisible="False"
                  HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource PpMuted}" />
 
-      <TextBlock x:Name="FooterText" Grid.Row="4" Text="{Binding FooterHint}" FontSize="12" Foreground="{DynamicResource PpMuted}"
-                 HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" />
+      <!-- While the list has a file row, two lines are reserved (code-behind): its hint ("Ctrl+S to save") wraps, and the
+           list must not resize as the selection moves onto it. -->
+      <Panel x:Name="FooterSlot" Grid.Row="4">
+        <TextBlock x:Name="FooterText" Text="{Binding FooterHint}" FontSize="12" LineHeight="16" Foreground="{DynamicResource PpMuted}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" />
+      </Panel>
     </Grid>
   </Border>
 </Window>
