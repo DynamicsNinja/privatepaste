@@ -112,6 +112,17 @@ class FileClipGraphTest {
     }
 
     @Test
+    fun aCachedClipJustCopiedLosesItsFilesWhenDeleted() {
+        // In use protects only clips the history doesn't hold: deleting a cached clip takes its plaintext files at once.
+        app.graph.cache.upsert(server.fileClip("just", tmp.root, "j.txt" to byteArrayOf(4)), fromSync = true)
+        assertTrue(runBlocking { app.graph.copyClip("just") })
+        assertTrue(File(filesDir, "just").isDirectory)
+
+        app.graph.cache.remove("just", seq = 99)
+        awaitUntil("the deleted clip's files are pruned") { !File(filesDir, "just").exists() }
+    }
+
+    @Test
     fun copySaveAndShareWorkForAClipThatIsNotCached() {
         // An older page, the Pinned tab's server page or a search of older clips: decoded, but never in the cache.
         val older = server.fileClip("older", tmp.root, "old.txt" to byteArrayOf(7))

@@ -492,7 +492,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         val g = _current.value
         val codec = codec() ?: return null
         return try {
-            clipFiles.markInUse(clip.id)   // before the download too: a prune meanwhile must not take the finished files
+            // Before the download too: a prune meanwhile must not take the finished files. Only for a clip the history
+            // doesn't hold: a cached clip's files go when it's deleted, as on desktop.
+            if (cache.items.value.none { it.id == clip.id }) clipFiles.markInUse(clip.id)
             clipFiles.materialize(clip, { n -> (g ?: throw IOException("Signed out")).api.blob(clip.id, n, infos[n].size) }, codec)
         } catch (e: CancellationException) {
             throw e
