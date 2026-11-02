@@ -132,7 +132,7 @@ The server only holds ciphertext, so it can't search. Apps search the clips they
 
 ## End-to-end encryption
 
-The server stores clips it can't read. It still sees who copied a clip, from which device and platform, and when; the clip's kind, pin state and order; and its exact sizes (`sizeBytes` and the ciphertext lengths). It never sees content or thumbnails. At-rest encryption with `PP_DB_KEY` stays and hides that metadata from someone who takes the disk without the server's configuration.
+The server stores clips it can't read. It still sees who copied a clip, from which device and platform, and when; the clip's kind, pin state and order; and its exact sizes (`sizeBytes` and the ciphertext lengths; for a file clip, `blobCount` and each blob's length give the number of files and about how big each one is). It never sees content, file names or thumbnails. At-rest encryption with `PP_DB_KEY` stays and hides that metadata from someone who takes the disk without the server's configuration.
 
 The reference implementation is in `src/PrivatePaste.Protocol/Crypto/`; the browser port is `src/PrivatePaste.Server/wwwroot/js/e2e.js` and the Android one `core/crypto/VaultCrypto.kt` under `android/app/src/main/java/xyz/ficdev/privatepaste/`.
 
@@ -162,7 +162,7 @@ A clip's payload and its thumbnail are sealed as one small item each: `0x01 || n
 
 ### Blobs
 
-A full image is a blob, encrypted in chunks so neither side has to hold it twice:
+A full image is a blob, and so is each file of a file clip, encrypted in chunks so neither side has to hold it twice:
 
 - A 9-byte header `0x02 || noncePrefix (8 random bytes)`, then chunks of 1 MiB (1048576 bytes) of plaintext, the last one shorter or equal.
 - Chunk `i` is `ciphertext || tag`: AES-256-GCM under `encKey` with nonce `noncePrefix || uint32 big-endian i` and associated data `privatepaste v1 blob || uint32 big-endian i || isFinal byte` (1 on the last chunk, 0 on the others). The final flag stops truncation.
@@ -174,8 +174,18 @@ A UTF-8 JSON object (camelCase), sealed as a `payload` small item and sent as ba
 
 - Text and link: `{"text":"…"}`.
 - Image: `{"width":1600,"height":900}`. The picture itself is blob 0: a PNG, upright (EXIF orientation applied), at most 50 megapixels. The thumbnail is a PNG that fits 256x256, sealed as a `thumb` small item.
+- File: `{"files":[{"name":"report.pdf","size":3565158,"mime":"application/pdf"},…]}`, one entry per file in blob order (file `i` is blob `i`), so `files` has `blobCount` entries; no `text` and no thumbnail. `name` is the file's leaf name as the sender has it, `size` its byte count. `mime` comes from the operating system when it has one (Android's `ContentResolver.getType`), else from the extension: `pdf` `application/pdf`, `txt` `text/plain`, `csv` `text/csv`, `json` `application/json`, `zip` `application/zip`, `png` `image/png`, `jpg`/`jpeg` `image/jpeg`, `gif` `image/gif`, `webp` `image/webp`, `svg` `image/svg+xml`, `mp4` `video/mp4`, `mp3` `audio/mpeg`, `doc` `application/msword`, `docx` `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `xls` `application/vnd.ms-excel`, `xlsx` `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `ppt` `application/vnd.ms-powerpoint`, `pptx` `application/vnd.openxmlformats-officedocument.presentationml.presentation`, anything else `application/octet-stream`. Receivers use `mime` only as a label (the web UI downloads every file as `application/octet-stream`). A file clip whose list is empty, doesn't match `blobCount`, or has a missing name or a negative size is shown as unknown.
 
 Readers ignore fields they don't know: later releases add more.
+
+### File clips
+
+- **Sending**: at most 100 files, and at most `limits.fileMb` MiB in total, checked on the device before anything is uploaded. Folders are skipped; a copy of only folders sends nothing. Only send files when server-info's `kinds` lists `file`. The texts the apps show: `Folders aren't synced.`, `Too many files. Copy at most 100 at once.` (Android: `Share at most 100`), `Files over <fileMb> MB aren't synced.`, `Update your PrivatePaste server to sync files.`
+- **Never queued**: a file clip that can't be uploaded (offline, a 5xx) is dropped, not kept for later: `Couldn't send the files. Copy them again when you're online.` (Android: `Share them again`).
+- **Names are untrusted.** Before writing a received file, turn its payload name into a safe leaf name, the same way on every platform: take the part after the last `/` or `\`; drop control characters (below 0x20, and 0x7F) and `<>:"|?*`; trim trailing dots and spaces; if the result is empty, `.` or `..`, use `file`; if the part before the first dot is a Windows reserved name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, any case), put `_` in front; cut it to 200 UTF-16 units keeping the extension (from the last dot, not at the start), stepping back rather than splitting a surrogate pair, and trim trailing dots and spaces from the stem again (an empty stem becomes `file`). Then, when the name is over 200 UTF-8 bytes, cut the stem by whole code points to fit 200 bytes with the extension (an extension over 32 bytes is cut with the stem as one), counting a surrogate pair as 4 bytes and a lone surrogate as 3, and trim again. Names that clash within one clip, or with a file already in the target folder, get ` (2)`, ` (3)`, … before the extension.
+- **Decrypt to a temporary name** (`<name>.part`) and rename only after the final chunk authenticates, so a failed or tampered download leaves no file.
+- **Row text**: the first file's name, then ` +N more` when there are more, then ` · ` and the total size: `0 B`, `12 KB`, `3.4 MB` (1 KB = 1024 B; one decimal only below 10 and not `.0`, rounded half up; nothing above MB). For example `report.pdf +2 more · 3.4 MB`. Search matches every file name.
+- The `safeFileName`, `fileSize` and `fileRowText` groups of the [test vectors](#test-vectors) pin these rules.
 
 ### Keyed hash
 
@@ -193,7 +203,7 @@ The server never sees `otk`. A code works once and only for 10 minutes, so a pho
 
 ### Test vectors
 
-[`e2e-test-vectors.json`](e2e-test-vectors.json) holds the vectors every client must reproduce: the subkeys and `keyId` of a fixed VK, Argon2id outputs (including the NFC and NFD spellings of the same passphrase), a passphrase wrap, a sealed payload and thumbnail, a two-chunk blob and an empty one, a keyed hash and two handovers with their QR text. They are written by `tests/PrivatePaste.Tests/Protocol/VaultCryptoTests.cs` (with `PP_WRITE_VECTORS=1`) and checked by the .NET tests, the Android JVM tests and the browser module's Node test (`tests/web/e2e.test.mjs`).
+[`e2e-test-vectors.json`](e2e-test-vectors.json) holds the vectors every client must reproduce: the subkeys and `keyId` of a fixed VK, Argon2id outputs (including the NFC and NFD spellings of the same passphrase), a passphrase wrap, a sealed payload and thumbnail, a two-chunk blob and an empty one, a keyed hash, the content hash of two files, the safe-name, size and row-text rules of [file clips](#file-clips), and two handovers with their QR text. They are written by `tests/PrivatePaste.Tests/Protocol/VaultCryptoTests.cs` (with `PP_WRITE_VECTORS=1`) and checked by the .NET tests, the Android JVM tests and the browser module's Node test (`tests/web/e2e.test.mjs`).
 
 [`classifier-test-vectors.json`](classifier-test-vectors.json) lists texts and whether a client uploads each as `link` or `text` (one absolute http or https URL, no whitespace, with the host and port rules of .NET's `System.Uri`). The .NET and Android tests check it.
 

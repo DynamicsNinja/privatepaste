@@ -21,7 +21,7 @@ powershell -File scripts/readme/build.ps1
 It needs the .NET SDK, Node.js and a JDK 21 (`JAVA_HOME`, or Android Studio's / Microsoft's JDK, found automatically). It takes a few minutes and does this, all locally:
 
 1. Publishes the server into `scripts/readme/out/server` and starts it on http://localhost:5311 with a fresh, empty data directory; the owner is `owner` with the password `dev`. It never touches a real server.
-2. Renders the desktop popup from `demo.json` with the real Avalonia theme: the test `DesktopRenderTests.Readme_popup` writes `out/readme-popup-{dark,light}.png` at 2x (840×960), so it stays sharp where it is shown larger.
+2. Renders the desktop popup from `demo.json` with the real Avalonia theme: the test `DesktopRenderTests.Readme_popup` writes `out/readme-popup-{dark,light}.png` at 2x (840×1040), so it stays sharp where it is shown larger.
 3. Renders the Android history from `demo.json` with Robolectric: `ReadmeScreenshotTest` writes `out/readme-history-{dark,light}.png`. Image clips are left out there, because the test has no thumbnail to load.
 4. Runs `capture.mjs` (Playwright, using the installed Edge or Playwright's Chromium):
    - renders `photo.html` to `out/photo.png`, the picture used for the image clip, and lets the browser work out what a client uploads with it: the content hash of its pixels and a PNG thumbnail that fits 256×256;
@@ -42,7 +42,7 @@ Then look at both PNGs and commit them. The README shows the dark one in dark mo
 - **Demo content:** `demo.json`, newest first. `user` is the person who copied it (the first one named is the owner; each device belongs to one person, and the name chips only show because there are two people). `kind` is `text`, `link` or `image`; `platform` picks the icon. Keep it to 4 distinct devices: the server allows 5 sign-ins a minute and the web UI needs one. Keep it realistic and free of personal data.
 - **Layout:** `hero.html`. Positions are in CSS pixels on a 1600×1000 stage; the colors at the top are the `DESIGN.md` tokens.
 - **Picture in the image clip:** `photo.html` (an inline SVG).
-- **Sizes:** the web viewport and scale are in `capture.mjs`; the phone size comes from the Robolectric qualifiers in `ReadmeScreenshotTest`; the popup is its real window size (420×480), drawn at 2x.
+- **Sizes:** the web viewport and scale are in `capture.mjs`; the phone size comes from the Robolectric qualifiers in `ReadmeScreenshotTest`; the popup is its real window size (420×520), drawn at 2x.
 
 ### If a step fails
 
@@ -81,8 +81,9 @@ Draws the logo tile plus the `privatepaste` wordmark with the outlines of the bu
 
 The README states these facts; check them when the apps change:
 
-- The feature list under "Why PrivatePaste": multiple people with one shared history, the hotkey (Ctrl+Shift+V), the Quick Settings tile and Share target, the clip-arrival notification, "kept until you delete it".
+- The feature list under "Why PrivatePaste": multiple people with one shared history, the hotkey (Ctrl+Shift+V), the Quick Settings tile and Share target, the clip-arrival notification, "kept until you delete it", file clips (what each app does with them, the 25 MB default and `PP_MAX_FILE_MB`), the type filter chips (All, Text, Links, Images, Files).
 - The Apps table: release file names (`.msi`, `.zip`, `osx-arm64`/`osx-x64`, `linux-x64.tar.gz`, `.apk`), Android 10 minimum, signing/notarization status.
-- Quick start: the environment variables (`PP_PASSWORD` is the owner's password, the owner signs in as `owner`), the upgrade note for servers several people already share, port 8080, service name `privatepaste`, the prebuilt image name.
-- Security: Argon2id, the sign-in rate limit, what removing a person or resetting a password signs out, owner-only actions, HTTPS-only clients, end-to-end encryption (what the server can and can't see, why `PP_DB_KEY` still matters, the web UI caveat, and that a lost passphrase means Reset encryption and an empty history), and the upgrade warning that the first end-to-end version deletes the history.
+- Quick start: the environment variables (`PP_PASSWORD` is the owner's password, the owner signs in as `owner`), port 8080, service name `privatepaste`, the prebuilt image name. The full list of variables (`PP_MAX_TEXT_KB`, `PP_MAX_IMAGE_MB`, `PP_MAX_FILE_MB`, ...) is in `docs/self-hosting.md`.
+- Security: Argon2id, the sign-in rate limit, what removing a person or resetting a password signs out, owner-only actions, HTTPS-only clients, end-to-end encryption (what the server can and can't see, including the file count and sizes of a file clip, why `PP_DB_KEY` still matters, the web UI caveat, and that a lost passphrase means Reset encryption and an empty history).
+- The homepage (`site/index.html`) repeats the features, "How it works" and the security facts in shorter words: keep it in step too.
 - Badges: the `desktop-v*` and `android-v*` tag filters. Release badges need the repository to be public.

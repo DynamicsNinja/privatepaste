@@ -6,7 +6,7 @@
 //   node tests/web/history.playwright.mjs [--url http://localhost:5303] [--password dev]
 //
 // Uses Playwright from scripts/readme (run `npm ci` there once). With PP_SCREENSHOT_DIR set, it saves the setup,
-// unlock, history, settings and dialog states in dark and light at desktop and phone widths. It signs in once.
+// unlock, history, file clip, type filter, settings and dialog states in dark and light at desktop and phone widths. It signs in once.
 
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync } from 'node:fs';
@@ -312,7 +312,6 @@ try {
   assert.equal(await unknown.locator('button.pin-toggle').count(), 1);
   await page.unroute('**/api/clips?*');
 
-  // Needs a server that accepts file clips (Task 2 of the files release); run this check once it is merged.
   step('a file clip: row text, no Copy, search by file name, one download per file under the safe name');
   const [fileId] = await upload([{ kind: 'file', files: [
     { name: '..\\..\\report.txt', content: 'first file' }, { name: 'notes.txt', content: 'second file' }] }]);
@@ -334,6 +333,7 @@ try {
     const text = readFileSync(await download.path(), 'utf8');
     assert.equal(text, i === 0 ? 'first file' : 'second file');
   }
+  await shoot('history-file');
 
   step('type chips: one at a time, inside search and the tab, search older keeps the type, a reload starts at All');
   const chip = kind => page.locator(`#filters .chip[data-filter="${kind}"]`);

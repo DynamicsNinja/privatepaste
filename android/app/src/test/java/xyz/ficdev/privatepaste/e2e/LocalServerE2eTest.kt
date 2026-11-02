@@ -30,6 +30,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.GraphicsMode
 import xyz.ficdev.privatepaste.api.KeyResetException
 import xyz.ficdev.privatepaste.api.PrivatePasteApi
+import xyz.ficdev.privatepaste.core.ContentHash
 import xyz.ficdev.privatepaste.core.ServerUrl
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
 import xyz.ficdev.privatepaste.core.crypto.PassphraseWrap
@@ -38,7 +39,9 @@ import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.ServerLimits
 import xyz.ficdev.privatepaste.send.ClipSender
+import xyz.ficdev.privatepaste.send.FilesRead
 import xyz.ficdev.privatepaste.send.SendResult
+import xyz.ficdev.privatepaste.send.SharedFile
 import xyz.ficdev.privatepaste.storage.CryptoFile
 import xyz.ficdev.privatepaste.storage.HistoryCache
 import xyz.ficdev.privatepaste.storage.InMemoryKeyProvider
@@ -258,6 +261,60 @@ class LocalServerE2eTest {
         } finally {
             runCatching { second.api().logout() }
             runCatching { first.api().logout() }
+        }
+    }
+
+    /**
+     * The phone shares two files through the share target's path ([ClipSender.readFiles] then [ClipSender.sendFiles]);
+     * a second client, which unlocks with the passphrase like a desktop app, lists the clip, downloads both blobs and
+     * gets the same bytes, names and content hash back. One sign-in only, so the three tests together stay within the
+     * server's 5 sign-ins a minute. The clip is left on the server, so a .NET client can check the same clip afterwards.
+     */
+    @Test
+    fun phoneSharesFilesAndPcReceivesThem() = runBlocking {
+        val phone = Device("files-phone")
+        assertEquals(SignInResult.Ok, phone.manager.signIn(baseUrl.toString(), "owner", password, "e2e-files-phone"))
+        val phoneApi = phone.api()
+        val key = phoneApi.vault()?.let { PassphraseWrap.unwrap(it, PASSPHRASE) }
+            ?: VaultKey.create().also { phoneApi.putVault(PassphraseWrap.wrap(it, PASSPHRASE)) }
+        val codec = ClipCodec(key)
+        val sender = ClipSender(
+            phoneApi, { codec }, { phoneApi.serverInfo()!!.limits }, phone.queue, phone.cache, LocalCaptureClock(), { },
+            Clock.systemUTC(), kinds = { phoneApi.serverInfo()!!.kinds }, outgoing = tmp.newFolder("files-outgoing"),
+        )
+        val pc = PrivatePasteApi(baseUrl, checkNotNull(phone.manager.session.value).token, client)
+        try {
+            // Two chunks for the report (over 1 MiB), a non-ASCII name for the notes.
+            val tag = UUID.randomUUID().toString().take(8)
+            val report = ByteArray(1_300_000) { (it * 31 + it / 7).toByte() }
+            val notes = "e2e notes $tag\n".repeat(40).toByteArray(Charsets.UTF_8)
+            val shared = listOf(
+                SharedFile("e2e-report-$tag.pdf", "application/pdf") { report.inputStream() },
+                SharedFile("e2e-bilješke-$tag.txt", null) { notes.inputStream() },
+            )
+            val read = sender.readFiles(shared)
+            assertTrue("the share was refused: $read", read is FilesRead.Ready)
+            assertEquals(SendResult.Sent, sender.sendFiles(read as FilesRead.Ready))
+
+            // The receiving side: its own client and its own key from the passphrase, as a desktop app unlocks.
+            val pcCodec = ClipCodec(PassphraseWrap.unwrap(checkNotNull(pc.vault()), PASSPHRASE))
+            val clip = pc.clips(null).items.map(pcCodec::decode)
+                .first { it.kind == ClipKind.FILE && it.files?.firstOrNull()?.name == "e2e-report-$tag.pdf" }
+            assertEquals(2, clip.blobCount)
+            assertEquals(false, clip.hasThumb)
+            assertEquals((report.size + notes.size).toLong(), clip.sizeBytes)
+            val files = checkNotNull(clip.files)
+            assertEquals(listOf("e2e-report-$tag.pdf", "e2e-bilješke-$tag.txt"), files.map { it.name })
+            assertEquals(listOf(report.size.toLong(), notes.size.toLong()), files.map { it.size })
+            assertEquals(listOf("application/pdf", "text/plain"), files.map { it.mime })
+
+            val got = files.indices.map { pcCodec.decodeBlob(pc.blob(clip.id, it, files[it].size)) }
+            assertArrayEquals(report, got[0])
+            assertArrayEquals(notes, got[1])
+            val digests = files.mapIndexed { i, f -> ContentHash.FileDigest(f.name, f.size, ContentHash.sha256Hex(got[i])) }
+            assertEquals(pcCodec.keyedHash(ContentHash.files(digests)), clip.hash)
+        } finally {
+            runCatching { phoneApi.logout() }
         }
     }
 
