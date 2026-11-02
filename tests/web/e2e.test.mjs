@@ -216,3 +216,29 @@ test('thumb small item with the fixed nonce matches the vector, and opens', asyn
   assert.equal(toHex(await e2e.openSmall(vault, 'thumb', hex(t.sealed))), t.plaintext);
   await assert.rejects(() => e2e.openSmall(vault, 'payload', hex(t.sealed)));
 });
+
+test('contentHashFiles reproduces the fileHash vector', async () => {
+  assert.equal(await e2e.contentHashFiles(vectors.fileHash.files), vectors.fileHash.expected);
+});
+
+test('contentHashFiles matches a hand-built string and depends on order, name and size', async () => {
+  const a = { name: 'ä.txt', size: 3, sha256Hex: sha256(Buffer.from('abc')) };
+  const b = { name: 'b', size: 0, sha256Hex: sha256(Buffer.alloc(0)) };
+  const manual = sha256(Buffer.from(`f:ä.txt\u00003\u0000${a.sha256Hex}\nb\u00000\u0000${b.sha256Hex}\n`, 'utf8'));
+  assert.equal(await e2e.contentHashFiles([a, b]), manual);
+  assert.notEqual(await e2e.contentHashFiles([b, a]), manual);
+  assert.notEqual(await e2e.contentHashFiles([{ ...a, size: 4 }, b]), manual);
+});
+
+test('safeFileName reproduces every vector', () => {
+  for (const { in: input, out } of vectors.safeFileName)
+    assert.equal(e2e.safeFileName(input), out, JSON.stringify(input));
+});
+
+test('formatSize reproduces every fileSize vector', () => {
+  for (const { bytes, text } of vectors.fileSize) assert.equal(e2e.formatSize(bytes), text, String(bytes));
+});
+
+test('fileRowText reproduces every vector', () => {
+  for (const { files, text } of vectors.fileRowText) assert.equal(e2e.fileRowText(files), text);
+});

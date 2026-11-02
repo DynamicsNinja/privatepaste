@@ -51,10 +51,27 @@ public class RowActionsWebTests
         Assert.Equal("", VisibleText(delete));
     }
 
+    [Fact]
+    public async Task File_lines_have_a_download_button_and_kind_icon()
+    {
+        using var factory = new PrivatePasteFactory();
+        var web = await factory.LoginWebAsync();
+        var html = await web.GetStringAsync("/");
+        var line = Regex.Match(html, "<template id=\"file-line\">.*?</template>", RegexOptions.Singleline);
+        Assert.True(line.Success, "No file line template on the history page");
+        var download = Button(line.Value, "file-download"); // JS fills in "Download {name}"
+        Assert.Contains(UiIcons.DownloadPath, download);
+        Assert.Equal("", VisibleText(download));
+        var kinds = Regex.Match(html, "<template id=\"kind-icons\">.*?</template>", RegexOptions.Singleline).Value;
+        Assert.Contains("data-kind=\"file\"", kinds);
+        Assert.Contains("M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5", kinds);
+    }
+
     [Theory]
     [InlineData("copy.svg")]
     [InlineData("trash.svg")]
     [InlineData("check.svg")]
+    [InlineData("download.svg")]
     public void Icon_matches_the_branding_svg(string file)
     {
         var svg = XDocument.Load(Path.Combine(PlatformIconsTests.RepoRoot(), "branding", "ui-icons", file)).Root!;
@@ -65,6 +82,7 @@ public class RowActionsWebTests
         {
             "copy.svg" => UiIcons.CopyPath,
             "trash.svg" => UiIcons.TrashPath,
+            "download.svg" => UiIcons.DownloadPath,
             _ => UiIcons.CheckPath,
         };
         Assert.Equal(expected, (string?)svg.Element(ns + "path")?.Attribute("d"));

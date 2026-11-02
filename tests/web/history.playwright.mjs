@@ -9,7 +9,7 @@
 // unlock, history, settings and dialog states in dark and light at desktop and phone widths. It signs in once.
 
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from '../../scripts/readme/node_modules/playwright/index.mjs';
 
@@ -102,6 +102,17 @@ async function upload(clips) {
         }));
         body.append('thumb', new Blob([await e2e.sealSmall(vault, 'thumb', png)]), 'thumb');
         body.append('blob0', new Blob([await e2e.encryptBlob(vault, png)]), 'blob0');
+      } else if (clip.kind === 'file') {
+        const sha = async b => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map(x => x.toString(16).padStart(2, '0')).join('');
+        const contents = clip.files.map(f => new TextEncoder().encode(f.content));
+        const entries = await Promise.all(clip.files.map(async (f, i) => ({ name: f.name, size: contents[i].length, sha256Hex: await sha(contents[i]) })));
+        body.append('meta', JSON.stringify({
+          kind: 'file', keyId: vault.keyId,
+          hash: await e2e.keyedHash(vault, await e2e.contentHashFiles(entries)),
+          payload: await e2e.sealPayload(vault, { files: clip.files.map((f, i) => ({ name: f.name, size: contents[i].length, mime: 'text/plain' })) }),
+          sizeBytes: contents.reduce((n, c) => n + c.length, 0), backfill: false,
+        }));
+        for (const [i, c] of contents.entries()) body.append(`blob${i}`, new Blob([await e2e.encryptBlob(vault, c)]), `blob${i}`);
       } else {
         body.append('meta', JSON.stringify({
           kind: clip.kind, keyId: vault.keyId,
@@ -290,7 +301,7 @@ try {
   await page.route('**/api/clips?*', async route => {
     const response = await route.fetch();
     const body = await response.json();
-    body.items.unshift({ ...body.items[0], id: '00000000-0000-4000-8000-000000000001', kind: 'file', payload: null });
+    body.items.unshift({ ...body.items[0], id: '00000000-0000-4000-8000-000000000001', kind: 'hologram', payload: null });
     await route.fulfill({ response, json: body });
   });
   await page.reload();
@@ -300,6 +311,29 @@ try {
   assert.equal(await unknown.locator('button.copy').count(), 0);
   assert.equal(await unknown.locator('button.pin-toggle').count(), 1);
   await page.unroute('**/api/clips?*');
+
+  // Needs a server that accepts file clips (Task 2 of the files release); run this check once it is merged.
+  step('a file clip: row text, no Copy, search by file name, one download per file under the safe name');
+  const [fileId] = await upload([{ kind: 'file', files: [
+    { name: '..\\..\\report.txt', content: 'first file' }, { name: 'notes.txt', content: 'second file' }] }]);
+  await page.reload();
+  const fileRow = row(fileId);
+  await fileRow.waitFor();
+  assert.match(await fileRow.locator('.body .text').first().innerText(), /^report\.txt \+1 more . 21 B$/);
+  assert.equal(await fileRow.locator('button.copy').count(), 0);
+  assert.equal(await fileRow.locator('.kind svg').count(), 1);
+  await page.fill('#search-input', 'NOTES');
+  assert.equal(await fileRow.isVisible(), true);
+  await page.fill('#search-input', '');
+  for (const [i, name] of ['report.txt', 'notes.txt'].entries()) {
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      fileRow.locator(`button[aria-label="Download ${name}"]`).click(),
+    ]);
+    assert.equal(download.suggestedFilename(), name);
+    const text = readFileSync(await download.path(), 'utf8');
+    assert.equal(text, i === 0 ? 'first file' : 'second file');
+  }
 
   step('a loaded clip under another key means encryption was reset in another tab: the key goes');
   await page.route('**/api/clips?*', async route => {

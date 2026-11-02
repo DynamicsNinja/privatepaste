@@ -197,6 +197,67 @@ export const contentHashText = text => sha256Hex(enc.encode('t:' + text.replace(
 /** ContentHash.ForPixels: SHA256(UTF8("i:{w}x{h}:") ++ rgba), rgba being unpremultiplied RGBA8888 with no row padding. */
 export const contentHashPixels = (rgba, width, height) => sha256Hex(concat(enc.encode(`i:${width}x${height}:`), rgba));
 
+/**
+ * ContentHash.ForFiles: SHA256(UTF8("f:") ++ per file in order UTF8(name + NUL + size + NUL + sha256hex + "\n")), where
+ * sha256hex is the lowercase hex SHA-256 of the file's content. entries: [{ name, size, sha256Hex }].
+ */
+export const contentHashFiles = entries =>
+  sha256Hex(enc.encode('f:' + entries.map(f => `${f.name}\0${f.size}\0${f.sha256Hex}\n`).join('')));
+
+// ---- file names and sizes: the same rules as FileNames.cs on every platform (see "safeFileName" in the vectors) ----
+
+const FILE_NAME_MAX = 200;
+const RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|(?:COM|LPT)[1-9])$/i;
+// Ends with the last dot unless the dot starts the name (".bashrc" has no extension).
+const extensionOf = name => { const dot = name.lastIndexOf('.'); return dot > 0 ? name.slice(dot) : ''; };
+const trimDotsAndSpaces = s => s.replace(/[. ]+$/, '');
+
+/**
+ * A name from a payload comes from another device, so it is untrusted: the leaf after the last / or \, without control
+ * characters or <>:"|?*, without trailing dots and spaces, never empty or a reserved Windows device name, at most 200 UTF-16 units.
+ */
+export function safeFileName(name) {
+  let s = trimDotsAndSpaces(name.slice(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1)
+    .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, ''));
+  if (s === '' || s === '.' || s === '..') return 'file';
+
+  const dot = s.indexOf('.');
+  if (RESERVED_NAME.test(dot < 0 ? s : s.slice(0, dot))) s = '_' + s;
+
+  if (s.length > FILE_NAME_MAX) {
+    let ext = extensionOf(s);
+    if (ext.length >= FILE_NAME_MAX) ext = '';
+    let keep = FILE_NAME_MAX - ext.length;
+    // Never end the cut stem on the first half of a surrogate pair; then trim the stem again.
+    const last = s.charCodeAt(keep - 1), next = s.charCodeAt(keep);
+    if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) keep--;
+    const stem = trimDotsAndSpaces(s.slice(0, keep));
+    s = (stem === '' ? 'file' : stem) + ext;
+  }
+  return s;
+}
+
+function scaled(bytes, unit, label) {
+  const tenths = Math.floor((bytes * 10 + unit / 2) / unit);
+  if (tenths < 100) return { text: tenths % 10 === 0 ? `${tenths / 10} ${label}` : `${Math.floor(tenths / 10)}.${tenths % 10} ${label}`, overflow: false };
+  const whole = Math.floor((bytes + unit / 2) / unit);
+  return { text: `${whole} ${label}`, overflow: label === 'KB' && whole >= 1024 };
+}
+
+/** "0 B", "12 KB", "3.4 MB": 1 KB = 1024 B, half-up integer arithmetic, one decimal only below 10 and never ".0". */
+export function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = scaled(bytes, 1024, 'KB');
+  return kb.overflow ? scaled(bytes, 1024 * 1024, 'MB').text : kb.text;
+}
+
+/** The row text of a file clip: "report.pdf +2 more · 3.4 MB". files: [{ name, size }]. */
+export function fileRowText(files) {
+  if (files.length === 0) return '';
+  const more = files.length > 1 ? ` +${files.length - 1} more` : '';
+  return `${files[0].name}${more} · ${formatSize(files.reduce((sum, f) => sum + f.size, 0))}`;
+}
+
 // ---- payload: base64 of a small item holding UTF-8 JSON ----
 
 export async function sealPayload(vault, obj) {

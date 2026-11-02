@@ -12,6 +12,7 @@ public static class UiIcons
     public const string CopyPath = "M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1";
     public const string TrashPath = "M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3";
     public const string CheckPath = "M5 12.5l4.5 4.5L19 7.5";
+    public const string DownloadPath = "M12 4v11M7 11l5 5 5-5M5 20h14";
 
     // Decorative inline SVGs in the surrounding text colour; the caller supplies the label.
     public static IHtmlContent Pin(string cssClass) => Svg(PinPath, cssClass);
@@ -21,6 +22,8 @@ public static class UiIcons
     public static IHtmlContent Trash(string cssClass) => Svg(TrashPath, cssClass);
 
     public static IHtmlContent Check(string cssClass) => Svg(CheckPath, cssClass);
+
+    public static IHtmlContent Download(string cssClass) => Svg(DownloadPath, cssClass);
 
     private static HtmlString Svg(string path, string cssClass) => new(
         $"<svg class=\"{cssClass}\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" " +

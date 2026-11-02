@@ -9,7 +9,7 @@ const { startVault } = await import(shell.dataset.vaultUi);
 
 const PAGE_SIZE = 50;
 const PREVIEW_LENGTH = 200;
-const KINDS = new Set(['text', 'link', 'image']);
+const KINDS = new Set(['text', 'link', 'image', 'file']);
 const PLATFORMS = new Set(['windows', 'macos', 'linux', 'android', 'web']);
 
 const EMPTY_HISTORY = 'Nothing here yet. Copy something on a signed-in device and it shows up here.';
@@ -59,12 +59,23 @@ export function api(path, init = {}) {
 
 // ---- decrypting ----
 
-/** What a clip holds: { kind, text?, width?, height? }, kind 'unknown' for a newer kind and 'unreadable' on failure. */
+/**
+ * What a clip holds: { kind, text?, width?, height?, files? }, kind 'unknown' for a newer kind and 'unreadable' on failure.
+ * files: [{ name, size }] with names already made safe (they come from another device), in blob order.
+ */
 async function open(clip) {
   if (!KINDS.has(clip.kind)) return { kind: 'unknown' };
   try {
     if (clip.keyId !== vault.keyId) throw new Error('Sealed under another key.');
     const payload = await e2e.openPayload(vault, clip.payload);
+    if (clip.kind === 'file') {
+      if (!Array.isArray(payload.files) || payload.files.length === 0) throw new Error('A file clip without files.');
+      const files = payload.files.map(f => ({
+        name: e2e.safeFileName(typeof f?.name === 'string' ? f.name : ''),
+        size: Number.isSafeInteger(f?.size) && f.size >= 0 ? f.size : 0,
+      }));
+      return { kind: 'file', files, text: files.map(f => f.name).join('\n') };
+    }
     return {
       kind: clip.kind,
       text: typeof payload.text === 'string' ? payload.text : '',
@@ -151,6 +162,24 @@ function body(entry) {
     }
     case 'text':
       return element('pre', 'text', preview(content.text));
+    case 'file': {
+      const box = element('div', 'files');
+      box.append(element('p', 'text', e2e.fileRowText(content.files)));
+      const lines = element('ul', 'file-lines');
+      content.files.forEach((file, index) => {
+        const line = $('file-line').content.firstElementChild.cloneNode(true);
+        line.querySelector('.file-name').textContent = file.name;
+        line.querySelector('.file-size').textContent = e2e.formatSize(file.size);
+        const button = line.querySelector('.file-download');
+        const label = `Download ${file.name}`;
+        button.setAttribute('aria-label', label);
+        button.title = label;
+        button.dataset.index = String(index);
+        lines.append(line);
+      });
+      box.append(lines);
+      return box;
+    }
     case 'unknown':
       return element('p', 'text muted', UNKNOWN_KIND);
     default:
@@ -207,7 +236,8 @@ function buildRow(entry) {
   meta.append(icon('platform-icons', `[data-platform="${PLATFORMS.has(platform) ? platform : 'unknown'}"]`),
     `${clip.sourceDeviceName}, `, time);
 
-  if (!KINDS.has(content.kind)) row.querySelector('.copy').remove();
+  // A file clip has no Copy: its files can't go on the browser clipboard; each line has its own Download.
+  if (!KINDS.has(content.kind) || content.kind === 'file') row.querySelector('.copy').remove();
   setPinned(row, clip);
   return row;
 }
@@ -219,6 +249,7 @@ function refresh() {
   const query = searchInput.value.trim().toLowerCase();
   let visible = 0;
   entries.forEach((entry, index) => {
+    // For a file clip, text is its file names.
     const match = !query || (entry.content.text ?? '').toLowerCase().includes(query);
     entry.row.hidden = !match;
     // Only the true top of the list gets the "just arrived" highlight, not the first search hit.
@@ -308,6 +339,43 @@ function clear() {
   cursor = null;
   exhausted = false;
 }
+
+// ---- file downloads ----
+
+/**
+ * Fetches, decrypts and saves one file of a file clip. The bytes are saved as application/octet-stream under the safe
+ * name, so the browser never opens or runs the file, whatever its extension or the mime the sender claimed.
+ */
+async function download(entry, index) {
+  const { name } = entry.content.files[index];
+  const bytes = await e2e.decryptBlob(vault, await fetchBytes(`/api/clips/${encodeURIComponent(entry.clip.id)}/blobs/${index}`));
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  const a = element('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  // The download has started by the time the click returns; revoking later keeps slow browsers from losing it.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+list.addEventListener('click', event => {
+  const button = event.target.closest('button.file-download');
+  if (!button || !vault) return;
+  const entry = entries.find(e => e.clip.id === button.closest('.clip').dataset.id);
+  if (!entry) return;
+  const at = generation;
+  whileBusy(button, async () => {
+    try {
+      await download(entry, Number(button.dataset.index));
+    } catch (error) {
+      console.error(error);
+      // Same message as a clip that can't be opened; the files are gone from the row.
+      if (at === generation) entry.row.querySelector('.files')?.replaceWith(element('p', 'text muted', UNREADABLE));
+    }
+  });
+});
 
 loadMore.addEventListener('click', () => whileBusy(loadMore, loadPage));
 // Search only sees what is loaded; this pages through the rest of the history so older matches show up too.
