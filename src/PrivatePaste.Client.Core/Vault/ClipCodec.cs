@@ -80,7 +80,7 @@ public sealed class ClipCodec(VaultKey key)
     public ClipDto Decode(ClipDto wire)
     {
         // Never the server's own text, width or height: only what opens under this key is shown or searched.
-        var unknown = wire with { Kind = ClipKind.Unknown, Text = null, Width = null, Height = null };
+        var unknown = wire with { Kind = ClipKind.Unknown, Text = null, Width = null, Height = null, Files = null };
         if (wire.Kind == ClipKind.Unknown || wire.KeyId != key.KeyId || wire.Payload is null) return unknown;
         ClipPayload payload;
         try

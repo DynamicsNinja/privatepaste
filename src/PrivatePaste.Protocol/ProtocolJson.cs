@@ -26,6 +26,7 @@ internal sealed class ClipKindConverter : JsonConverter<ClipKind>
                 "text" => ClipKind.Text,
                 "link" => ClipKind.Link,
                 "image" => ClipKind.Image,
+                "file" => ClipKind.File,
                 _ => ClipKind.Unknown,
             }
             : ClipKind.Unknown;
@@ -36,6 +37,7 @@ internal sealed class ClipKindConverter : JsonConverter<ClipKind>
             ClipKind.Text => "text",
             ClipKind.Link => "link",
             ClipKind.Image => "image",
+            ClipKind.File => "file",
             _ => throw new ArgumentOutOfRangeException(nameof(value), "Unknown is never written."),
         });
 }

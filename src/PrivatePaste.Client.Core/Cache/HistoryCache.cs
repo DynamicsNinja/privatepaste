@@ -278,6 +278,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
                     "text" => ClipKind.Text,
                     "link" => ClipKind.Link,
                     "image" => ClipKind.Image,
+                    "file" => ClipKind.File,
                     _ => ClipKind.Unknown,
                 }
                 : ClipKind.Unknown;
@@ -288,6 +289,7 @@ public sealed class HistoryCache(string path, byte[] key, int capacity = 500)
                 ClipKind.Text => "text",
                 ClipKind.Link => "link",
                 ClipKind.Image => "image",
+                ClipKind.File => "file",
                 _ => "unknown",
             });
     }

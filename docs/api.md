@@ -202,6 +202,7 @@ The content hash is computed the same way on every client so that echo preventio
 
 - Text: lowercase hex of `SHA-256(UTF-8("t:" + text))`, where `text` has CRLF and lone CR converted to LF (nothing else changes).
 - Image: lowercase hex of `SHA-256(UTF-8("i:{width}x{height}:") ++ pixels)`, where `pixels` is the decoded image as RGBA8888, unpremultiplied, row-major, with no row padding.
+- Files: lowercase hex of `SHA-256(UTF-8("f:") ++ entries)`, where each file in order adds `UTF-8(name + "\0" + size + "\0" + sha256hex + "\n")`: `name` is the file name as sent in the payload, `size` the decimal byte count, `sha256hex` the lowercase hex SHA-256 of the file's content.
 
 Ports must reproduce these test vectors:
 
@@ -211,3 +212,4 @@ Ports must reproduce these test vectors:
 | text `a\nb` (and `a\r\nb`) | `b77cc1fcd69063256ffc07884bde76c875b73e56a786925feedd7ba881f0616c` |
 | text `šećer 🚀` | `812328f074c3d5a025a329dd4674a676d83d5f926bd79af643a51e783ed3ac39` |
 | 1x1 image, RGBA `[255, 0, 0, 255]` | `8d833d22068fdf91eecbd0d310208548d1f9418c6513c572a7c7d01fc696c49a` |
+| files `a.txt` (5 bytes, content `hello`) and `b.bin` (0 bytes, empty) | `0baeacb0a540c7f644e57744ae15f6df06f21ba4cdacf1444cec972fe60f4940` |
