@@ -1,0 +1,72 @@
+name: extension
+
+on:
+  push:
+    branches: ['**']
+    tags: ['extension-v*']
+    paths:
+      - 'extension/**'
+      - 'src/PrivatePaste.Server/wwwroot/js/e2e.js'
+      - 'src/PrivatePaste.Server/wwwroot/lib/hash-wasm/**'
+      - 'docs/e2e-test-vectors.json'
+      - 'docs/classifier-test-vectors.json'
+      - '.github/workflows/extension.yml'
+  pull_request:
+    paths:
+      - 'extension/**'
+      - 'src/PrivatePaste.Server/wwwroot/js/e2e.js'
+      - 'src/PrivatePaste.Server/wwwroot/lib/hash-wasm/**'
+      - 'docs/e2e-test-vectors.json'
+      - 'docs/classifier-test-vectors.json'
+      - '.github/workflows/extension.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The glob form: Node 22 doesn't take a folder here.
+      - name: Unit tests
+        run: node --test "extension/test/*.test.mjs"
+      - name: Build
+        run: node extension/build.mjs --version 0.0.0 --out "$RUNNER_TEMP/extension-check"
+
+  release:
+    # Tag extension-vX.Y.Z: zip the unpacked extension and attach it to a GitHub Release.
+    if: startsWith(github.ref, 'refs/tags/extension-v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the zip
+        run: |
+          version="${GITHUB_REF_NAME#extension-v}"
+          node extension/build.mjs --version "$version"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          # The files sit at the zip's root, so the unzipped folder can be loaded as is.
+          (cd extension/dist && zip -r -X "$GITHUB_WORKSPACE/out/privatepaste-extension-$version.zip" .)
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#extension-v}"
+          zip="$GITHUB_WORKSPACE/out/privatepaste-extension-$version.zip"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$zip" --clobber
+          else
+            flags=""
+            case "$version" in *-*) flags="--prerelease" ;; esac
+            gh release create "$GITHUB_REF_NAME" "$zip" --title "PrivatePaste extension $version" --generate-notes $flags
+          fi
