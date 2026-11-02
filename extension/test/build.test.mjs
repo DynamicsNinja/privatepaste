@@ -62,3 +62,24 @@ test('--fake-clipboard swaps in the fake clipboard', t => {
   assert.deepEqual(readFileSync(join(out, 'platform', 'clipboard.js')), readFileSync(join(ext, 'src', 'platform', 'fake-clipboard.js')));
   assert.equal(existsSync(join(out, 'platform', 'fake-clipboard.js')), false);
 });
+
+test('the manifest opens the popup from the toolbar, with icons that exist in the build', t => {
+  const out = build('--version', '1.2.3');
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'));
+  const icons = { 16: 'icons/icon-16.png', 32: 'icons/icon-32.png', 48: 'icons/icon-48.png', 128: 'icons/icon-128.png' };
+  assert.deepEqual(manifest.action, { default_popup: 'popup.html', default_title: 'PrivatePaste', default_icon: icons });
+  assert.deepEqual(manifest.icons, icons);
+  for (const path of [manifest.action.default_popup, ...Object.values(icons)]) assert.ok(existsSync(join(out, path)), path);
+});
+
+test('build copies the Sora fonts from the web UI, the only copy in the repo', t => {
+  const out = build('--version', '1.2.3');
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  for (const name of ['sora-latin.woff2', 'sora-latin-ext.woff2', 'OFL.txt'])
+    assert.deepEqual(readFileSync(join(out, 'fonts', name)), readFileSync(join(wwwroot, 'fonts', name)));
+  assert.equal(existsSync(join(ext, 'src', 'fonts')), false);
+  // popup.css points at them.
+  for (const name of ['sora-latin.woff2', 'sora-latin-ext.woff2'])
+    assert.ok(readFileSync(join(out, 'popup.css'), 'utf8').includes(`url("fonts/${name}")`), name);
+});

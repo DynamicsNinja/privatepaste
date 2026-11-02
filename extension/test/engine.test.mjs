@@ -491,6 +491,51 @@ test('history rows of images carry the decrypted thumbnail', async () => {
   assert.equal(env.server.count('thumb'), 1);
 });
 
+test('historyVersion changes with the cache and only then', async () => {
+  const env = await setup();
+  const socket = await connected(env);
+  const v0 = env.engine.historyVersion();
+  await env.engine.history();
+  assert.equal(env.engine.historyVersion(), v0, 'reading the history is no change');
+
+  await live(socket, await clip({ id: 'a', seq: 1, at: 1000, text: 'one' }), false);
+  const v1 = env.engine.historyVersion();
+  assert.notEqual(v1, v0);
+  await env.clock.advance(5000);
+  assert.equal(env.engine.historyVersion(), v1, 'nothing arrived');
+
+  // The same clip again (an old seq) changes nothing; a pin (new seq) does; a deletion does.
+  await live(socket, await clip({ id: 'a', seq: 1, at: 1000, text: 'one' }), false);
+  assert.equal(env.engine.historyVersion(), v1);
+  await live(socket, await clip({ id: 'a', seq: 2, at: 1000, text: 'one', extra: { pinnedAt: iso(3000) } }), false);
+  const v2 = env.engine.historyVersion();
+  assert.notEqual(v2, v1);
+  socket.receive({ type: 'clip.deleted', id: 'a', seq: 3 });
+  await until(() => env.engine.historyVersion() !== v2, 'the deletion');
+
+  const v3 = env.engine.historyVersion();
+  await env.engine.signOut();
+  assert.notEqual(env.engine.historyVersion(), v3, 'sign-out empties the cache');
+});
+
+test('a thumbnail that failed is asked for again only when the popup opens', async () => {
+  const env = await setup();
+  const socket = await connected(env);
+  await live(socket, await clip({ id: 'i', seq: 1, at: 1000, kind: 'image', payload: { width: 1, height: 1 }, extra: { hasThumb: true, blobCount: 1 } }), false);
+  // No thumbnail on the server: every ask fails.
+  assert.equal((await env.engine.history()).rows[0].thumbPng, undefined);
+  await env.engine.history();
+  await env.engine.history();
+  assert.equal(env.server.count('thumb'), 1);
+  await env.engine.history({ retryThumbs: true });
+  assert.equal(env.server.count('thumb'), 2);
+
+  const thumb = await encodePng(Uint8Array.from([9, 9, 9, 255]), 1, 1);
+  env.server.thumbs.set('i', await e2e.sealSmall(keys, 'thumb', thumb));
+  assert.equal((await env.engine.history()).rows[0].thumbPng, undefined, 'not before the next open');
+  assert.deepEqual((await env.engine.history({ retryThumbs: true })).rows[0].thumbPng, thumb);
+});
+
 test('copy writes text as its own write, and leaves images to the popup', async () => {
   const env = await setup();
   const socket = await connected(env);
