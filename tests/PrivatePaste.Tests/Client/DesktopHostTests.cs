@@ -1074,6 +1074,55 @@ public class DesktopHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_save_in_flight_survives_a_prune()
+    {
+        var blobs = new BlobGate();
+        var host = NewHost(handler: () => new HoldBlobs(_server.Server.CreateHandler(), blobs));
+        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "PC-host")).Result);
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+        host.DownloadsOverride = Path.Combine(_dir, "Downloads");
+        var clip = await ReceiveFileAsync(host, "report.pdf", "pdf bytes");
+        _clipboard.Current = null;
+        await ReceiveFileAsync(host, "other.txt", "other");   // now on the clipboard instead
+        Directory.Delete(Path.Combine(FilesRoot, clip.Id.ToString("N")), recursive: true);   // Save downloads it again
+
+        blobs.Armed = true;
+        var save = host.SaveFilesAsync(clip);
+        await blobs.Entered.Task.WaitAsync(WaitTimeout);
+        var pruned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.HistoryChanged += (_, _) => pruned.TrySetResult();
+        // The clip leaves the history (like an older search hit, never in it): the next cache change prunes.
+        Assert.True(host.Cache.Remove(clip.Id, clip.Seq + 1));
+        await pruned.Task.WaitAsync(WaitTimeout);
+        blobs.Release.SetResult();
+
+        Assert.Equal("Saved report.pdf to Downloads", await save);
+        Assert.Equal("pdf bytes", File.ReadAllText(Path.Combine(_dir, "Downloads", "report.pdf")));
+    }
+
+    [Fact]
+    public async Task A_save_that_finishes_after_a_sign_out_leaves_no_files()
+    {
+        var blobs = new BlobGate();
+        var host = NewHost(handler: () => new HoldBlobs(_server.Server.CreateHandler(), blobs));
+        Assert.Equal(SignInResult.Ok, (await host.SignInAsync(ServerUrl, PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "PC-host")).Result);
+        await WaitUntilAsync(() => host.State == SyncState.Connected);
+        host.DownloadsOverride = Path.Combine(_dir, "Downloads");
+        var clip = await ReceiveFileAsync(host, "report.pdf", "pdf bytes");
+        var folder = Path.Combine(FilesRoot, clip.Id.ToString("N"));
+        Directory.Delete(folder, recursive: true);
+
+        blobs.Armed = true;
+        var save = host.SaveFilesAsync(clip);
+        await blobs.Entered.Task.WaitAsync(WaitTimeout);
+        await host.SignOutAsync();
+        blobs.Release.SetResult();
+        await save.WaitAsync(WaitTimeout);
+
+        Assert.False(Directory.Exists(folder));
+    }
+
+    [Fact]
     public async Task A_clip_deleted_on_the_server_takes_its_received_files_with_it()
     {
         var host = await SignedInHostAsync();
@@ -1108,6 +1157,27 @@ public class DesktopHostTests : IAsyncLifetime
                     await Task.Delay(300, CancellationToken.None);   // a transport that notices cancellation late
                     throw;
                 }
+            }
+            return await base.SendAsync(request, ct);
+        }
+    }
+
+    private sealed class BlobGate
+    {
+        public volatile bool Armed;
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    /// <summary>Once armed, holds blob downloads until released, after signalling that one arrived.</summary>
+    private sealed class HoldBlobs(HttpMessageHandler inner, BlobGate gate) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            if (gate.Armed && request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/blobs/"))
+            {
+                gate.Entered.TrySetResult();
+                await gate.Release.Task;   // ignores cancellation: the response may come after a sign-out
             }
             return await base.SendAsync(request, ct);
         }

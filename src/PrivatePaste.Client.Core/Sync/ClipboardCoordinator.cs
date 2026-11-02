@@ -24,7 +24,7 @@ namespace PrivatePaste.Client.Core.Sync;
 /// reset wiped), <see cref="KeyReset"/> is raised once, and nothing is sent under that key again.
 /// No codec (locked), a refused key, a key disposed mid-encode or a 426: nothing is sent; a live copy is queued and a flush
 /// stops without counting an attempt (a 426 in a flush is rethrown after that, so the sync engine stops).
-/// The server's limits are asked once per session: not while locked, and after a failed ask not again for
+/// The server's limits are asked once per connection of the sync link: not while locked, and after a failed ask not again for
 /// <see cref="LimitsRetryDelay"/> on the copy path. While they are unknown, text or an image over the default limit is queued (the
 /// server's own limit may be higher) instead of being refused for good.
 /// <see cref="UnauthorizedApiException"/> is NOT swallowed, queued or dropped: it propagates to the caller (sync engine/host),
@@ -75,6 +75,8 @@ public sealed class ClipboardCoordinator(
     /// <summary>The kinds the server takes, asked with <see cref="_limits"/>; null while unknown or when it didn't say.</summary>
     private volatile IReadOnlyList<string>? _kinds;
     private long _limitsRetryAtTicks;   // UTC ticks; 0 = ask at once
+    /// <summary>Set on each reconnect: the known limits and kinds are asked again on next use.</summary>
+    private volatile bool _serverInfoStale;
     /// <summary>The key id the server refused as reset: nothing is sent under it again.</summary>
     private volatile string? _refusedKeyId;
 
@@ -361,6 +363,8 @@ public sealed class ClipboardCoordinator(
         ClipboardContent content;
         // The echo guard works on plain content hashes (what a copy here hashes to), not on the server's keyed hash.
         string contentHash;
+        // Received files stay through the write: a prune between writing them and the clipboard taking them would empty the paste.
+        using var held = clip.Kind == ClipKind.File ? files?.Hold(clip.Id) : null;
         if (clip.Kind == ClipKind.Image)
         {
             if (codec() is not { } c) return false;
@@ -424,9 +428,12 @@ public sealed class ClipboardCoordinator(
                 _ownWriteAt = null;
                 throw;
             }
+            // Marked before anything can raise a cache change: the clip may not be in the history (pinned, an older search
+            // hit), and the files must outlive the prune that follows until something else is on the clipboard.
+            if (content is ClipboardContent.Files) files?.MarkOnClipboard(clip.Id);
             cache.MarkApplied(clip);
             TrySaveCache();
-            PruneFiles(clip.Id);
+            PruneFiles();
             return true;
         }
         finally { _gate.Release(); }
@@ -546,16 +553,10 @@ public sealed class ClipboardCoordinator(
     }
 
     /// <summary>
-    /// Keeps the received files to the clips still in the history (and <paramref name="applied"/>, now on the clipboard)
-    /// and under the store's size cap.
+    /// Keeps the received files to the clips still in the history and under the store's size cap; the store itself keeps
+    /// those in use (the clip on the clipboard, writes and saves in flight).
     /// </summary>
-    private void PruneFiles(Guid applied)
-    {
-        if (files is null) return;
-        var keep = cache.Items.Select(i => i.Clip.Id).ToHashSet();
-        keep.Add(applied);
-        files.Prune(keep);
-    }
+    private void PruneFiles() => files?.Prune(cache.Items.Select(i => i.Clip.Id).ToHashSet());
 
     /// <summary>Over a limit only the server sets (size), not the fixed 50-megapixel one every client applies.</summary>
     private static bool IsOnlyOverServerLimit(ClipboardContent content) =>
@@ -640,29 +641,42 @@ public sealed class ClipboardCoordinator(
     }
 
     /// <summary>
-    /// The server's limits, fetched once per session (one coordinator); null while unknown. Not asked while there is no
-    /// usable key (nothing is sent then anyway). After a failure, only a <paramref name="force"/>d ask (a flush, which the
-    /// engine paces itself) tries again before <see cref="LimitsRetryDelay"/> has passed.
+    /// The server's limits, fetched once per connection (see <see cref="OnReconnected"/>); null while unknown. Not asked
+    /// while there is no usable key (nothing is sent then anyway). After a failure, only a <paramref name="force"/>d ask (a
+    /// flush, which the engine paces itself) tries again before <see cref="LimitsRetryDelay"/> has passed; meanwhile the
+    /// last known limits, if any, stay in force.
     /// </summary>
     private async Task<ServerLimitsDto?> LimitsAsync(bool force, CancellationToken ct)
     {
-        if (_limits is { } known) return known;
-        if (UsableCodec() is null) return null;
-        if (!force && time.GetUtcNow().UtcTicks < Interlocked.Read(ref _limitsRetryAtTicks)) return null;
+        var known = _limits;
+        if (known is not null && !_serverInfoStale) return known;
+        if (UsableCodec() is null) return known;
+        if (!force && time.GetUtcNow().UtcTicks < Interlocked.Read(ref _limitsRetryAtTicks)) return known;
         try
         {
             var info = await api.GetServerInfoAsync(ct).ConfigureAwait(false);
             var limits = info?.Limits ?? DefaultLimits;
             _kinds = info?.Kinds;   // a server from before encryption (no info) takes no files
             _limits = limits;
+            _serverInfoStale = false;
             return limits;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception)
         {
             Interlocked.Exchange(ref _limitsRetryAtTicks, (time.GetUtcNow() + LimitsRetryDelay).UtcTicks);
-            return null;
+            return known;
         }
+    }
+
+    /// <summary>
+    /// The sync link (re)connected, perhaps to an upgraded server: its kinds and limits are asked again on next use. Until
+    /// that ask succeeds the last known ones stay in force.
+    /// </summary>
+    public void OnReconnected()
+    {
+        _serverInfoStale = true;
+        Interlocked.Exchange(ref _limitsRetryAtTicks, 0);
     }
 
     /// <summary>The current codec, unless there is none (locked) or the server refused its key as reset.</summary>

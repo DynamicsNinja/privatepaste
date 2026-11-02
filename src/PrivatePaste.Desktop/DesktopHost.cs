@@ -1109,6 +1109,8 @@ public sealed class DesktopHost : IAsyncDisposable
         if (clip.Kind != ClipKind.File || clip.Files is not { Count: > 0 } described) return null;
         if (_session is not { } session || Codec is not { } codec) return PopupViewModel.CouldNotSaveText;
         var files = _files;
+        // Not pruned until copied into Downloads, even when the clip isn't in the history (a pinned clip, an older search hit).
+        var held = files.Hold(clip.Id);
         try
         {
             var paths = await files.MaterializeAsync(clip, (n, t) =>
@@ -1128,6 +1130,7 @@ public sealed class DesktopHost : IAsyncDisposable
         }
         finally
         {
+            held.Dispose();
             // A sign-out or an encryption reset ran meanwhile and cleared the received files: this save must not leave
             // its own copy behind (it is not session work, so the wipe didn't wait for it).
             if (_session != session)

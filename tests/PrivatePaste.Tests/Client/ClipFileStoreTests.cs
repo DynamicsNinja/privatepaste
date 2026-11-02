@@ -181,4 +181,48 @@ public sealed class ClipFileStoreTests : IDisposable
         Assert.False(Directory.Exists(Root));
         store.Clear();   // nothing there: no throw
     }
+
+    [Fact]
+    public async Task Prune_keeps_a_folder_being_written()
+    {
+        var store = new ClipFileStore(Root);
+        var (clip, fetch, _) = await ClipAsync(("a.txt", "ay"u8.ToArray()));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<byte[]> Held(int n, CancellationToken ct) { entered.SetResult(); await release.Task; return await fetch(n, ct); }
+
+        var writing = store.MaterializeAsync(clip, Held, Codec, default);
+        await entered.Task;
+        store.Prune(new HashSet<Guid>());   // e.g. a Save of a clip that isn't in the history
+        release.SetResult();
+
+        Assert.Equal("ay"u8.ToArray(), File.ReadAllBytes(Assert.Single(await writing)));
+    }
+
+    [Fact]
+    public async Task Prune_keeps_held_clips_and_the_one_on_the_clipboard()
+    {
+        var store = new ClipFileStore(Root, maxBytes: 0);   // over the cap: in use or not, nothing in use goes
+        var (held, f1, _) = await ClipAsync(("a", new byte[10]));
+        var (onClipboard, f2, _) = await ClipAsync(("b", new byte[10]));
+        var heldPaths = await store.MaterializeAsync(held, f1, Codec, default);
+        var clipboardPaths = await store.MaterializeAsync(onClipboard, f2, Codec, default);
+
+        store.MarkOnClipboard(onClipboard.Id);
+        using (store.Hold(held.Id))
+        {
+            store.Prune(new HashSet<Guid>());   // neither is in the history (an older search hit, a pinned page)
+            Assert.True(File.Exists(heldPaths[0]));
+            Assert.True(File.Exists(clipboardPaths[0]));
+        }
+
+        store.Prune(new HashSet<Guid>());   // released: the held one goes; the clipboard's stays
+        Assert.False(File.Exists(heldPaths[0]));
+        Assert.True(File.Exists(clipboardPaths[0]));
+
+        // Once in the history, the history keeps it: deleting it there later takes its files, clipboard or not.
+        store.Prune(new HashSet<Guid> { onClipboard.Id });
+        store.Prune(new HashSet<Guid>());
+        Assert.False(File.Exists(clipboardPaths[0]));
+    }
 }

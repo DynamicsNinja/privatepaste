@@ -74,11 +74,8 @@ async function open(clip) {
     if (clip.keyId !== vault.keyId) throw new Error('Sealed under another key.');
     const payload = await e2e.openPayload(vault, clip.payload);
     if (clip.kind === 'file') {
-      if (!Array.isArray(payload.files) || payload.files.length === 0) throw new Error('A file clip without files.');
-      const files = payload.files.map(f => ({
-        name: e2e.safeFileName(typeof f?.name === 'string' ? f.name : ''),
-        size: Number.isSafeInteger(f?.size) && f.size >= 0 ? f.size : 0,
-      }));
+      const files = e2e.payloadFiles(payload, clip.blobCount);
+      if (!files) throw new Error('A file clip without one file per blob.');
       return { kind: 'file', files, text: files.map(f => f.name).join('\n') };
     }
     return {
@@ -371,13 +368,29 @@ function clear() {
 
 // ---- file downloads ----
 
+const DOWNLOAD_FAILED = "Couldn't download the file. Try again.";
+
+/** The file's blob arrived but doesn't open: it can't be decrypted, whatever is tried. */
+class UnreadableFileError extends Error {
+  constructor(cause) {
+    super("A file blob doesn't open.", { cause });
+  }
+}
+
 /**
  * Fetches, decrypts and saves one file of a file clip. The bytes are saved as application/octet-stream under the safe
  * name, so the browser never opens or runs the file, whatever its extension or the mime the sender claimed.
  */
 async function download(entry, index) {
   const { name } = entry.content.files[index];
-  const bytes = await e2e.decryptBlob(vault, await fetchBytes(`/api/clips/${encodeURIComponent(entry.clip.id)}/blobs/${index}`));
+  // A network or HTTP failure throws here, as itself: the row stays usable and the click can be tried again.
+  const sealed = await fetchBytes(`/api/clips/${encodeURIComponent(entry.clip.id)}/blobs/${index}`);
+  let bytes;
+  try {
+    bytes = await e2e.decryptBlob(vault, sealed);
+  } catch (error) {
+    throw new UnreadableFileError(error);
+  }
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
   const a = element('a');
   a.href = url;
@@ -398,10 +411,19 @@ list.addEventListener('click', event => {
   whileBusy(button, async () => {
     try {
       await download(entry, Number(button.dataset.index));
+      if (pageError.textContent === DOWNLOAD_FAILED) pageError.hidden = true;   // a retry worked
     } catch (error) {
-      console.error(error);
+      if (at !== generation) return;
+      if (!(error instanceof UnreadableFileError)) {
+        // Offline, a server error, a signed-out session: says so and leaves the row as it is.
+        console.error(error);
+        pageError.textContent = DOWNLOAD_FAILED;
+        pageError.hidden = false;
+        return;
+      }
+      console.error(error.message);
       // Same message as a clip that can't be opened; the files are gone from the row.
-      if (at === generation) entry.row.querySelector('.files')?.replaceWith(element('p', 'text muted', UNREADABLE));
+      entry.row.querySelector('.files')?.replaceWith(element('p', 'text muted', UNREADABLE));
     }
   });
 });

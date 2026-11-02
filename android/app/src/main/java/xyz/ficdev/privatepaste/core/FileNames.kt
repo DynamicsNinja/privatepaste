@@ -137,11 +137,14 @@ object FileNames {
         return "$whole $name" to (name == "KB" && whole >= 1024)
     }
 
-    /** The row text of a file clip: "report.pdf +2 more · 3.4 MB". */
+    /**
+     * The row text of a file clip: "report.pdf +2 more · 3.4 MB". The name shown is the [safe] one (as saved),
+     * so a newline or a path in a payload name can't break a row or a notification.
+     */
     fun rowText(files: List<ClipFileInfo>): String {
         if (files.isEmpty()) return ""
         val more = if (files.size > 1) " +${files.size - 1} more" else ""
-        return "${files[0].name}$more · ${formatSize(files.sumOf { it.size })}"
+        return "${safe(files[0].name)}$more · ${formatSize(files.sumOf { it.size })}"
     }
 
     // Starts at the last dot unless the dot starts the name (".bashrc" has no extension); "" when there is none.

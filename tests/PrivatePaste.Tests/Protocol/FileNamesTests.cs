@@ -54,6 +54,8 @@ public class FileNamesTests
             "report.pdf +2 more · 3.4 MB"),
         ([new("empty", 0, "application/octet-stream")], "empty · 0 B"),
         ([new("a", 12 * 1024, "application/octet-stream")], "a · 12 KB"),
+        // A payload name is shown as its safe name, so a newline or a path can't break the row.
+        ([new("../secret\nplan.pdf", 1, "application/pdf"), new("x\ny", 1, "application/octet-stream")], "secretplan.pdf +1 more · 2 B"),
     ];
 
     public static IEnumerable<object[]> Safe => SafeCases.Select(c => new object[] { c.In, c.Out });

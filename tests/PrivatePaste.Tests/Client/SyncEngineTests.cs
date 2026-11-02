@@ -523,6 +523,30 @@ public class SyncEngineTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reconnect_asks_the_server_limits_again()
+    {
+        var upgraded = false;
+        _handlerA.Respond = r => !upgraded && r.RequestUri!.AbsolutePath == "/api/server-info"
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"protocol":2,"kinds":["text","link","image","file"],"limits":{"textKb":1,"imageMb":20,"fileMb":25}}""",
+                    System.Text.Encoding.UTF8, "application/json"),
+            }
+            : null;
+        var engine = await StartConnectedAsync();
+        await CopyLocallyAsync(new string('a', 2048));
+        Assert.Equal([ClipCodec.TextTooLargeMessage(1)], _notes.Messages);
+
+        upgraded = true;   // the server now takes 1 MB; the link reconnects to it
+        engine.Nudge();
+        await WaitUntilAsync(() => Volatile.Read(ref _connects) == 2 && engine.State == SyncState.Connected);
+        await CopyLocallyAsync(new string('b', 2048));
+
+        Assert.Single(_notes.Messages);
+        Assert.True(Cached(new string('b', 2048)));
+    }
+
+    [Fact]
     public async Task Nudge_cuts_the_backoff_wait_short()
     {
         _connectFailure = n => n == 1 ? new WebSocketException("network down") : null;

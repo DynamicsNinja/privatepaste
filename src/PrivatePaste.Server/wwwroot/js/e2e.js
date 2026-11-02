@@ -290,11 +290,24 @@ export function formatSize(bytes) {
   return kb.overflow ? scaled(bytes, 1024 * 1024, 'MB').text : kb.text;
 }
 
-/** The row text of a file clip: "report.pdf +2 more · 3.4 MB". files: [{ name, size }]. */
+/**
+ * The files of an opened file-clip payload as [{ name, size }] with safe names, in blob order; null when the clip can't be
+ * opened as files: no files, or not exactly one per blob (blobCount from the server), as the .NET and Kotlin clients decide.
+ */
+export function payloadFiles(payload, blobCount) {
+  const files = payload?.files;
+  if (!Array.isArray(files) || files.length === 0 || files.length !== blobCount) return null;
+  return files.map(f => ({
+    name: safeFileName(typeof f?.name === 'string' ? f.name : ''),
+    size: Number.isSafeInteger(f?.size) && f.size >= 0 ? f.size : 0,
+  }));
+}
+
+/** The row text of a file clip: "report.pdf +2 more · 3.4 MB", with the first name shown safe. files: [{ name, size }]. */
 export function fileRowText(files) {
   if (files.length === 0) return '';
   const more = files.length > 1 ? ` +${files.length - 1} more` : '';
-  return `${files[0].name}${more} · ${formatSize(files.reduce((sum, f) => sum + f.size, 0))}`;
+  return `${safeFileName(files[0].name)}${more} · ${formatSize(files.reduce((sum, f) => sum + f.size, 0))}`;
 }
 
 // ---- the type filter of the history page ----

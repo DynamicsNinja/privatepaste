@@ -137,7 +137,7 @@ public sealed partial class PopupViewModel : ObservableObject
 
     /// <summary>The type chip in force; it starts at All each time the popup opens (a new view model per opening) and survives tab switches.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsAllFilter), nameof(IsTextFilter), nameof(IsLinkFilter), nameof(IsImageFilter), nameof(IsFileFilter), nameof(EmptyText))]
+    [NotifyPropertyChangedFor(nameof(IsAllFilter), nameof(IsTextFilter), nameof(IsLinkFilter), nameof(IsImageFilter), nameof(IsFileFilter))]
     private PopupFilter _filter = PopupFilter.All;
 
     public bool IsAllFilter => Filter == PopupFilter.All;

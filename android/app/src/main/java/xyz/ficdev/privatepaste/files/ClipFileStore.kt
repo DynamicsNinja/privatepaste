@@ -27,6 +27,23 @@ class ClipFileStore(private val root: File) {
     private var generation = 0
 
     /**
+     * The folders of the clips whose files were handed out last (newest first, at most [IN_USE]): the clipboard or a
+     * share target may still read them, so [prune] keeps them even when the clip isn't in the history (an older page,
+     * the Pinned tab, a search of older clips). Guarded by [busy].
+     */
+    private val inUse = ArrayDeque<String>()
+
+    /** The clip's files were just handed out (copied, shared or saved): keep them through the next prunes. */
+    fun markInUse(clipId: String) {
+        val folder = folderName(clipId)
+        synchronized(busy) {
+            inUse.remove(folder)
+            inUse.addFirst(folder)
+            while (inUse.size > IN_USE) inUse.removeLast()
+        }
+    }
+
+    /**
      * The clip's files, downloaded and opened on first use: blob `i` comes from [fetch] and is decrypted into
      * `<name>.part`, renamed once it authenticates. Names are made safe and unique within the clip, so a name can't
      * leave the clip's folder. Any failure removes the clip's folder (no partial file is left) and propagates.
@@ -79,10 +96,18 @@ class ClipFileStore(private val root: File) {
         }
     }
 
-    /** Deletes the folders of clips whose id is not in [keep] (and anything else under [root]). */
+    /**
+     * Deletes the folders of clips whose id is not in [keep] (and anything else under [root]); folders being written
+     * and those in use ([markInUse]) stay.
+     */
     fun prune(keep: Set<String>) {
         val kept = keep.mapTo(HashSet(), ::folderName)
-        val skip = synchronized(busy) { busy.toSet() }
+        val skip = synchronized(busy) {
+            // Once the history holds a clip, it keeps it: the clip is no longer in use here, so deleting or clearing it
+            // later takes its files with it, as for any other clip.
+            inUse.removeAll { it in kept }
+            busy + inUse
+        }
         root.listFiles().orEmpty()
             .filter { it.name !in kept && it.name !in skip }
             .forEach { it.deleteRecursively() }
@@ -90,12 +115,18 @@ class ClipFileStore(private val root: File) {
 
     /** Deletes every stored file (sign-out, reset): they are plaintext copies of clips. A download in flight fails. */
     fun clear() {
-        synchronized(busy) { generation++ }
+        synchronized(busy) {
+            generation++
+            inUse.clear()
+        }
         root.listFiles().orEmpty().forEach { it.deleteRecursively() }
     }
 
     private companion object {
         const val PART = ".part"
+
+        /** The last copy and the last share, say: enough for the clipboard and one share target. */
+        const val IN_USE = 2
         val UNSAFE = Regex("[^A-Za-z0-9-]")
 
         /** A clip id from the server becomes a plain folder name: it can't name a parent or nest. */

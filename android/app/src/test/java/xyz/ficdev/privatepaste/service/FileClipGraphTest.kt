@@ -97,8 +97,10 @@ class FileClipGraphTest {
         app.graph.cache.upsert(server.fileClip("keep", tmp.root, "k.txt" to byteArrayOf(1)), fromSync = true)
         val gone = server.fileClip("gone", tmp.root, "g.txt" to byteArrayOf(2))
         app.graph.cache.upsert(gone, fromSync = true)
-        assertTrue(runBlocking { app.graph.copyClip("keep") })
+        app.graph.cache.upsert(server.fileClip("later", tmp.root, "l.txt" to byteArrayOf(3)), fromSync = true)
         assertTrue(runBlocking { app.graph.copyClip("gone") })
+        assertTrue(runBlocking { app.graph.copyClip("keep") })
+        assertTrue(runBlocking { app.graph.copyClip("later") })   // "gone" is no longer one of the last files in use
         assertTrue(File(filesDir, "gone").isDirectory)
 
         app.graph.cache.remove("gone", seq = 99)
@@ -107,6 +109,47 @@ class FileClipGraphTest {
 
         runBlocking { app.uiDeps.signOut() }
         assertTrue("plaintext copies are gone with the session", filesDir.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun aCachedClipJustCopiedLosesItsFilesWhenDeleted() {
+        // In use protects only clips the history doesn't hold: deleting a cached clip takes its plaintext files at once.
+        app.graph.cache.upsert(server.fileClip("just", tmp.root, "j.txt" to byteArrayOf(4)), fromSync = true)
+        assertTrue(runBlocking { app.graph.copyClip("just") })
+        assertTrue(File(filesDir, "just").isDirectory)
+
+        app.graph.cache.remove("just", seq = 99)
+        awaitUntil("the deleted clip's files are pruned") { !File(filesDir, "just").exists() }
+    }
+
+    @Test
+    fun copySaveAndShareWorkForAClipThatIsNotCached() {
+        // An older page, the Pinned tab's server page or a search of older clips: decoded, but never in the cache.
+        val older = server.fileClip("older", tmp.root, "old.txt" to byteArrayOf(7))
+        val saved = mutableListOf<String>()
+        TestPrivatePasteApp.saver = { files -> saved += files.map { it.name }; true }
+        try {
+            assertTrue(runBlocking { app.graph.copyClip(older) })
+            assertEquals("old.txt", clipboard.primaryClip!!.getItemAt(0).uri.lastPathSegment)
+            assertTrue(runBlocking { app.graph.saveClipFiles(older) })
+            assertEquals(listOf("old.txt"), saved)
+            assertEquals("old.txt", stream(chosen(runBlocking { app.graph.shareClipFiles(older) }!!)).lastPathSegment)
+        } finally {
+            TestPrivatePasteApp.saver = { true }
+        }
+    }
+
+    @Test
+    fun theFilesOfACopiedClipThatIsNotCachedSurviveTheNextPrune() {
+        val older = server.fileClip("older", tmp.root, "old.txt" to byteArrayOf(7))
+        assertTrue(runBlocking { app.graph.copyClip(older) })
+        val uri = clipboard.primaryClip!!.getItemAt(0).uri
+        val stray = File(filesDir, "stray").apply { mkdirs() }
+
+        app.graph.cache.upsert(server.fileClip("new", tmp.root, "n.txt" to byteArrayOf(1)), fromSync = true)
+        awaitUntil("the cache change pruned") { !stray.exists() }
+
+        assertArrayEquals(byteArrayOf(7), app.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
     }
 
     private fun chosen(chooser: Intent): Intent {

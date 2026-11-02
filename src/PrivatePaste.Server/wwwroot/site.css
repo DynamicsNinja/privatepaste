@@ -153,6 +153,8 @@ button.copy.done .done-icon { display: inline; }
 .file-name { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .file-size { flex: none; font-size: .85rem; }
 .file-line button { margin-left: auto; }
+/* A download is not destructive: accent on hover, not the ghost button's danger red. */
+button.file-download:hover, button.file-download:focus-visible { color: var(--accent); background: var(--accent-soft); }
 .meta { color: var(--muted); font-size: .78rem; margin-top: .3rem; }
 
 /* Source device platform: drawn in the muted colour, about the text's cap height, right before the device name. */

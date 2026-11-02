@@ -237,6 +237,39 @@ public class DesktopRenderTests
         });
     }, CancellationToken.None);
 
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public Task Popup_footer_keeps_its_height_when_a_file_row_is_selected(string theme) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 4, PrivatePaste.Protocol.ClipKind.Text,
+            "git commit -m \"feat(desktop): filter by type\"", "h4", null, null, 100, null, "PC-work", now)
+        { SourceDevicePlatform = "windows" });
+        cache.Upsert(FileClip(3, 4, "Pixel 9", "android", ("report.pdf", 3_000_000), ("a.txt", 300_000)));
+        var vm = new PopupViewModel(cache, null, _ => Task.CompletedTask, TimeProvider.System,
+            save: _ => Task.FromResult<string?>(null));
+        vm.MoveSelection(0);
+        Render(new PopupWindow { DataContext = vm }, theme, "popup-footer-text-row", w =>
+        {
+            var slot = (Control)Find<TextBlock>(w, "FooterText").Parent!;
+            var footer = slot.Bounds.Height;
+            var rows = Find<ListBox>(w, "ItemsList").Bounds.Height;
+            Assert.True(footer < 40, $"footer is {footer}px high");
+
+            vm.MoveSelection(1);   // the file row: the hint gains "Ctrl+S to save" and wraps to a second line
+            Assert.Contains("Ctrl+S", vm.FooterHint);
+            w.UpdateLayout();
+            Assert.Equal(footer, slot.Bounds.Height);
+            Assert.Equal(rows, Find<ListBox>(w, "ItemsList").Bounds.Height);   // the list doesn't jump
+            if (ScreenshotDir is { Length: > 0 } dir)
+                w.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"popup-footer-file-row-{theme}.png"),
+                    new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+        });
+    }, CancellationToken.None);
+
     [Fact]
     public void File_icon_matches_the_branding_svg()
     {

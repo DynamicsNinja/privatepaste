@@ -243,6 +243,16 @@ test('fileRowText reproduces every vector', () => {
   for (const { files, text } of vectors.fileRowText) assert.equal(e2e.fileRowText(files), text);
 });
 
+test('payloadFiles: one safe-named file per blob, or null like the .NET and Kotlin Decode', () => {
+  const payload = { files: [{ name: '../a\nb.pdf', size: 3, mime: 'application/pdf' }, { name: 'c.txt', size: 1 }] };
+  assert.deepEqual(e2e.payloadFiles(payload, 2), [{ name: 'ab.pdf', size: 3 }, { name: 'c.txt', size: 1 }]);
+  assert.equal(e2e.payloadFiles(payload, 1), null);   // fewer blobs than files
+  assert.equal(e2e.payloadFiles(payload, 3), null);   // more blobs than files
+  assert.equal(e2e.payloadFiles(payload, undefined), null);
+  assert.equal(e2e.payloadFiles({ files: [] }, 0), null);
+  assert.equal(e2e.payloadFiles({ text: 'x' }, 1), null);
+});
+
 test('matchesFilter: All shows every kind, a type shows only its own, an unknown kind only under All', () => {
   for (const kind of ['text', 'link', 'image', 'file', 'hologram']) assert.equal(e2e.matchesFilter(kind, 'all'), true);
   for (const filter of ['text', 'link', 'image', 'file']) {

@@ -142,6 +142,28 @@ class ClipFileStoreTest {
     }
 
     @Test
+    fun pruneKeepsTheLastClipsInUseEvenWhenNotCached() = runBlocking {
+        val store = ClipFileStore(tmp.newFolder("files"))
+        val opened = listOf("a", "b", "c").associateWith { id ->
+            val (clip, blobs) = fileClip(id, "$id.txt" to byteArrayOf(1))
+            store.markInUse(id)
+            store.materialize(clip, { blobs[it] }, codec).single()
+        }
+
+        store.prune(emptySet())   // none is cached (older pages, the Pinned tab, a search of older clips)
+
+        assertFalse("only the last ones in use stay", opened.getValue("a").exists())
+        assertTrue(opened.getValue("b").exists())
+        assertTrue(opened.getValue("c").exists())
+
+        // Once in the history, the history keeps it: deleting it there later takes its files, in use or not.
+        store.prune(setOf("c"))
+        store.prune(emptySet())
+        assertFalse(opened.getValue("c").exists())
+        assertTrue(opened.getValue("b").exists())
+    }
+
+    @Test
     fun aClipWithoutFilesMaterializesNothing() = runBlocking {
         val store = ClipFileStore(tmp.newFolder("files"))
         val text = ClipDto(
