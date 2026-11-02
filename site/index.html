@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PrivatePaste: self-hosted clipboard sync</title>
-    <meta name="description" content="Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
+    <meta name="description" content="Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
     <meta name="color-scheme" content="dark light">
     <meta name="theme-color" content="#15122B" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#F6F4FD" media="(prefers-color-scheme: light)">
@@ -13,14 +13,14 @@
     <meta property="og:site_name" content="PrivatePaste">
     <meta property="og:url" content="https://privatepaste.ficdev.xyz/">
     <meta property="og:title" content="PrivatePaste: your clipboard on every device, kept on your own server">
-    <meta property="og:description" content="Self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
+    <meta property="og:description" content="Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
     <meta property="og:image" content="https://privatepaste.ficdev.xyz/images/og-card.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta property="og:image:alt" content="The PrivatePaste logo and the line: Your clipboard on every device, kept on your own server.">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PrivatePaste: your clipboard on every device, kept on your own server">
-    <meta name="twitter:description" content="Self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
+    <meta name="twitter:description" content="Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.">
     <meta name="twitter:image" content="https://privatepaste.ficdev.xyz/images/og-card.png">
     <meta name="twitter:image:alt" content="The PrivatePaste logo and the line: Your clipboard on every device, kept on your own server.">
     <link rel="icon" href="/favicon.ico" sizes="32x32">
@@ -33,7 +33,7 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "PrivatePaste",
-        "description": "Self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.",
+        "description": "Self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.",
         "applicationCategory": "UtilitiesApplication",
         "operatingSystem": "Windows, macOS, Linux, Android",
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -68,7 +68,7 @@
 <main>
     <section class="wrap hero">
         <h1>Your clipboard on every device,<br>kept on your own server.</h1>
-        <p class="intro">Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an encrypted, searchable history, for Windows, macOS, Linux, Android and the web.</p>
+        <p class="intro">Copy on your laptop, paste on your phone. PrivatePaste is a self-hosted clipboard sync with an end-to-end encrypted, searchable history, for Windows, macOS, Linux, Android and the web.</p>
         <div class="cta">
             <a class="btn primary" href="#deploy">Deploy your server</a>
             <a class="btn soft" href="https://github.com/DynamicsNinja/privatepaste">View on GitHub</a>
@@ -149,7 +149,7 @@
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4"/></svg></span>
                 <h3>A history you can search</h3>
-                <p>Every clip is kept with the device it came from, so what you copied last Tuesday is one search away.</p>
+                <p>Every clip is kept with the device it came from, so what you copied last Tuesday is one search away. Search runs on your devices, because the server can't read your clips.</p>
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
@@ -159,7 +159,7 @@
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6zM9 12l2 2 4-4"/></svg></span>
                 <h3>End-to-end encrypted</h3>
-                <p>Clips are encrypted on your devices and unlocked with your passphrase. Even someone who steals the server can't read them.</p>
+                <p>Clips are encrypted on your devices and unlocked with your passphrase. The server keeps only ciphertext, so even someone who steals it can't read them. Add an Android phone by scanning a code from a device that is already unlocked.</p>
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7M18 14a7 7 0 0 1 4 7"/></svg></span>
@@ -418,6 +418,10 @@ networks:
             <details>
                 <summary>Is it end-to-end encrypted?</summary>
                 <p>Yes. Clips are encrypted on your devices with a key unlocked by your passphrase, and the server stores only ciphertext. It still sees who copied what kind of clip, when, from which device, and how big it is. In the web app the decryption code comes from your server, so a stolen server that is kept running could alter it; the apps don't have that risk.</p>
+            </details>
+            <details>
+                <summary>How do I add a new device?</summary>
+                <p>Sign in with your name and password, then unlock with the passphrase. On Android you can scan a code instead: open <b>Settings</b>, then <b>Add a device</b> on a device that is already unlocked. The code works once, for 10 minutes. The web app unlocks with the passphrase too.</p>
             </details>
             <details>
                 <summary>What if I forget the passphrase?</summary>
