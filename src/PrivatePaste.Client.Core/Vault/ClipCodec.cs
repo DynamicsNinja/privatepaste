@@ -1,5 +1,6 @@
 using System.Text;
 using PrivatePaste.Client.Core.Api;
+using PrivatePaste.Client.Core.Files;
 using PrivatePaste.Client.Core.Images;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Protocol;
@@ -72,7 +73,33 @@ public sealed class ClipCodec(VaultKey key)
     }
 
     /// <summary>
-    /// Fills in <see cref="ClipDto.Text"/>, <see cref="ClipDto.Width"/> and <see cref="ClipDto.Height"/> from the sealed
+    /// Seals copied files as one clip: each file is encrypted from disk into its own blob, in order; names, sizes and MIME
+    /// types travel in the sealed payload. The caller checks the server's limits and hashed the files (<see cref="LocalFile"/>).
+    /// File clips are never queued, so they are never a backfill.
+    /// </summary>
+    /// <exception cref="IOException">A file can't be read.</exception>
+    /// <exception cref="VaultKeyClosedException">The key was disposed meanwhile.</exception>
+    public async Task<ClipUpload> EncodeFilesAsync(IReadOnlyList<LocalFile> files, DateTimeOffset? copiedAt, CancellationToken ct)
+    {
+        try
+        {
+            var blobs = new List<byte[]>(files.Count);
+            foreach (var f in files)
+            {
+                using var input = new FileStream(f.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+                using var blob = new MemoryStream();
+                await BlobCipher.EncryptAsync(key, input, blob, ct).ConfigureAwait(false);
+                blobs.Add(blob.ToArray());
+            }
+            var payload = new ClipPayload { Files = files.Select(f => new ClipFileInfo(f.Name, f.Size, FileNames.MimeFor(f.Name))).ToList() };
+            return new ClipUpload(Meta("file", LocalFile.HashOf(files), payload, files.Sum(f => f.Size), copiedAt, backfill: false),
+                null, blobs);
+        }
+        catch (ObjectDisposedException e) { throw new VaultKeyClosedException(e); }
+    }
+
+    /// <summary>
+    /// Fills in <see cref="ClipDto.Text"/>, <see cref="ClipDto.Width"/>, <see cref="ClipDto.Height"/> and <see cref="ClipDto.Files"/> from the sealed
     /// payload. Never throws for a bad clip: an unknown kind, a clip sealed under another key, or a payload that doesn't
     /// open or parse comes back as <see cref="ClipKind.Unknown"/>, which is shown but never copied.
     /// </summary>
@@ -93,6 +120,10 @@ public sealed class ClipCodec(VaultKey key)
         {
             ClipKind.Text or ClipKind.Link when payload.Text is { } text => wire with { Text = text, Width = null, Height = null },
             ClipKind.Image => wire with { Text = null, Width = payload.Width, Height = payload.Height },
+            // One described file per blob, or it is not a clip this app can open.
+            ClipKind.File when payload.Files is { Count: > 0 } files && files.Count == wire.BlobCount
+                               && files.All(f => f is { Name: not null, Size: >= 0 }) =>
+                wire with { Text = null, Width = null, Height = null, Files = files },
             _ => unknown,
         };
     }
@@ -117,6 +148,17 @@ public sealed class ClipCodec(VaultKey key)
             await BlobCipher.DecryptAsync(key, new MemoryStream(blob), plaintext, ct).ConfigureAwait(false);
             return plaintext.ToArray();
         }
+        catch (ObjectDisposedException e) { throw new VaultKeyClosedException(e); }
+    }
+
+    /// <summary>Opens a sealed blob into <paramref name="destination"/> (a file clip's file).</summary>
+    /// <exception cref="System.Security.Cryptography.CryptographicException">
+    /// It doesn't open under this key, or was cut short or tampered with; chunks before the bad one may already be written.
+    /// </exception>
+    /// <exception cref="VaultKeyClosedException">The key was disposed meanwhile.</exception>
+    public async Task DecodeBlobAsync(byte[] blob, Stream destination, CancellationToken ct)
+    {
+        try { await BlobCipher.DecryptAsync(key, new MemoryStream(blob), destination, ct).ConfigureAwait(false); }
         catch (ObjectDisposedException e) { throw new VaultKeyClosedException(e); }
     }
 

@@ -4,6 +4,7 @@ using System.Net.WebSockets;
 using Microsoft.Extensions.Time.Testing;
 using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Cache;
+using PrivatePaste.Client.Core.Files;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Sync;
 using PrivatePaste.Client.Core.Vault;
@@ -49,6 +50,7 @@ public sealed class E2eSyncTests : IAsyncLifetime
         public required SyncEngine Engine { get; init; }
         public ClipCodec? Codec { get; set; }
         public required ListNotifier Notes { get; init; }
+        public required ClipFileStore Files { get; init; }
         public int Connects;
         public int KeyResets;
         public int CoordinatorKeyResets;
@@ -68,9 +70,10 @@ public sealed class E2eSyncTests : IAsyncLifetime
         var queue = new OutboundQueue(Path.Combine(dir, "q.enc"), cacheKey);
         var clipboard = new FakeClipboard();
         var notes = new ListNotifier();
+        var files = new ClipFileStore(Path.Combine(dir, "files"));
         Device? device = null;
         var coordinator = new ClipboardCoordinator(clipboard, api, () => device!.Codec, cache, queue,
-            new EchoGuard(_time, TimeSpan.FromSeconds(30)), notes, _time, () => false);
+            new EchoGuard(_time, TimeSpan.FromSeconds(30)), notes, _time, () => false, files: files);
         var engine = new SyncEngine(api, cache, coordinator, () => device!.Codec, async ct =>
         {
             Interlocked.Increment(ref device!.Connects);
@@ -85,7 +88,7 @@ public sealed class E2eSyncTests : IAsyncLifetime
         device = new Device
         {
             Api = api, Handler = handler, Cache = cache, Queue = queue, Clipboard = clipboard, Coordinator = coordinator,
-            Engine = engine, Codec = new ClipCodec(key ?? _key), Notes = notes,
+            Engine = engine, Codec = new ClipCodec(key ?? _key), Notes = notes, Files = files,
         };
         engine.KeyReset += (_, _) => Interlocked.Increment(ref device.KeyResets);
         engine.UpdateRequired += (_, _) => Interlocked.Increment(ref device.UpdatesRequired);
@@ -166,6 +169,56 @@ public sealed class E2eSyncTests : IAsyncLifetime
         var cached = Assert.Single(b.Cache.Items);
         Assert.Equal((300, 200), (cached.Clip.Width, cached.Clip.Height));
         Assert.Equal((256, 171), TestImages.Dims(cached.ThumbnailPng!));
+    }
+
+    [Fact]
+    public async Task Files_round_trip_between_two_devices()
+    {
+        var a = await DeviceAsync("A");
+        var b = await ConnectedAsync("B");
+        var src = Path.Combine(_dir, "src");
+        Directory.CreateDirectory(Path.Combine(src, "sub"));
+        var report = System.Security.Cryptography.RandomNumberGenerator.GetBytes(1024 * 1024 + 3);
+        var other = "another report"u8.ToArray();
+        File.WriteAllBytes(Path.Combine(src, "report.pdf"), report);
+        File.WriteAllBytes(Path.Combine(src, "sub", "report.pdf"), other);
+        File.WriteAllBytes(Path.Combine(src, "empty.txt"), []);
+        a.Clipboard.Current = new ClipboardContent.Files(
+            [Path.Combine(src, "report.pdf"), Path.Combine(src, "sub", "report.pdf"), Path.Combine(src, "empty.txt")]);
+        await a.Coordinator.OnClipboardChangedAsync(default);
+
+        await WaitUntilAsync(() => b.Clipboard.Writes.Count == 1);
+        var written = Assert.IsType<ClipboardContent.Files>(b.Clipboard.Writes[0]);
+        Assert.Equal(["report.pdf", "report (2).pdf", "empty.txt"], written.Paths.Select(Path.GetFileName));
+        Assert.All(written.Paths, p => Assert.True(b.Files.IsInside(p)));
+        Assert.Equal(report, File.ReadAllBytes(written.Paths[0]));
+        Assert.Equal(other, File.ReadAllBytes(written.Paths[1]));
+        Assert.Empty(File.ReadAllBytes(written.Paths[2]));
+        var cached = Assert.Single(b.Cache.Items).Clip;
+        Assert.Equal(ClipKind.File, cached.Kind);
+        Assert.Equal(["report.pdf", "report.pdf", "empty.txt"], cached.Files!.Select(f => f.Name));
+        Assert.Empty(a.Notes.Messages);
+        Assert.Empty(b.Notes.Messages);
+    }
+
+    [Fact]
+    public async Task Applied_file_clip_is_not_uploaded_again()
+    {
+        var a = await DeviceAsync("A");
+        var b = await ConnectedAsync("B");
+        var src = Path.Combine(_dir, "src");
+        Directory.CreateDirectory(src);
+        File.WriteAllBytes(Path.Combine(src, "a.txt"), "hello"u8.ToArray());
+        a.Clipboard.Current = new ClipboardContent.Files([Path.Combine(src, "a.txt")]);
+        await a.Coordinator.OnClipboardChangedAsync(default);
+        await WaitUntilAsync(() => b.Clipboard.Writes.Count == 1);
+
+        // B's clipboard watcher sees the list B just wrote (files inside its own store).
+        await b.Coordinator.OnClipboardChangedAsync(default);
+
+        Assert.Single(a.Handler.Uploads);
+        Assert.Empty(b.Handler.Uploads);
+        Assert.Single(b.Cache.Items);
     }
 
     [Fact]

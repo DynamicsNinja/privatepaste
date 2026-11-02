@@ -4,6 +4,7 @@ using System.Net.WebSockets;
 using System.Security.Cryptography;
 using PrivatePaste.Client.Core.Api;
 using PrivatePaste.Client.Core.Cache;
+using PrivatePaste.Client.Core.Files;
 using PrivatePaste.Client.Core.Platform;
 using PrivatePaste.Client.Core.Security;
 using PrivatePaste.Client.Core.Settings;
@@ -60,6 +61,8 @@ public sealed class DesktopHost : IAsyncDisposable
     private string _cachePath;
     private string _queuePath;
     private string? _ephemeralDirectory;
+    // File clips from other devices, written before they go on the clipboard.
+    private readonly ClipFileStore _files;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly SemaphoreSlim _pauseGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -82,6 +85,7 @@ public sealed class DesktopHost : IAsyncDisposable
         _transport = transport ?? HostTransport.Default;
         Platform = platform;
         DataDirectory = dataDirectory;
+        _files = new ClipFileStore(Path.Combine(dataDirectory, "files"));
         _notifier = notifier;
         _log = log;
         _time = time ?? TimeProvider.System;
@@ -425,7 +429,7 @@ public sealed class DesktopHost : IAsyncDisposable
         var coordinator = new ClipboardCoordinator(
             Platform.Clipboard, api, () => Codec, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused,
             app => BlockedApps.Matches(_settings.BlockedApps, app),   // reads the current settings, so edits apply at once
-            _log.Info);
+            _log.Info, _files);
         var wsUri = WebSocketUri(http.BaseAddress!);
         var engine = new SyncEngine(
             api, Cache, coordinator, () => Codec, ct => ConnectWithTimeoutAsync(t => _transport.Connect(wsUri, token, t), _time, ct),
