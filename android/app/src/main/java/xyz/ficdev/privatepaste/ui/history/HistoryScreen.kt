@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -397,10 +398,11 @@ private fun FilterKindChip(label: Int, icon: Int?, selected: Boolean, onClick: (
     val shape = RoundedCornerShape(8.dp)
     val tint = if (selected) colors.primary else colors.onSurfaceVariant
     // Tighter than a stock FilterChip (which pads 8 dp around a 8 dp icon gap) so all five fit a 411 dp phone.
-    // The outer box is the 48 dp tall hit area (as wide as the chip, so the row keeps its gutter); the chip is compact.
+    // The outer box is the 48 x 48 dp minimum hit area (wider only as the chip is, so the row keeps its gutter).
     Box(
         modifier = Modifier
             .heightIn(min = 48.dp)
+            .widthIn(min = 48.dp)
             .selectable(selected = selected, role = Role.Tab, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

@@ -107,7 +107,10 @@ class HistoryScreenTest {
     fun filterChipsKeepA48DpTouchTarget() {
         showFiltered(HistoryState(items = listOf(clip), syncState = SyncState.CONNECTED))
         for (label in listOf("All", "Text", "Links", "Images", "Files")) {
-            compose.onNodeWithText(label).assertTouchHeightIsEqualTo(48.dp)
+            val chip = compose.onNodeWithText(label)
+            chip.assertTouchHeightIsEqualTo(48.dp)
+            val bounds = chip.getUnclippedBoundsInRoot()
+            assertTrue("$label is ${bounds.right - bounds.left} wide", bounds.right - bounds.left >= 48.dp)
         }
     }
 
