@@ -386,6 +386,12 @@ public sealed class ClipboardCoordinator(
             }
             // A blob that doesn't open: nothing is left of that file, and nothing goes on the clipboard.
             catch (Exception e) when (e is CryptographicException or InvalidDataException) { return false; }
+            // Locked, disk full, ...: handled here (the message names no file), so no path with a received name reaches a log.
+            catch (ClipFileWriteException e)
+            {
+                log?.Invoke(e.Message);
+                return false;
+            }
             // Hashed as written (safe, numbered names), which is what this clipboard reads back: the echo guard knows it.
             if (await TryHashFilesAsync(paths, ct).ConfigureAwait(false) is not { } written) return false;
             contentHash = written;

@@ -11,9 +11,17 @@ namespace PrivatePaste.Client.Core.Files;
 /// The store holds plaintext the user received; <see cref="Prune"/> keeps it to the clips still in the history and under a
 /// size cap. Never log the names or contents.
 /// </summary>
+/// <summary>
+/// A received file couldn't be written. Only the kind of failure is kept: the original exception (whose message holds the
+/// path, and so the file's name) is dropped on purpose.
+/// </summary>
+public sealed class ClipFileWriteException(Exception cause)
+    : IOException($"Could not write a received file ({cause.GetType().Name}).");
+
 public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 1024)
 {
     private const string PartSuffix = ".part";
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>The store's folder (full path).</summary>
     public string Root { get; } = Path.GetFullPath(root);
@@ -25,11 +33,29 @@ public sealed class ClipFileStore(string root, long maxBytes = 500L * 1024 * 102
     /// </summary>
     /// <exception cref="System.Security.Cryptography.CryptographicException">A blob doesn't open: no file is left for it.</exception>
     /// <exception cref="InvalidDataException">Not a file clip with files.</exception>
+    /// <exception cref="ClipFileWriteException">A file couldn't be written (locked, disk full, ...); its message names no file.</exception>
     public async Task<IReadOnlyList<string>> MaterializeAsync(ClipDto clip, Func<int, CancellationToken, Task<byte[]>> fetchBlob,
         ClipCodec codec, CancellationToken ct)
     {
         if (clip.Kind != ClipKind.File || clip.Files is not { Count: > 0 } files) throw new InvalidDataException("Not a file clip.");
-        var folder = FolderOf(clip.Id);
+        // One at a time: the engine and a paste from the history may write the same clip (and its .part files) at once.
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await WriteAsync(clip.Id, files, fetchBlob, codec, ct).ConfigureAwait(false);
+        }
+        // .NET file errors carry the full path, and with it a name from another device: never let one reach a log.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException && e is not ClipFileWriteException)
+        {
+            throw new ClipFileWriteException(e);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<IReadOnlyList<string>> WriteAsync(Guid clipId, IReadOnlyList<ClipFileInfo> files,
+        Func<int, CancellationToken, Task<byte[]>> fetchBlob, ClipCodec codec, CancellationToken ct)
+    {
+        var folder = FolderOf(clipId);
         Directory.CreateDirectory(folder);
 
         // Case-insensitive on every platform, so the names don't depend on the file system. Each name also reserves its

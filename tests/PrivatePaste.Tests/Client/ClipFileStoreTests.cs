@@ -127,6 +127,33 @@ public sealed class ClipFileStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Concurrent_materializations_of_one_clip_both_succeed()
+    {
+        var store = new ClipFileStore(Root);
+        var big = RandomNumberGenerator.GetBytes(2 * 1024 * 1024);
+        var (clip, fetch, _) = await ClipAsync(("big.bin", big));
+        async Task<byte[]> Slow(int n, CancellationToken ct) { await Task.Delay(50, ct); return await fetch(n, ct); }
+
+        var both = await Task.WhenAll(store.MaterializeAsync(clip, Slow, Codec, default), store.MaterializeAsync(clip, Slow, Codec, default));
+
+        Assert.Equal(both[0], both[1]);
+        Assert.Equal(big, File.ReadAllBytes(both[0][0]));
+    }
+
+    [Fact]
+    public async Task A_write_failure_names_no_file()
+    {
+        var store = new ClipFileStore(Root);
+        var (clip, fetch, _) = await ClipAsync(("secret-plan.txt", "x"u8.ToArray()));
+        Directory.CreateDirectory(Path.Combine(Root, clip.Id.ToString("N"), "secret-plan.txt"));
+
+        var e = await Assert.ThrowsAsync<ClipFileWriteException>(() => store.MaterializeAsync(clip, fetch, Codec, default));
+
+        Assert.DoesNotContain("secret", e.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Null(e.InnerException);
+    }
+
+    [Fact]
     public async Task Prune_removes_folders_not_kept_then_oldest_over_the_cap()
     {
         var store = new ClipFileStore(Root, maxBytes: 250);

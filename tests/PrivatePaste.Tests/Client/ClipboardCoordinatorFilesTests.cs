@@ -20,6 +20,7 @@ public sealed class ClipboardCoordinatorFilesTests : IDisposable
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
     private readonly FakeClipboard _clip = new();
     private readonly ListNotifier _notes = new();
+    private readonly List<string> _log = [];
     private readonly byte[] _key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
     private PrivatePasteFactory _server = null!;
     private SwitchHandler _handler = null!;
@@ -49,7 +50,7 @@ public sealed class ClipboardCoordinatorFilesTests : IDisposable
         _cache = new HistoryCache(Path.Combine(_dir, "h.enc"), _key);
         _queue = new OutboundQueue(Path.Combine(_dir, "q.enc"), _key);
         _c = new ClipboardCoordinator(_clip, _api, () => _codec, _cache, _queue, new EchoGuard(_time, TimeSpan.FromSeconds(30)),
-            _notes, _time, () => false, files: new ClipFileStore(Path.Combine(_dir, "store")));
+            _notes, _time, () => false, log: _log.Add, files: new ClipFileStore(Path.Combine(_dir, "store")));
     }
 
     private string MakeFile(string relative, byte[] content)
@@ -213,6 +214,37 @@ public sealed class ClipboardCoordinatorFilesTests : IDisposable
         await _c.OnClipboardChangedAsync(default);
 
         Assert.Empty(_handler.Uploads);
+    }
+
+    [Fact]
+    public async Task A_received_file_that_cannot_be_written_is_skipped_without_its_name_in_the_log()
+    {
+        await StartAsync();
+        var secret = MakeFile("secret-plan.txt", "hello"u8.ToArray());
+        var stored = _codec.Decode(await _api.UploadClipAsync(
+            await _codec.EncodeFilesAsync([await LocalFile.ReadAsync(secret, default)], null, default)));
+        // A folder where the file goes: the final rename fails on every platform.
+        var folder = Path.Combine(_dir, "store", stored.Id.ToString("N"));
+        Directory.CreateDirectory(Path.Combine(folder, "secret-plan.txt"));
+
+        Assert.False(await _c.ApplyRemoteAsync(stored, default));
+
+        Assert.Empty(_clip.Writes);
+        Assert.StartsWith("Could not write a received file (", Assert.Single(_log));
+        Assert.DoesNotContain("secret", string.Join("\n", _log), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.GetFiles(folder, "*.part"));
+    }
+
+    [Fact]
+    public async Task A_file_that_cannot_be_read_is_skipped_without_its_name_in_the_log()
+    {
+        await StartAsync();
+        var secret = MakeFile("secret-plan.txt", "hello"u8.ToArray());
+        // Held by another app (Windows refuses the read; elsewhere the lock is advisory and the copy may go out).
+        using (new FileStream(secret, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            await CopyAsync(secret);
+
+        Assert.DoesNotContain("secret", string.Join("\n", _log.Concat(_notes.Messages)), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
