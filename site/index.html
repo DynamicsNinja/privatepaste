@@ -144,12 +144,12 @@
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span>
                 <h3>Copy here, paste there</h3>
-                <p>Text, links and images you copy land on the clipboard of your other devices a moment later.</p>
+                <p>Text, links, images and files you copy land on the clipboard of your other devices a moment later. Files can also be saved to Downloads, shared from the phone or downloaded in the web app.</p>
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4"/></svg></span>
                 <h3>A history you can search</h3>
-                <p>Every clip is kept with the device it came from, so what you copied last Tuesday is one search away. Search runs on your devices, because the server can't read your clips.</p>
+                <p>Every clip is kept with the device it came from, so what you copied last Tuesday is one search away. Filter it by type, too. Search runs on your devices, because the server can't read your clips.</p>
             </article>
             <article class="card">
                 <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
@@ -179,7 +179,7 @@
         <p class="lead">Your devices talk to your server, and to nothing else.</p>
         <div class="how">
             <ol class="flow">
-                <li><b>You copy something</b> on any signed-in device: text, a link or an image.</li>
+                <li><b>You copy something</b> on any signed-in device: text, a link, an image or files.</li>
                 <li><b>The app sends it to your server</b> over HTTPS, encrypted on the device first. The server keeps only ciphertext it can't read.</li>
                 <li><b>Your other devices get it at once</b> over a live connection and put it on their clipboard. A device that was offline catches up when it reconnects.</li>
                 <li><b>Everything stays searchable</b> in the history on every device and in the web app, which decrypt and search it themselves, until you delete it or clear it.</li>
@@ -210,7 +210,7 @@
         <p class="lead">What protects your clips, and what doesn't.</p>
         <ul class="facts">
             <li><b>End-to-end encrypted.</b> Your devices encrypt every clip before uploading it, with a key unlocked by your passphrase. The server never sees the passphrase or the key, so a stolen server, disk or backup reveals no clip, even with its configuration.</li>
-            <li><b>What the server sees.</b> Who copied a clip, from which device, when, its kind, its exact size and whether it is pinned. Never its content or thumbnail.</li>
+            <li><b>What the server sees.</b> Who copied a clip, from which device, when, its kind, its exact size (for files, how many and about how big each one is) and whether it is pinned. Never its content, file names or thumbnail.</li>
             <li><b>Encrypted at rest too.</b> The database (SQLite3 Multiple Ciphers) and stored files are also encrypted with <code>PP_DB_KEY</code>, which hides that metadata from someone who takes the disk without the server's configuration.</li>
             <li class="caution"><b>The web app trusts your server.</b> It decrypts in the browser with code your server sends, so someone who steals the server and keeps it running could serve altered code. The apps don't have this risk.</li>
             <li class="caution"><b>Keep your passphrase.</b> Without it the history can't be recovered. Reset encryption starts over with a new passphrase and an empty history.</li>
