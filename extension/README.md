@@ -38,6 +38,10 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
 - Real Edge, by hand: `node extension/test/socket.playwright.mjs` starts its own local server (throwaway data), loads a
   fake-clipboard build and checks that the sync socket opens with the subprotocol token and that a clip from another
   device reaches the (fake) clipboard through it. `PP_WS_DEBUG=1` adds the server's request log.
+- End to end, real Edge, by hand: `node extension/test/e2e.playwright.mjs` starts its own local server, a fake-clipboard
+  build and a second device through the API, and checks both directions within 3 s (no echo), that Edge restarted on
+  the same profile syncs without the passphrase and applies a clip from meanwhile once, and that a copy made while the
+  server is down arrives as a backfill. These scripts share `extension/test/helpers/local.mjs`.
 
 ## How it works
 
