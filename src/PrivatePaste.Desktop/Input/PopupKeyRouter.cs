@@ -2,10 +2,13 @@ using SharpHook.Data;
 
 namespace PrivatePaste.Desktop.Input;
 
-public enum PopupKeyAction { Pass, Swallow, Up, Down, PageUp, PageDown, Paste, Close, Backspace, Type, SwitchTab, TogglePin, Save }
+public enum PopupKeyAction { Pass, Swallow, Up, Down, PageUp, PageDown, Paste, Close, Backspace, Type, SwitchTab, TogglePin, Save, Filter }
 
-/// <summary>What a key press does while the popup is open; <see cref="Text"/> is set for <see cref="PopupKeyAction.Type"/>.</summary>
-public readonly record struct PopupKey(PopupKeyAction Action, string? Text = null);
+/// <summary>
+/// What a key press does while the popup is open; <see cref="Text"/> is set for <see cref="PopupKeyAction.Type"/> and
+/// <see cref="Index"/> (1 to 5, the chip's place) for <see cref="PopupKeyAction.Filter"/>.
+/// </summary>
+public readonly record struct PopupKey(PopupKeyAction Action, string? Text = null, int Index = 0);
 
 /// <summary>
 /// Decides what a key press means while the popup is open on Windows. The popup never takes the focus there (so a text
@@ -48,6 +51,10 @@ public static class PopupKeyRouter
             case KeyCode.VcP when ctrl && !alt && (mask & EventMask.Shift) == 0: return new PopupKey(PopupKeyAction.TogglePin);
             // Ctrl+S alone saves a file row; the popup decides whether the selected row is one.
             case KeyCode.VcS when ctrl && !alt && (mask & EventMask.Shift) == 0: return new PopupKey(PopupKeyAction.Save);
+            // Ctrl+1..5 alone picks a type chip. Not Alt: the popup never takes the focus, so Alt up would reach the app below and open its menu bar.
+            case KeyCode.Vc1 or KeyCode.Vc2 or KeyCode.Vc3 or KeyCode.Vc4 or KeyCode.Vc5
+                when ctrl && !alt && (mask & EventMask.Shift) == 0:
+                return new PopupKey(PopupKeyAction.Filter, Index: key - KeyCode.Vc1 + 1);
         }
 
         // Plain or shifted text, or AltGr (which Windows reports as Ctrl+Alt). Control characters (Ctrl+letter) are not text.

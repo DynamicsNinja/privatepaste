@@ -15,7 +15,7 @@ using PrivatePaste.Desktop.ViewModels;
 namespace PrivatePaste.Desktop.Views;
 
 /// <summary>
-/// The history popup (420x480, borderless, topmost). Up/Down move, Enter pastes, Esc and losing focus close, a click pastes.
+/// The history popup (420x520, borderless, topmost). Up/Down move, Enter pastes, Esc and losing focus close, a click pastes.
 /// A new window is created for every opening, so no state survives between uses.
 /// <para>
 /// On Windows it never takes the focus (<see cref="KeepsFocusBelow"/>): a text box in the app below stays in edit mode
@@ -27,7 +27,7 @@ namespace PrivatePaste.Desktop.Views;
 public partial class PopupWindow : Window
 {
     public const int WindowWidth = 420;
-    public const int WindowHeight = 480;
+    public const int WindowHeight = 520;
     private static readonly TimeSpan WatchInterval = TimeSpan.FromMilliseconds(30);
 
     /// <summary>True on Windows: the popup is shown without taking the focus and is driven by <see cref="HandleKey"/>.</summary>
@@ -53,6 +53,12 @@ public partial class PopupWindow : Window
         AddHandler(Button.ClickEvent, OnPinClick);
         HistoryTabButton.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.ShowTab(PopupTab.History);
         PinnedTabButton.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.ShowTab(PopupTab.Pinned);
+        // Plain borders like the tabs: a click filters, nothing takes the focus.
+        FilterAllChip.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.SetFilter(PopupFilter.All);
+        FilterTextChip.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.SetFilter(PopupFilter.Text);
+        FilterLinkChip.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.SetFilter(PopupFilter.Link);
+        FilterImageChip.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.SetFilter(PopupFilter.Image);
+        FilterFileChip.PointerPressed += (_, _) => (DataContext as PopupViewModel)?.SetFilter(PopupFilter.File);
         if (KeepsFocusBelow)
         {
             // Nothing in it may take the keyboard focus: a focus request would try to activate the window.
@@ -94,9 +100,7 @@ public partial class PopupWindow : Window
     {
         if (vm is null) return;
         EmptyText.IsVisible = vm.Items.Count == 0;
-        EmptyText.Text = vm.IsSearchingOlder ? PopupViewModel.SearchingOlderText
-            : vm.Query.Trim().Length > 0 ? "No matches."
-            : vm.Tab == PopupTab.Pinned ? "Nothing pinned yet." : "Nothing to paste yet.";
+        EmptyText.Text = vm.EmptyText;
     }
 
     private void ApplyTab(PopupViewModel vm)
@@ -109,7 +113,7 @@ public partial class PopupWindow : Window
     {
         if (e.PropertyName == nameof(PopupViewModel.SelectedIndex) && sender is PopupViewModel { SelectedIndex: >= 0 } vm)
             ItemsList.ScrollIntoView(vm.SelectedIndex);
-        else if (e.PropertyName is nameof(PopupViewModel.Query) or nameof(PopupViewModel.IsSearchingOlder))
+        else if (e.PropertyName is nameof(PopupViewModel.Query) or nameof(PopupViewModel.IsSearchingOlder) or nameof(PopupViewModel.Filter))
             UpdateEmpty(sender as PopupViewModel);
         else if (e.PropertyName == nameof(PopupViewModel.Tab) && sender is PopupViewModel tabbed) ApplyTab(tabbed);
     }
@@ -127,6 +131,9 @@ public partial class PopupWindow : Window
             case Key.Tab: vm.SwitchTab(); break;
             case Key.P when e.KeyModifiers == KeyModifiers.Control: _ = vm.TogglePinSelectedAsync(); break;
             case Key.S when e.KeyModifiers == KeyModifiers.Control: _ = vm.SaveSelectedAsync(); break;
+            case Key.D1 or Key.D2 or Key.D3 or Key.D4 or Key.D5 when e.KeyModifiers == KeyModifiers.Control:
+                vm.SetFilterByIndex(e.Key - Key.D1 + 1);
+                break;
             case Key.Escape:
                 Input.PopupTrace.Write("Esc");
                 Close();
@@ -223,6 +230,7 @@ public partial class PopupWindow : Window
             case Input.PopupKeyAction.TogglePin: _ = vm.TogglePinSelectedAsync(); break;
             // The popup stays open and keeps the focus where it was; a toast says where the files went.
             case Input.PopupKeyAction.Save: _ = vm.SaveSelectedAsync(); break;
+            case Input.PopupKeyAction.Filter: vm.SetFilterByIndex(key.Index); break;
             case Input.PopupKeyAction.Close:
                 Input.PopupTrace.Write("Esc");
                 Close();

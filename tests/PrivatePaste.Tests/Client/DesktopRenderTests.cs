@@ -189,10 +189,51 @@ public class DesktopRenderTests
         {
             var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             Assert.Contains("report.pdf +2 more · 3.4 MB", texts);
-            Assert.Contains("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save", texts);
+            Assert.Contains("Enter to paste   Tab for Pinned   Ctrl+P to pin   Ctrl+S to save   Ctrl+1–5 to filter", texts);
             var fileIcons = w.GetVisualDescendants().OfType<Canvas>().Where(c => c.Name == "FileIcon" && c.IsEffectivelyVisible).ToList();
             Assert.Equal(2, fileIcons.Count);
             Assert.All(w.GetVisualDescendants().OfType<Button>(), b => Assert.False(b.Focusable));
+        });
+    }, CancellationToken.None);
+
+    [Theory]
+    [InlineData("dark", PrivatePaste.Desktop.ViewModels.PopupFilter.All)]
+    [InlineData("light", PrivatePaste.Desktop.ViewModels.PopupFilter.All)]
+    [InlineData("dark", PrivatePaste.Desktop.ViewModels.PopupFilter.File)]
+    [InlineData("light", PrivatePaste.Desktop.ViewModels.PopupFilter.File)]
+    [InlineData("dark", PrivatePaste.Desktop.ViewModels.PopupFilter.Image)]
+    public Task Popup_window_renders_the_type_chips(string theme, PrivatePaste.Desktop.ViewModels.PopupFilter filter) => Session.Value.Dispatch(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var cache = new PrivatePaste.Client.Core.Cache.HistoryCache(
+            Path.Combine(Path.GetTempPath(), "pp-render-" + Guid.NewGuid() + ".dat"), new byte[32]);
+        cache.Upsert(new PrivatePaste.Protocol.ClipDto(Guid.NewGuid(), 4, PrivatePaste.Protocol.ClipKind.Text,
+            "git commit -m \"feat(desktop): filter by type\"", "h4", null, null, 100, null, "PC-work", now)
+        { SourceDevicePlatform = "windows" });
+        cache.Upsert(FileClip(3, 4, "Pixel 9", "android", ("report.pdf", 3_000_000), ("a.txt", 300_000)));
+        cache.Upsert(FileClip(2, 35, "MacBook", "macos", ("budget.xlsx", 48_213)));
+        var vm = new PopupViewModel(cache, null, _ => Task.CompletedTask, TimeProvider.System,
+            save: _ => Task.FromResult<string?>(null));
+        vm.SetFilter(filter);
+        vm.MoveSelection(0);
+        Render(new PopupWindow { DataContext = vm }, theme, $"popup-chips-{filter.ToString().ToLowerInvariant()}", w =>
+        {
+            var chips = w.GetVisualDescendants().OfType<Border>().Where(b => b.Classes.Contains("chip")).ToList();
+            Assert.Equal(["FilterAllChip", "FilterTextChip", "FilterLinkChip", "FilterImageChip", "FilterFileChip"], chips.Select(c => c.Name));
+            Assert.All(chips, c => Assert.False(c.Focusable));
+            // Exactly the chosen chip is marked active.
+            Assert.Equal([$"Filter{filter}Chip"], chips.Where(c => c.Classes.Contains("active")).Select(c => c.Name));
+            var texts = w.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
+            Assert.Subset(texts.ToHashSet(), new HashSet<string?> { "All", "Text", "Links", "Images", "Files" });
+            // The footer fits in the popup: one line (or two when a file row adds Ctrl+S) never clips.
+            var footer = Find<TextBlock>(w, "FooterText");
+            Assert.True(footer.Bounds.Height < 40, $"footer is {footer.Bounds.Height}px high");
+            Assert.Equal(vm.Items.Count, filter switch
+            {
+                PrivatePaste.Desktop.ViewModels.PopupFilter.File => 2,
+                PrivatePaste.Desktop.ViewModels.PopupFilter.Image => 0,
+                _ => 3,
+            });
         });
     }, CancellationToken.None);
 

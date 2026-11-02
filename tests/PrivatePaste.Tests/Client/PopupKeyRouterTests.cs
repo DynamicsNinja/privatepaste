@@ -101,6 +101,36 @@ public class PopupKeyRouterTests
     public void Ctrl_Shift_S_is_swallowed(EventMask mask) =>
         Assert.Equal(new PopupKey(PopupKeyAction.Swallow), Route(KeyCode.VcS, mask, "\u0013"));
 
+    [Theory]
+    [InlineData(KeyCode.Vc1, 1)]
+    [InlineData(KeyCode.Vc2, 2)]
+    [InlineData(KeyCode.Vc3, 3)]
+    [InlineData(KeyCode.Vc4, 4)]
+    [InlineData(KeyCode.Vc5, 5)]
+    public void Ctrl_digit_picks_a_filter(KeyCode key, int index)
+    {
+        Assert.Equal(new PopupKey(PopupKeyAction.Filter, Index: index), Route(key, EventMask.LeftCtrl, "1"));
+        Assert.Equal(new PopupKey(PopupKeyAction.Filter, Index: index), Route(key, EventMask.RightCtrl, null));
+    }
+
+    [Theory]
+    [InlineData(KeyCode.Vc6, EventMask.LeftCtrl)]                     // only five chips
+    [InlineData(KeyCode.Vc0, EventMask.LeftCtrl)]
+    [InlineData(KeyCode.Vc1, EventMask.LeftCtrl | EventMask.LeftShift)]
+    [InlineData(KeyCode.Vc1, EventMask.LeftAlt)]                      // Alt is not a filter key: Alt up would reach the app below
+    [InlineData(KeyCode.Vc3, EventMask.RightAlt)]
+    [InlineData(KeyCode.VcNumPad1, EventMask.LeftCtrl)]
+    public void Other_digit_shortcuts_are_swallowed(KeyCode key, EventMask mask) =>
+        Assert.Equal(new PopupKey(PopupKeyAction.Swallow), Route(key, mask, null));
+
+    [Fact]
+    public void Plain_digits_still_type_and_AltGr_digits_type_their_character()
+    {
+        Assert.Equal(new PopupKey(PopupKeyAction.Type, "1"), Route(KeyCode.Vc1, EventMask.None, "1"));
+        // AltGr+1 is "~" on a Croatian keyboard and arrives as Ctrl+Alt: still text, not a filter.
+        Assert.Equal(new PopupKey(PopupKeyAction.Type, "~"), Route(KeyCode.Vc1, EventMask.LeftCtrl | EventMask.RightAlt, "~"));
+    }
+
     [Fact]
     public void Plain_p_still_types() =>
         Assert.Equal(new PopupKey(PopupKeyAction.Type, "p"), Route(KeyCode.VcP, EventMask.None, "p"));
