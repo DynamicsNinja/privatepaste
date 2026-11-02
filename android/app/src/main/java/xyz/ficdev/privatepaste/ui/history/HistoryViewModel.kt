@@ -90,6 +90,8 @@ enum class HistoryTab { HISTORY, PINNED }
 data class HistoryState(
     val tab: HistoryTab = HistoryTab.HISTORY,
     val query: String = "",
+    /** The type chip in use; null is All. Unknown-kind clips show only under All. */
+    val filter: ClipKind? = null,
     val items: List<ClipDto> = emptyList(),
     /** The newest clip, when this phone applied it to its clipboard: it gets the live dot. */
     val liveClipId: String? = null,
@@ -147,6 +149,8 @@ class HistoryViewModel(
     private data class Local(val deleted: Set<String> = emptySet(), val updated: Map<String, ClipDto> = emptyMap())
 
     private val query = MutableStateFlow("")
+    /** The type chip in use; null is All. Applied to the merged list, so the older-clips search keeps every hit. */
+    private val kindFilter = MutableStateFlow<ClipKind?>(null)
     private val remotePages = MutableStateFlow(Remote())
     private val local = MutableStateFlow(Local())
     private val older = MutableStateFlow(Older())
@@ -164,7 +168,7 @@ class HistoryViewModel(
     val shares: Flow<Intent> = _shares.receiveAsFlow()
 
     val state: StateFlow<HistoryState> =
-        combine(cached, query, combine(remotePages, older, ::Pair), local, syncState) { cache, q, (page, old), changes, sync ->
+        combine(cached, query, combine(remotePages, older, kindFilter, ::Triple), local, syncState) { cache, q, (page, old, kind), changes, sync ->
             val needle = q.trim()
             val pinnedTab = page.pinned
             val search = old.takeIf { needle.isNotEmpty() && it.query == needle && it.pinned == pinnedTab }
@@ -174,12 +178,14 @@ class HistoryViewModel(
             val fromServer = (page.items + search?.items.orEmpty()).map { it.fresh() }
             val ids = base.mapTo(HashSet()) { it.id }
             val merged = (base + fromServer.filter { ids.add(it.id) })
-                .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) && it.matches(needle) }
+                .filter { it.id !in changes.deleted && (!pinnedTab || it.pinnedAt != null) &&
+                        (kind == null || it.kind == kind) && it.matches(needle) }
             val items = if (pinnedTab) merged.sortedWith(PINNED_FIRST) else merged
             val newest = cache.firstOrNull()
             HistoryState(
                 tab = if (pinnedTab) HistoryTab.PINNED else HistoryTab.HISTORY,
                 query = q,
+                filter = kind,
                 items = items,
                 liveClipId = newest?.takeIf { it.id !in changes.deleted && it.hash == lastAppliedHash() }?.id,
                 syncState = sync,
@@ -189,6 +195,16 @@ class HistoryViewModel(
                 searchingOlder = search?.searching == true,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryState(syncState = syncState.value))
+
+    /** A type chip was tapped: select it, or go back to All when it is already the one in use (or [kind] is null). */
+    fun onFilter(kind: ClipKind?) {
+        kindFilter.update { if (it == kind) null else kind }
+    }
+
+    /** The screen opened: start from All. */
+    fun resetFilter() {
+        kindFilter.value = null
+    }
 
     fun onQueryChange(value: String) {
         query.value = value

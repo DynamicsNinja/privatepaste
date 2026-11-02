@@ -7,6 +7,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.graphics.Color
@@ -83,6 +87,8 @@ fun HistoryScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // The view model outlives the screen: opening it starts from All again.
+    LaunchedEffect(vm) { vm.resetFilter() }
     LaunchedEffect(vm) {
         vm.messages.collect { Toast.makeText(context, it.resolve(context), Toast.LENGTH_SHORT).show() }
     }
@@ -109,6 +115,7 @@ fun HistoryScreen(
         onCopy = vm::copy,
         onDelete = vm::delete,
         onTab = vm::onTab,
+        onFilter = vm::onFilter,
         onTogglePin = vm::togglePin,
         onSave = vm::save,
         onShare = vm::share,
@@ -132,6 +139,7 @@ fun HistoryContent(
     thumbnails: ThumbnailLoader? = null,
     minuteTick: Int = 0,
     onTab: (HistoryTab) -> Unit = {},
+    onFilter: (ClipKind?) -> Unit = {},
     onTogglePin: (ClipDto) -> Unit = {},
     onSave: (ClipDto) -> Unit = {},
     onShare: (ClipDto) -> Unit = {},
@@ -182,6 +190,8 @@ fun HistoryContent(
 
             TabRow(state.tab, onTab, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
 
+            FilterRow(state.filter, onFilter, modifier = Modifier.padding(bottom = 8.dp))
+
             if (state.items.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -200,6 +210,7 @@ fun HistoryContent(
                                 text = stringResource(
                                     when {
                                         state.query.isNotBlank() -> R.string.history_no_matches
+                                        state.filter != null -> emptyFilterText(state.filter, state.tab == HistoryTab.PINNED)
                                         state.tab == HistoryTab.PINNED -> R.string.history_pinned_empty
                                         else -> R.string.history_empty
                                     },
@@ -354,6 +365,65 @@ private fun TabChip(label: Int, selected: Boolean, onClick: () -> Unit) {
             color = if (selected) colors.primary else colors.onSurfaceVariant,
         )
     }
+}
+
+private fun emptyFilterText(kind: ClipKind, pinned: Boolean): Int = when (kind) {
+    ClipKind.TEXT -> if (pinned) R.string.history_pinned_empty_text else R.string.history_empty_text
+    ClipKind.LINK -> if (pinned) R.string.history_pinned_empty_links else R.string.history_empty_links
+    ClipKind.IMAGE -> if (pinned) R.string.history_pinned_empty_images else R.string.history_empty_images
+    ClipKind.FILE -> if (pinned) R.string.history_pinned_empty_files else R.string.history_empty_files
+    ClipKind.UNKNOWN -> R.string.history_no_matches   // there is no chip for it
+}
+
+/** All / Text / Links / Images / Files under the tabs; scrolls sideways rather than squeezing on a narrow phone. */
+@Composable
+private fun FilterRow(selected: ClipKind?, onSelect: (ClipKind?) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        FilterKindChip(R.string.history_filter_all, null, selected == null) { onSelect(null) }
+        FilterKindChip(R.string.history_filter_text, R.drawable.ic_kind_text, selected == ClipKind.TEXT) { onSelect(ClipKind.TEXT) }
+        FilterKindChip(R.string.history_filter_links, R.drawable.ic_kind_link, selected == ClipKind.LINK) { onSelect(ClipKind.LINK) }
+        FilterKindChip(R.string.history_filter_images, R.drawable.ic_kind_image, selected == ClipKind.IMAGE) { onSelect(ClipKind.IMAGE) }
+        FilterKindChip(R.string.history_filter_files, R.drawable.ic_kind_file, selected == ClipKind.FILE) { onSelect(ClipKind.FILE) }
+    }
+}
+
+@Composable
+private fun FilterKindChip(label: Int, icon: Int?, selected: Boolean, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(stringResource(label), style = MaterialTheme.typography.labelMedium) },
+        leadingIcon = icon?.let {
+            {
+                Icon(
+                    painter = painterResource(it),
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = if (selected) colors.primary else colors.onSurfaceVariant,
+                )
+            }
+        },
+        shape = RoundedCornerShape(8.dp),
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = colors.surfaceVariant,
+            labelColor = colors.onSurfaceVariant,
+            selectedContainerColor = colors.primary.copy(alpha = 0.16f),
+            selectedLabelColor = colors.onSurface,
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = selected,
+            borderColor = colors.outline,
+            selectedBorderColor = colors.primary,
+        ),
+    )
 }
 
 @Composable

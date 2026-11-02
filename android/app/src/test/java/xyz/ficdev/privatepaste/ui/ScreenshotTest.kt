@@ -123,6 +123,9 @@ class ScreenshotTest {
     @Test fun historyFilesDark() = shootOne("history-files", dark = true) { HistorySample(fileHistory) }
     @Test fun historyFilesLight() = shootOne("history-files", dark = false) { HistorySample(fileHistory) }
 
+    @Test fun historyFilterDark() = shootOne("history-filter", dark = true) { HistorySample(filesFilter) }
+    @Test fun historyFilterLight() = shootOne("history-filter", dark = false) { HistorySample(filesFilter) }
+
     private fun shootOne(name: String, dark: Boolean, tag: String? = null, content: @Composable () -> Unit) {
         assumeTrue("PP_SCREENSHOT_DIR not set", dir != null)
         compose.setContent { PrivatePasteTheme(darkTheme = dark) { content() } }
@@ -203,5 +206,10 @@ class ScreenshotTest {
         ),
     )
 
-    private val searchOlder = HistoryState(query = "invoice", canSearchOlder = true, syncState = SyncState.CONNECTED)
+    private val filesFilter = fileHistory.copy(
+        filter = ClipKind.FILE,
+        items = fileHistory.items.filter { it.kind == ClipKind.FILE },
+    )
+
+    private val searchOlder =HistoryState(query = "invoice", canSearchOlder = true, syncState = SyncState.CONNECTED)
 }
