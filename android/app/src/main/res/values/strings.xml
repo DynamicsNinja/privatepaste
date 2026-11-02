@@ -117,6 +117,7 @@
     <string name="platform_linux">Linux</string>
     <string name="platform_android">Android</string>
     <string name="platform_web">Web</string>
+    <string name="platform_extension">Browser extension</string>
     <string name="platform_unknown">Unknown device</string>
     <string name="status_connected">Connected</string>
     <string name="status_connecting">Connecting…</string>

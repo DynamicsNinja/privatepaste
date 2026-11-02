@@ -14,6 +14,8 @@ class PlatformIconTest {
         assertEquals(PlatformIcon.LINUX, PlatformIcon.forPlatform("linux"))
         assertEquals(PlatformIcon.ANDROID, PlatformIcon.forPlatform("android"))
         assertEquals(PlatformIcon.WEB, PlatformIcon.forPlatform("web"))
+        assertEquals(PlatformIcon.EXTENSION, PlatformIcon.forPlatform("extension"))
+        assertEquals(PlatformIcon.EXTENSION, PlatformIcon.forPlatform(" Extension "))
         assertEquals(PlatformIcon.ANDROID, PlatformIcon.forPlatform(" Android "))
         assertEquals(PlatformIcon.UNKNOWN, PlatformIcon.forPlatform("unknown"))
         assertEquals(PlatformIcon.UNKNOWN, PlatformIcon.forPlatform("ios"))

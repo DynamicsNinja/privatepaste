@@ -72,6 +72,7 @@ class ScreenshotTest {
             clip("4", ClipKind.TEXT, "Meeting notes:\nship the Android client", 60 * 26, "Pixel 9", "android"),
             clip("5", ClipKind.TEXT, "Grocery list: oat milk, eggs, basil", 60 * 30, "Web", "web"),
             clip("6", ClipKind.TEXT, "4111 1111 1111 1111", 60 * 24 * 5, "Old phone", null),
+            clip("7", ClipKind.TEXT, "Copied in the browser extension", 60 * 24 * 6, "Firefox", "extension"),
         ),
         liveClipId = "1",
         syncState = SyncState.CONNECTED,
