@@ -219,6 +219,196 @@ public class EncryptedClipApiTests
     }
 
     [Fact]
+    public async Task File_clip_with_two_blobs_round_trips()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, blobs) = await PrivatePasteFactory.SealFilesAsync(key, [1, 2, 3], new byte[2 * 1024 * 1024 + 5]);
+
+        var response = await PrivatePasteFactory.PostClipAsync(c, meta, null, blobs);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var posted = (await response.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        var clip = (await c.GetFromJsonAsync<ClipDto>($"/api/clips/{posted.Id}", ProtocolJson.Options))!;
+        Assert.Equal(ClipKind.File, clip.Kind);
+        Assert.Equal(2, clip.BlobCount);
+        Assert.False(clip.HasThumb);
+        Assert.Null(clip.Files);
+        Assert.Equal(2, ClipPayload.Open(key, clip.Payload!).Files!.Count);
+        Assert.Equal(blobs[0], await c.GetByteArrayAsync($"/api/clips/{clip.Id}/blobs/0"));
+        Assert.Equal(blobs[1], await c.GetByteArrayAsync($"/api/clips/{clip.Id}/blobs/1"));
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/api/clips/{clip.Id}/blobs/2")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Empty_file_clip_is_accepted()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, blobs) = await PrivatePasteFactory.SealFilesAsync(key, Array.Empty<byte>());
+
+        var response = await PrivatePasteFactory.PostClipAsync(c, meta, null, blobs);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, (await response.Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!.BlobCount);
+    }
+
+    [Fact]
+    public async Task File_clip_with_thumb_is_400()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, blobs) = await PrivatePasteFactory.SealFilesAsync(key, [1]);
+
+        var response = await PrivatePasteFactory.PostClipAsync(c, meta, [1, 2, 3], blobs);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("A file clip has no thumbnail.", (await ProblemAsync(response)).Detail);
+    }
+
+    [Fact]
+    public async Task File_clip_without_blobs_is_400()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, _) = await PrivatePasteFactory.SealFilesAsync(key, [1]);
+
+        var response = await PrivatePasteFactory.PostClipAsync(c, meta);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("A file clip has at least one blob.", (await ProblemAsync(response)).Detail);
+    }
+
+    [Fact]
+    public async Task File_clip_with_101_blobs_is_400()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, blobs) = await PrivatePasteFactory.SealFilesAsync(key, Enumerable.Range(0, 101).Select(_ => new byte[] { 1 }).ToArray());
+
+        var response = await PrivatePasteFactory.PostClipAsync(c, meta, null, blobs);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("A file clip has at most 100 files.", (await ProblemAsync(response)).Detail);
+        var (meta100, blobs100) = await PrivatePasteFactory.SealFilesAsync(key, Enumerable.Range(0, 100).Select(_ => new byte[] { 1 }).ToArray());
+        Assert.Equal(HttpStatusCode.OK, (await PrivatePasteFactory.PostClipAsync(c, meta100, null, blobs100)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Files_over_the_limit_are_413()
+    {
+        using var f = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_FILE_MB"] = "1" });
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, blobs) = await PrivatePasteFactory.SealFilesAsync(key, [1, 2, 3]);
+
+        // The claimed size.
+        var claimed = await PrivatePasteFactory.PostClipAsync(c, meta with { SizeBytes = 1024 * 1024 + 1 }, null, blobs);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, claimed.StatusCode);
+        Assert.Equal("Files over 1 MB aren't synced.", (await ProblemAsync(claimed)).Detail);
+
+        // The bytes actually sent, whatever the claim: one file at the limit seals to 1 MiB + 9 + 16 and fits, the
+        // largest sealed size for one file is 1 MiB + 25 + 2 * 16, and one byte more is refused.
+        var (atLimitMeta, atLimit) = await PrivatePasteFactory.SealFilesAsync(key, new byte[1024 * 1024]);
+        Assert.Equal(HttpStatusCode.OK, (await PrivatePasteFactory.PostClipAsync(c, atLimitMeta, null, atLimit)).StatusCode);
+        const int maxOne = 1024 * 1024 + 25 + 2 * 16;
+        Assert.Equal(HttpStatusCode.OK, (await PrivatePasteFactory.PostClipAsync(c, meta, null, new byte[maxOne])).StatusCode);
+        var actual = await PrivatePasteFactory.PostClipAsync(c, meta, null, new byte[maxOne + 1]);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, actual.StatusCode);
+        Assert.Equal("Files over 1 MB aren't synced.", (await ProblemAsync(actual)).Detail);
+        // Two blobs together over the sum bound, though each fits alone.
+        var twoOver = await PrivatePasteFactory.PostClipAsync(c, meta, null, new byte[maxOne], new byte[1024]);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, twoOver.StatusCode);
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(f.DataDir, "blobs")).Length);
+
+        var payloadOver = meta with { Payload = Convert.ToBase64String(new byte[64 * 1024 + 1]) };
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await PrivatePasteFactory.PostClipAsync(c, payloadOver, null, blobs)).StatusCode);
+    }
+
+    [Fact]
+    public async Task File_hash_clashing_with_text_or_image_is_409()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (fileMeta, fileBlobs) = await PrivatePasteFactory.SealFilesAsync(key, [1, 2, 3]);
+        var text = await f.UploadTextAsync(c, key, "as text");
+        var (imageMeta, imageBlob, thumb) = await PrivatePasteFactory.SealImageAsync(key, [1, 2, 3, 4]);
+        var image = (await (await PrivatePasteFactory.PostClipAsync(c, imageMeta, thumb, imageBlob))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+
+        // A file over a stored text or image.
+        Assert.Equal(HttpStatusCode.Conflict, (await PrivatePasteFactory.PostClipAsync(c, fileMeta with { Hash = text.Hash }, null, fileBlobs)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await PrivatePasteFactory.PostClipAsync(c, fileMeta with { Hash = image.Hash }, null, fileBlobs)).StatusCode);
+
+        // Text or an image over a stored file.
+        var file = (await (await PrivatePasteFactory.PostClipAsync(c, fileMeta, null, fileBlobs))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        var asText = await PrivatePasteFactory.PostClipAsync(c, PrivatePasteFactory.TextMeta(key, "x") with { Hash = file.Hash });
+        Assert.Equal(HttpStatusCode.Conflict, asText.StatusCode);
+        Assert.Equal("That content was already stored as a different kind.", (await ProblemAsync(asText)).Detail);
+        Assert.Equal(HttpStatusCode.Conflict, (await PrivatePasteFactory.PostClipAsync(c, imageMeta with { Hash = file.Hash }, thumb, imageBlob)).StatusCode);
+
+        // The same files again are a bump.
+        var again = (await (await PrivatePasteFactory.PostClipAsync(c, fileMeta, null, fileBlobs))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        Assert.Equal(file.Id, again.Id);
+        Assert.True(again.Seq > file.Seq);
+    }
+
+    [Fact]
+    public async Task Request_body_limit_fits_a_full_file_clip()
+    {
+        using var f = new PrivatePasteFactory(new Dictionary<string, string> { ["PP_MAX_FILE_MB"] = "2" });
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var (meta, _) = await PrivatePasteFactory.SealFilesAsync(key, [1]);
+        meta = meta with { Payload = Convert.ToBase64String(new byte[64 * 1024]) };
+        // 100 blobs summing to the sum bound: the limit plus 25 bytes per file and a 16-byte tag per chunk and file.
+        const long total = 2L * 1024 * 1024 + 25 * 100 + 16 * (2 + 100);
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent(JsonSerializer.Serialize(meta, ProtocolJson.Options), Encoding.UTF8, "application/json"), "meta" },
+        };
+        for (var n = 0; n < 100; n++)
+            form.Add(new ByteArrayContent(new byte[n < 99 ? total / 100 : total - 99 * (total / 100)]), $"blob{n}", $"blob{n}");
+        var bodyLength = (await form.ReadAsByteArrayAsync()).Length;
+
+        // The test server doesn't enforce Kestrel's limit, so check the configured one covers this body.
+        var limit = f.Services.GetRequiredService<IOptions<KestrelServerOptions>>().Value.Limits.MaxRequestBodySize;
+        Assert.True(limit >= bodyLength, $"limit {limit} < body {bodyLength}");
+        Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/api/clips", form)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Deleting_and_clearing_a_file_clip_removes_every_blob()
+    {
+        using var f = new PrivatePasteFactory();
+        var c = await f.LoginAsync();
+        using var key = await PrivatePasteFactory.SetUpVaultAsync(c);
+        var blobDir = Path.Combine(f.DataDir, "blobs");
+        var (meta, blobs) = await PrivatePasteFactory.SealFilesAsync(key, [1], [2], [3]);
+        var clip = (await (await PrivatePasteFactory.PostClipAsync(c, meta, null, blobs))
+            .Content.ReadFromJsonAsync<ClipDto>(ProtocolJson.Options))!;
+        Assert.Equal(3, Directory.GetFiles(blobDir).Length);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await c.DeleteAsync($"/api/clips/{clip.Id}")).StatusCode);
+        Assert.Empty(Directory.GetFiles(blobDir));
+
+        var (meta2, blobs2) = await PrivatePasteFactory.SealFilesAsync(key, [4], [5]);
+        Assert.Equal(HttpStatusCode.OK, (await PrivatePasteFactory.PostClipAsync(c, meta2, null, blobs2)).StatusCode);
+        Assert.Equal(2, Directory.GetFiles(blobDir).Length);
+        f.Clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/api/history/clear", null)).StatusCode);
+        Assert.Empty(Directory.GetFiles(blobDir));
+    }
+
+    [Fact]
     public async Task Same_hash_under_another_kind_is_409()
     {
         using var f = new PrivatePasteFactory();

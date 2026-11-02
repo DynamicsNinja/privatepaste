@@ -45,6 +45,12 @@ public sealed partial class ClipService(
     /// <summary>The largest sealed payload accepted on an image clip, which holds only its size.</summary>
     public const int MaxImagePayloadBytes = 4096;
 
+    /// <summary>The largest sealed payload accepted on a file clip: 100 names, sizes and types.</summary>
+    public const int MaxFilePayloadBytes = 64 * 1024;
+
+    /// <summary>The most files in one clip.</summary>
+    public const int MaxFiles = 100;
+
     // Serializes an upload's key check, blob writes and upsert against blob deletion and the encryption reset, so an
     // upload sealed under the old key can't land after a reset (single-user server, so contention is negligible).
     private readonly SemaphoreSlim _storeLock = new(1, 1);
@@ -60,15 +66,29 @@ public sealed partial class ClipService(
     public static long MaxBlobBytesFor(ServerOptions options) =>
         options.MaxImageBytes + 9 + 16 * ((options.MaxImageBytes + BlobCipher.ChunkSize - 1) / BlobCipher.ChunkSize);
 
+    /// <summary>
+    /// The largest sealed blobs of a file clip of <paramref name="files"/> files, added up: the limit plus, per file,
+    /// the 9-byte header and a 16-byte tag for its final chunk, and a tag per 1 MiB chunk of the limit. Generous for a
+    /// real upload (the files together hold at most the limit), tight enough to refuse a client that hides the size.
+    /// </summary>
+    public static long MaxFileBlobsBytesFor(ServerOptions options, int files) =>
+        options.MaxFileBytes + 25L * files
+            + 16 * ((options.MaxFileBytes + BlobCipher.ChunkSize - 1) / BlobCipher.ChunkSize + files);
+
+    /// <summary>The largest sealed blob of a file clip: one file holding the whole limit.</summary>
+    public static long MaxFileBlobBytesFor(ServerOptions options) => MaxFileBlobsBytesFor(options, 1);
+
     /// <summary>The largest <c>meta</c> part: the base64 of the largest payload plus room for the other fields.</summary>
-    public static long MaxMetaBytesFor(ServerOptions options) => Base64Length(MaxTextPayloadBytesFor(options)) + 8192;
+    public static long MaxMetaBytesFor(ServerOptions options) =>
+        Base64Length(Math.Max(MaxTextPayloadBytesFor(options), MaxFilePayloadBytes)) + 8192;
 
     /// <summary>
-    /// The largest upload body: an image at its limit with the largest thumbnail, or the largest text, each with room
-    /// for the metadata and the multipart framing.
+    /// The largest upload body: an image at its limit with the largest thumbnail, a file clip at its limit with the most
+    /// files, or the largest text, each with room for the metadata and the multipart framing.
     /// </summary>
     public static long MaxRequestBodyBytesFor(ServerOptions options) =>
-        Math.Max(MaxBlobBytesFor(options) + MaxThumbBytes + 64 * 1024,
+        Math.Max(Math.Max(MaxBlobBytesFor(options) + MaxThumbBytes + 64 * 1024,
+                MaxFileBlobsBytesFor(options, MaxFiles) + Base64Length(MaxFilePayloadBytes) + 128 * 1024),
             Base64Length(MaxTextPayloadBytesFor(options)) + 16 * 1024);
 
     private static long Base64Length(long bytes) => (bytes + 2) / 3 * 4;
@@ -76,6 +96,9 @@ public sealed partial class ClipService(
     public long MaxTextPayloadBytes => MaxTextPayloadBytesFor(options);
 
     public long MaxBlobBytes => MaxBlobBytesFor(options);
+
+    /// <summary>What one blob part may hold before its kind is known: the larger of an image's and a file's.</summary>
+    public long MaxBlobPartBytes => Math.Max(MaxBlobBytesFor(options), MaxFileBlobBytesFor(options));
 
     public long MaxMetaBytes => MaxMetaBytesFor(options);
 
@@ -90,6 +113,7 @@ public sealed partial class ClipService(
             "text" => ClipKind.Text,
             "link" => ClipKind.Link,
             "image" => ClipKind.Image,
+            "file" => ClipKind.File,
             _ => throw new ClipRejectedException(StatusCodes.Status400BadRequest, "Unknown clip kind."),
         };
         if (meta.Hash is null || !HashPattern().IsMatch(meta.Hash))
@@ -111,6 +135,20 @@ public sealed partial class ClipService(
                 throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge, "Thumbnail is too large.");
             if (payloadBytes > MaxImagePayloadBytes)
                 throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge, "Payload is too large.");
+        }
+        else if (kind == ClipKind.File)
+        {
+            if (thumb is not null)
+                throw new ClipRejectedException(StatusCodes.Status400BadRequest, "A file clip has no thumbnail.");
+            if (blobParts.Count == 0)
+                throw new ClipRejectedException(StatusCodes.Status400BadRequest, "A file clip has at least one blob.");
+            if (blobParts.Count > MaxFiles)
+                throw new ClipRejectedException(StatusCodes.Status400BadRequest, $"A file clip has at most {MaxFiles} files.");
+            if (meta.SizeBytes > options.MaxFileBytes
+                || blobParts.Sum(b => (long)b.Length) > MaxFileBlobsBytesFor(options, blobParts.Count)
+                || payloadBytes > MaxFilePayloadBytes)
+                throw new ClipRejectedException(StatusCodes.Status413PayloadTooLarge,
+                    $"Files over {options.MaxFileBytes / (1024 * 1024)} MB aren't synced.");
         }
         else
         {
@@ -135,11 +173,10 @@ public sealed partial class ClipService(
             // Under the lock, so a backfill can't land between a clear recording its time and deleting.
             if (meta.Backfill)
                 await EnsureNotClearedAsync(copiedAt);
-            // An image and a text clip under one hash would pair one clip's row with another's blobs. Text and link
-            // share a shape (no blobs, no thumb) and platforms can disagree on whether some content is a link, so
-            // that clash is a bump that keeps the stored kind.
-            if (await clips.GetByHashAsync(meta.Hash) is { } existing
-                && (existing.Kind == ClipKind.Image) != (kind == ClipKind.Image))
+            // Clips of different blob shapes under one hash would pair one clip's row with another's blobs. Text and
+            // link share a shape (no blobs, no thumb) and platforms can disagree on whether some content is a link,
+            // so that clash is a bump that keeps the stored kind.
+            if (await clips.GetByHashAsync(meta.Hash) is { } existing && BlobShape(existing.Kind) != BlobShape(kind))
                 throw new ClipRejectedException(StatusCodes.Status409Conflict,
                     "That content was already stored as a different kind.");
 
@@ -163,6 +200,15 @@ public sealed partial class ClipService(
         await broadcaster.ClipChangedAsync(result.Clip, live: !meta.Backfill);
         return result.Clip;
     }
+
+    private enum Shape { None, Image, File }
+
+    private static Shape BlobShape(ClipKind kind) => kind switch
+    {
+        ClipKind.Image => Shape.Image,
+        ClipKind.File => Shape.File,
+        _ => Shape.None,
+    };
 
     /// <summary>The decoded size of a base64 payload; 400 when it is missing or not base64.</summary>
     private static int PayloadLength(string? payload)

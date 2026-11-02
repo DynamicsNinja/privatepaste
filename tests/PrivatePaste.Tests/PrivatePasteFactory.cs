@@ -164,6 +164,29 @@ public sealed class PrivatePasteFactory : WebApplicationFactory<Program>
         return (meta, sealedBlob.ToArray(), thumb);
     }
 
+    /// <summary>
+    /// The metadata and sealed blobs a client sends for a file clip. <paramref name="files"/> are the plaintexts; the
+    /// names only go into the sealed payload.
+    /// </summary>
+    public static async Task<(ClipUploadMeta Meta, byte[][] Blobs)> SealFilesAsync(VaultKey key, params byte[][] files)
+    {
+        var blobs = new List<byte[]>();
+        var infos = new List<ClipFileInfo>();
+        var hashes = new List<(string, long, string)>();
+        for (var i = 0; i < files.Length; i++)
+        {
+            using var sealedBlob = new MemoryStream();
+            await BlobCipher.EncryptAsync(key, new MemoryStream(files[i]), sealedBlob, CancellationToken.None);
+            blobs.Add(sealedBlob.ToArray());
+            infos.Add(new ClipFileInfo($"file{i}.bin", files[i].Length, "application/octet-stream"));
+            hashes.Add(($"file{i}.bin", files[i].Length, Convert.ToHexStringLower(SHA256.HashData(files[i]))));
+        }
+
+        var meta = new ClipUploadMeta("file", key.KeyId, KeyedHash.For(key, ContentHash.ForFiles(hashes)),
+            ClipPayload.Seal(key, new ClipPayload { Files = infos }), files.Sum(f => (long)f.Length), null, false);
+        return (meta, blobs.ToArray());
+    }
+
     /// <summary>Posts an upload as a client would: the metadata as JSON, then the optional thumbnail and blobs.</summary>
     public static Task<HttpResponseMessage> PostClipAsync(HttpClient client, ClipUploadMeta meta, byte[]? thumb = null,
         params byte[][] blobs)
