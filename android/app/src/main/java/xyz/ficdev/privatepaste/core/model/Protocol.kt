@@ -1,5 +1,7 @@
 package xyz.ficdev.privatepaste.core.model
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
@@ -83,9 +85,21 @@ data class ClipDto(
     val files: List<ClipFileInfo>? = null,
 )
 
-/** One file of a file clip, as the sealed payload lists it. [mime] is for labelling only. */
+/**
+ * One file of a file clip, as the sealed payload lists it. [mime] is for labelling only: a payload may leave it out
+ * (application/octet-stream then) or send null, and the clip still opens. It is always written, so other clients see it.
+ */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
-data class ClipFileInfo(val name: String, val size: Long, val mime: String)
+data class ClipFileInfo(
+    val name: String,
+    val size: Long,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) val mime: String? = OCTET_STREAM,
+) {
+    companion object {
+        const val OCTET_STREAM = "application/octet-stream"
+    }
+}
 
 @Serializable
 data class ClipPage(val items: List<ClipDto>, val nextCursor: String? = null)

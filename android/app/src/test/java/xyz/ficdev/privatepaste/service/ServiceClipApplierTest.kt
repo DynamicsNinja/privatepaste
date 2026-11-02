@@ -189,6 +189,15 @@ class ServiceClipApplierTest {
     }
 
     @Test
+    fun fileNotificationShowsTheSafeName() = runBlocking {
+        val hostile = files("f3").let { it.copy(files = listOf(ClipFileInfo("../secret\nplan.pdf", 5, "application/pdf"))) }
+
+        assertTrue(applier().apply(hostile))
+
+        assertEquals("secretplan.pdf · 5 B", clipNotification().extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+    }
+
+    @Test
     fun fileClipPostsCopyAndSaveInNotificationMode() = runBlocking {
         mode = DeliveryMode.NOTIFICATION
 

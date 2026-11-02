@@ -41,6 +41,7 @@ import xyz.ficdev.privatepaste.api.PrivatePasteApi
 import xyz.ficdev.privatepaste.clipboard.ClipImageFiles
 import xyz.ficdev.privatepaste.core.FileNames
 import xyz.ficdev.privatepaste.core.crypto.ClipCodec
+import xyz.ficdev.privatepaste.core.model.ClipDto
 import xyz.ficdev.privatepaste.core.model.ClipKind
 import xyz.ficdev.privatepaste.core.model.HandoverCreated
 import xyz.ficdev.privatepaste.core.model.ServerInfo
@@ -65,6 +66,7 @@ import xyz.ficdev.privatepaste.sync.Backoff
 import xyz.ficdev.privatepaste.sync.LocalCaptureClock
 import xyz.ficdev.privatepaste.sync.OkHttpLinkFactory
 import xyz.ficdev.privatepaste.sync.PrefsSignInHints
+import xyz.ficdev.privatepaste.sync.ServerInfoCache
 import xyz.ficdev.privatepaste.sync.SessionManager
 import xyz.ficdev.privatepaste.sync.SignInResult
 import xyz.ficdev.privatepaste.sync.SyncEngine
@@ -163,8 +165,11 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     fun connectionStateNow(): SyncState = _current.value?.displayStateNow() ?: SyncState.SIGNED_OUT
 
     init {
+        // Plaintext copies of shared files live only while their send runs: a process killed mid-send left them here,
+        // and nothing is sending yet at process start.
+        outgoing.deleteRecursively()
         sessions.session.value?.let { _current.value = SessionGraph(it) }   // process start while signed in
-        // A file clip's opened files live as long as the clip is in the history.
+        // A file clip's opened files live as long as the clip is in the history, or while in use (ClipFileStore.markInUse).
         appScope.launch(Dispatchers.IO) {
             cache.items.map { items -> items.mapTo(HashSet()) { it.id } }.distinctUntilChanged().collect { ids ->
                 try {
@@ -190,14 +195,15 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             onKeyReset = ::keyWasReset, isEnding = { ending }, kinds = ::kinds, outgoing = outgoing,
         )
 
-        @Volatile private var serverInfo: ServerInfo? = null
+        /**
+         * What the server takes, asked again each time the sync link connects (see the init block below). A server
+         * without `/api/server-info` gets the defaults.
+         */
+        internal val serverInfo = ServerInfoCache { api.serverInfo() ?: LEGACY_INFO }
 
-        /** What the server takes, asked once per session. A server without `/api/server-info` gets the defaults. */
-        private suspend fun info(): ServerInfo = serverInfo ?: (api.serverInfo() ?: LEGACY_INFO).also { serverInfo = it }
+        private suspend fun limits(): ServerLimits = serverInfo.get().limits
 
-        private suspend fun limits(): ServerLimits = info().limits
-
-        private suspend fun kinds(): List<String> = info().kinds
+        private suspend fun kinds(): List<String> = serverInfo.get().kinds
 
         /** The full PNG of an image clip, fetched and opened. */
         suspend fun image(id: String): ByteArray {
@@ -232,6 +238,11 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
             backoff = Backoff(),
             scope = scope,
         )
+
+        init {
+            // Each (re)connect may reach an upgraded server: its kinds and limits are asked again on next use.
+            scope.launch { engine.state.collect { if (it == SyncState.CONNECTED) serverInfo.invalidate() } }
+        }
 
         /**
          * Set once sign-out or revoke begins: the engine must not be started again, and a send still in flight must
@@ -397,10 +408,16 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         g.close()
     }
 
-    /** The Copy action: puts a cached clip on the clipboard. False when unknown or the write failed. */
-    suspend fun copyClip(id: String): Boolean {
+    /** The Copy action of a notification: puts a cached clip on the clipboard. False when unknown or the write failed. */
+    suspend fun copyClip(id: String): Boolean = copyClip(cache.items.value.firstOrNull { it.id == id } ?: return false)
+
+    /**
+     * Puts a decoded clip on the clipboard: one from the history screen may not be in the cache (an older page, the
+     * Pinned tab, a search of older clips). False when the write failed.
+     */
+    suspend fun copyClip(clip: ClipDto): Boolean {
         val g = _current.value
-        val clip = cache.items.value.firstOrNull { it.id == id } ?: return false
+        val id = clip.id
         return try {
             when (clip.kind) {
                 ClipKind.TEXT, ClipKind.LINK -> clipboard.writeText(clip.text ?: return false)
@@ -411,7 +428,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
                     withContext(Dispatchers.IO) { clipboard.writeImage(id, png) }
                 }
                 ClipKind.FILE -> {
-                    val files = openedFiles(id) ?: return false
+                    val files = openedFiles(clip) ?: return false
                     withContext(Dispatchers.IO) { clipboard.writeFiles(files) }
                 }
                 ClipKind.UNKNOWN -> return false  // a kind from a newer client: nothing this build can copy
@@ -434,18 +451,24 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         }
     }
 
-    /** The Save action: a cached file clip's files, downloaded if needed, into Downloads. False on any failure. */
-    suspend fun saveClipFiles(id: String): Boolean {
-        val files = openedFiles(id) ?: return false
+    /** The Save action of a notification: a cached file clip's files into Downloads. False on any failure. */
+    suspend fun saveClipFiles(id: String): Boolean = saveClipFiles(cache.items.value.firstOrNull { it.id == id } ?: return false)
+
+    /** The Save action: a decoded file clip's files, downloaded if needed, into Downloads. False on any failure. */
+    suspend fun saveClipFiles(clip: ClipDto): Boolean {
+        val files = openedFiles(clip) ?: return false
         return withContext(Dispatchers.IO) { saver.save(files) }
     }
 
+    /** [shareClipFiles] for a cached clip. */
+    suspend fun shareClipFiles(id: String): Intent? = shareClipFiles(cache.items.value.firstOrNull { it.id == id } ?: return null)
+
     /**
-     * The Share action: a chooser for a cached file clip's files (downloaded if needed), readable by the app the user
+     * The Share action: a chooser for a decoded file clip's files (downloaded if needed), readable by the app the user
      * picks through this app's FileProvider. Null when it isn't a file clip or the files can't be had.
      */
-    suspend fun shareClipFiles(id: String): Intent? {
-        val files = openedFiles(id) ?: return null
+    suspend fun shareClipFiles(clip: ClipDto): Intent? {
+        val files = openedFiles(clip) ?: return null
         val uris = files.map(clipboard::contentUri)
         val send = if (uris.size == 1) {
             Intent(Intent.ACTION_SEND).setType(FileNames.mimeFor(files[0].name)).putExtra(Intent.EXTRA_STREAM, uris[0])
@@ -459,16 +482,18 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
     }
 
     /**
-     * The opened files of the cached file clip [id] (ClipFileStore), fetched from the server the first time. Null when
-     * the clip is unknown or not a file clip, locked, offline, or a blob doesn't open; a 401 takes the revoke path.
+     * The opened files of the decoded file clip [clip] (ClipFileStore), fetched from the server the first time, and
+     * kept as in use: the clipboard or a share target reads them later, even when the clip isn't in the cache. Null when
+     * it isn't a file clip, locked, offline, or a blob doesn't open; a 401 takes the revoke path.
      */
-    private suspend fun openedFiles(id: String): List<File>? {
-        val clip = cache.items.value.firstOrNull { it.id == id }?.takeIf { it.kind == ClipKind.FILE } ?: return null
+    private suspend fun openedFiles(clip: ClipDto): List<File>? {
+        if (clip.kind != ClipKind.FILE) return null
         val infos = clip.files?.takeIf { it.isNotEmpty() } ?: return null
         val g = _current.value
         val codec = codec() ?: return null
         return try {
-            clipFiles.materialize(clip, { n -> (g ?: throw IOException("Signed out")).api.blob(id, n, infos[n].size) }, codec)
+            clipFiles.markInUse(clip.id)   // before the download too: a prune meanwhile must not take the finished files
+            clipFiles.materialize(clip, { n -> (g ?: throw IOException("Signed out")).api.blob(clip.id, n, infos[n].size) }, codec)
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiException.Unauthorized) {
@@ -508,9 +533,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override fun codec(): ClipCodec? = this@AppGraph.codec().takeIf { _current.value != null }
         override val clipboard = this@AppGraph.clipboard
         override val fileActions = object : ClipFileActions {
-            override suspend fun copy(clipId: String) = copyClip(clipId)
-            override suspend fun save(clipId: String) = saveClipFiles(clipId)
-            override suspend fun share(clipId: String) = shareClipFiles(clipId)
+            override suspend fun copy(clip: ClipDto) = copyClip(clip)
+            override suspend fun save(clip: ClipDto) = saveClipFiles(clip)
+            override suspend fun share(clip: ClipDto) = shareClipFiles(clip)
         }
         override val settings = this@AppGraph.settings
         override val startService: () -> Unit = { SyncService.start(app) }

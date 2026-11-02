@@ -306,4 +306,17 @@ class ClipCodecTest {
         assertEquals("x", text.text)
         assertNull(text.files)
     }
+
+    @Test
+    fun aFileListWithoutMimeStillOpens() {
+        val meta = codec.encodeFiles(listOf(outgoing("a.txt", byteArrayOf(1))), tmp.newFolder(), null, false).meta
+        val payload = Base64.getEncoder().encodeToString(SealedBox.seal(key, "payload",
+            """{"files":[{"name":"a.txt","size":1},{"name":"b","size":2,"mime":null}]}""".toByteArray()))
+
+        val decoded = codec.decode(wire(meta, ClipKind.FILE).copy(blobCount = 2, payload = payload))
+
+        assertEquals(ClipKind.FILE, decoded.kind)
+        assertEquals(listOf("a.txt", "b"), decoded.files!!.map { it.name })
+        assertEquals("application/octet-stream", decoded.files!![0].mime)
+    }
 }

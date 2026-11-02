@@ -236,6 +236,13 @@ class HistoryScreenTest {
     }
 
     @Test
+    fun fileRowShowsTheSafeName() {
+        val hostile = fileClip.copy(files = listOf(ClipFileInfo("../secret\nplan.pdf", 5, "application/pdf")))
+        show(HistoryState(items = listOf(hostile), syncState = SyncState.CONNECTED))
+        compose.onNodeWithText("secretplan.pdf · 5 B").assertIsDisplayed()
+    }
+
+    @Test
     fun longPressMenuOffersSaveAndShareOnFileRowsOnly() {
         show(HistoryState(items = listOf(fileClip, clip), syncState = SyncState.CONNECTED))
         compose.onNodeWithText("report.pdf +1 more · 3.2 MB").performTouchInput { longClick() }

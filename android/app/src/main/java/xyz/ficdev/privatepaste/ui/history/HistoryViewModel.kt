@@ -73,16 +73,19 @@ fun ClipboardWriter.asClipCopier(): ClipCopier = object : ClipCopier {
     override fun writeImage(clipId: String, png: ByteArray) = this@asClipCopier.writeImage(clipId, png)
 }
 
-/** What a file clip's Copy, Save and Share do on this phone; production adapts the app graph, tests pass a fake. */
+/**
+ * What a file clip's Copy, Save and Share do on this phone; production adapts the app graph, tests pass a fake. They take
+ * the decoded clip of the row: it may not be in the cache (an older page, the Pinned tab, a search of older clips).
+ */
 interface ClipFileActions {
     /** Puts the clip's files on the clipboard, downloading them first when needed. False when that fails. */
-    suspend fun copy(clipId: String): Boolean = false
+    suspend fun copy(clip: ClipDto): Boolean = false
 
     /** Saves the clip's files to Downloads. False when that fails. */
-    suspend fun save(clipId: String): Boolean = false
+    suspend fun save(clip: ClipDto): Boolean = false
 
     /** The chooser for the clip's files, or null when they can't be had. */
-    suspend fun share(clipId: String): Intent? = null
+    suspend fun share(clip: ClipDto): Intent? = null
 }
 
 enum class HistoryTab { HISTORY, PINNED }
@@ -334,7 +337,7 @@ class HistoryViewModel(
                 }
                 ClipKind.FILE -> {
                     // Downloads on the first copy; later copies work offline.
-                    if (!files.copy(clip.id)) {
+                    if (!files.copy(clip)) {
                         _messages.trySend(UiText.Res(if (isOnline()) R.string.copy_failed else R.string.history_files_offline))
                         return@launch
                     }
@@ -361,15 +364,19 @@ class HistoryViewModel(
     /** Long-press menu on a file clip: save its files to Downloads. */
     fun save(clip: ClipDto) {
         viewModelScope.launch {
-            val saved = files.save(clip.id)
-            _messages.trySend(UiText.Res(if (saved) R.string.saved_to_downloads else R.string.save_failed))
+            val saved = files.save(clip)
+            _messages.trySend(UiText.Res(when {
+                saved -> R.string.saved_to_downloads
+                isOnline() -> R.string.save_failed
+                else -> R.string.history_files_offline
+            }))
         }
     }
 
     /** Long-press menu on a file clip: hands the screen a chooser for its files. */
     fun share(clip: ClipDto) {
         viewModelScope.launch {
-            val chooser = files.share(clip.id)
+            val chooser = files.share(clip)
             if (chooser != null) {
                 _shares.trySend(chooser)
             } else {

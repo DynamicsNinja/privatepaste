@@ -67,9 +67,9 @@ class HistoryViewModelTest {
     private var fileSaveWorks = true
     private var shareIntent: Intent? = Intent("share")
     private val files = object : ClipFileActions {
-        override suspend fun copy(clipId: String): Boolean { events += "copyFiles:$clipId"; return fileCopyWorks }
-        override suspend fun save(clipId: String): Boolean { events += "saveFiles:$clipId"; return fileSaveWorks }
-        override suspend fun share(clipId: String): Intent? { events += "shareFiles:$clipId"; return shareIntent }
+        override suspend fun copy(clip: ClipDto): Boolean { events += "copyFiles:${clip.id}"; return fileCopyWorks }
+        override suspend fun save(clip: ClipDto): Boolean { events += "saveFiles:${clip.id}"; return fileSaveWorks }
+        override suspend fun share(clip: ClipDto): Intent? { events += "shareFiles:${clip.id}"; return shareIntent }
     }
 
     @Before fun setUp() = Dispatchers.setMain(dispatcher)
@@ -594,6 +594,18 @@ class HistoryViewModelTest {
         vm.save(fileClip("f"))
         advanceUntilIdle()
         assertEquals(listOf<UiText>(UiText.Res(R.string.saved_to_downloads), UiText.Res(R.string.save_failed)), messages)
+    }
+
+    @Test
+    fun savingFilesThatCannotBeHadOfflineSaysTheyNeedAConnection() = runTest(dispatcher) {
+        fileSaveWorks = false
+        sync.value = SyncState.OFFLINE
+        val vm = collecting(vm(online = false))
+        val messages = messagesOf(vm)
+        vm.save(fileClip("f"))
+        advanceUntilIdle()
+        assertEquals(listOf("saveFiles:f"), events)
+        assertEquals(listOf<UiText>(UiText.Res(R.string.history_files_offline)), messages)
     }
 
     @Test

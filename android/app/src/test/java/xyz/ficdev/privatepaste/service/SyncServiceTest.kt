@@ -88,6 +88,27 @@ class SyncServiceTest {
     }
 
     @Test
+    fun aConnectAsksTheServerInfoAgain() {
+        app.signInTo(server)
+        val session = app.graph.current.value!!
+        assertEquals(listOf("text", "link", "image"), kotlinx.coroutines.runBlocking { session.serverInfo.get() }.kinds)
+
+        // The server is upgraded; the sync link connects (after a restart of the server, say) and asks again.
+        server.other = { r ->
+            if (r.path == "/api/server-info") {
+                FakeServer.json("""{"protocol":2,"kinds":["text","link","image","file"],"limits":{"textKb":1024,"imageMb":20,"fileMb":25}}""")
+            } else {
+                null
+            }
+        }
+        startService()
+        awaitUntil("connected") { app.uiDeps.syncState.value == SyncState.CONNECTED }
+        awaitUntil("the new kinds are seen") {
+            kotlinx.coroutines.runBlocking { session.serverInfo.get() }.kinds.contains("file")
+        }
+    }
+
+    @Test
     fun serviceWithoutSessionStopsItself() {
         val service = startService()
         assertNotNull(shadowOf(service).lastForegroundNotification)   // startForeground first, as the contract requires

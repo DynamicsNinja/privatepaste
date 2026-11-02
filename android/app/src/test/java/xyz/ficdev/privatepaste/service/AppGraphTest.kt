@@ -154,6 +154,15 @@ class AppGraphTest {
         assertTrue(java.io.File(app.cacheDir, "outgoing").listFiles().orEmpty().isEmpty())
     }
 
+    @Test
+    fun processStartDeletesTheCopiesOfASendThatWasKilled() {
+        val shareCopy = leftoverShareCopy()   // the process died mid-send; the graph isn't built yet
+
+        assertNotNull(app.graph)   // the next process start builds it
+
+        assertFalse("no plaintext copy outlives its send", shareCopy.exists())
+    }
+
     /** What ClipSender.readFiles leaves under cacheDir/outgoing when the share is cancelled before it is sent. */
     private fun leftoverShareCopy() =
         java.io.File(app.cacheDir, "outgoing/3f2a/0").apply { parentFile!!.mkdirs(); writeText("a plaintext file") }
