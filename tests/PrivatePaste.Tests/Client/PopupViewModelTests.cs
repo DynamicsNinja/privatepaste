@@ -479,6 +479,10 @@ public class PopupViewModelTests
         Assert.False(row.IsText || row.IsImage || row.IsLink || row.IsUnknown);
         Assert.Equal("report.pdf +2 more · 3.4 MB", row.Preview);
         Assert.Equal("one.txt · 12 B", PopupViewModel.FormatPreview(FileClip(1, 2, ("one.txt", 12))));
+        // Names come from another device: shown safe, so a newline or a path can't break the row (or the toast).
+        var hostile = FileClip(1, 3, ("../secret\nplan.pdf", 12));
+        Assert.Equal("secretplan.pdf · 12 B", PopupViewModel.FormatPreview(hostile));
+        Assert.Equal("secretplan.pdf · 12 B", PrivatePaste.Desktop.Tray.ClipToast.FormatPreview(hostile));
     }
 
     [Fact]
