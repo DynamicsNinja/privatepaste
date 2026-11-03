@@ -7,6 +7,14 @@ Everything the Partner Center form asks for, in the order of its pages, ready to
 Store copy rules: the listing must not name other browsers (developer policy 1.1.2), and must say that the extension
 needs other software, here a PrivatePaste server (policy 1.2.3).
 
+## Developer account (registration, once)
+
+| Field | Value |
+|---|---|
+| Account type | Individual |
+| Publisher display name | `Ivan Ficko` (shown on the listing) |
+| Contact email | `privacy@ficdev.xyz` (the privacy contact; the same address the privacy policy names) |
+
 ## Package (from the zip, read-only in the form)
 
 | Field | Value | Where it comes from |
@@ -77,6 +85,8 @@ user signs in to, which the user runs, and never to the developer.
 ```
 https://privatepaste.ficdev.xyz/privacy.html
 ```
+
+If the form asks for a privacy contact, it is `privacy@ficdev.xyz`.
 
 ## Store listing (English)
 
@@ -171,6 +181,6 @@ PrivatePaste is self-hosted: the extension syncs the clipboard through a Private
 Notes:
 - Permissions: clipboardRead/clipboardWrite to sync the clipboard; offscreen because the clipboard is read from an offscreen document (reason CLIPBOARD) once a second while Edge runs; alarms to re-create that document if it was closed; optional host permissions because the server address is only known at sign-in, and only that origin is requested.
 - lib/hash-wasm/argon2.umd.min.js is the unmodified hash-wasm 4.12.0 npm build (MIT) for Argon2id passphrase hashing; it embeds WebAssembly, hence 'wasm-unsafe-eval' in the CSP. No remote code.
-- The extension sends data only to the server the user signs in to; clips are end-to-end encrypted on the device before upload. Privacy policy: https://privatepaste.ficdev.xyz/privacy.html
+- The extension sends data only to the server the user signs in to; clips are end-to-end encrypted on the device before upload. Privacy policy: https://privatepaste.ficdev.xyz/privacy.html (privacy contact: privacy@ficdev.xyz)
 - To clean up: docker rm -f privatepaste-review
 ```

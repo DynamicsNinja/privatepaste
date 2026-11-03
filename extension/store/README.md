@@ -12,11 +12,12 @@ For the repository owner: everything needed to list the extension on
    not accepted for registering.
 2. The **Microsoft Edge Developer Account Registration** form opens (otherwise **Account settings > Programs >
    Microsoft Edge > Get started**).
-3. Pick the country, then **Individual** as the account type: its verification is short (the publisher name must be
+3. Pick the country, then **Individual** as the account type (the publisher is Ivan Ficko, not a company): its verification is short (the publisher name must be
    free). Company accounts take days to weeks and need a company approver. The account type and country can't be
    changed later.
-4. Publisher display name (at most 50 characters; shown on the listing), contact details, accept the App Developer
-   Agreement, **Finish**.
+4. Publisher display name `Ivan Ficko` (at most 50 characters; shown on the listing), contact email
+   `privacy@ficdev.xyz` (the privacy contact the privacy policy names), the rest of the contact details, accept the
+   App Developer Agreement, **Finish**.
 
 It is free: Edge Add-ons has no registration fee.
 
@@ -61,6 +62,7 @@ each page in the left column, with [listing.md](listing.md) open next to it:
 | | Are you using remote code? | No |
 | | Data usage | the boxes listed in listing.md, and all three certifications |
 | | Privacy policy URL | `https://privatepaste.ficdev.xyz/privacy.html` (live once the site is deployed from `main`) |
+| | Privacy contact (if asked) | `privacy@ficdev.xyz` |
 | Store listings > English > Edit details | Description | listing.md, "Description" |
 | | Extension logo | `images/store-logo-300.png` |
 | | Small promotional tile | `images/promo-small-440x280.png` |
