@@ -64,7 +64,7 @@ test('an error comes back as its message, never as a throw', async () => {
 test('a network failure says the server could not be reached', async () => {
   const engine = fakeEngine({ signIn: () => { throw new TypeError('Failed to fetch'); } });
   assert.deepEqual(await handleEngineMessage(engine, { type: 'engine.signIn', serverUrl: 'http://s' }),
-    { ok: false, error: "Couldn't reach the server. Check the address." });
+    { ok: false, error: "Can't reach the server." });
   const buggy = fakeEngine({ history: () => { throw new TypeError("Cannot read properties of undefined (reading 'x')"); } });
   assert.deepEqual(await handleEngineMessage(buggy, { type: 'engine.history' }),
     { ok: false, error: 'Something went wrong. Try again.' });

@@ -24,7 +24,7 @@
 
 import { toBase64 } from './core/base64.js';
 
-const UNREACHABLE = "Couldn't reach the server. Check the address.";
+const UNREACHABLE = "Can't reach the server.";   // the desktop app's text (SignInViewModel)
 const FAILED = 'Something went wrong. Try again.';
 export const URL_LIFETIME_MS = 60000;
 

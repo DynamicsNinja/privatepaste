@@ -45,7 +45,26 @@ export const MESSAGES = Object.freeze({
   signInFirst: 'Sign in to PrivatePaste first.',
   syncFailed: "Couldn't sync a clip after several tries.",
   queuedRejected: "A copy made offline couldn't be synced.",
+  // The desktop app's sign-in texts (SignInViewModel).
+  wrongPassword: 'Wrong name or password.',
+  rateLimited: 'Too many attempts. Wait a minute and try again.',
+  updateToSignIn: 'Update PrivatePaste to sign in.',
+  unreachable: "Can't reach the server.",
 });
+
+/**
+ * What a failed sign-in request says, as the desktop app maps it: no answer, a 5xx or anything that isn't a PrivatePaste
+ * server (a web page that isn't JSON) is "Can't reach the server.", never the raw error.
+ */
+function signInError(e, { infoRequest = false } = {}) {
+  if (!(e instanceof ApiError)) return new Error(MESSAGES.unreachable);
+  if (infoRequest && e.status === 404) return new Error(MESSAGES.serverTooOld);
+  if (e.status === 401) return new Error(MESSAGES.wrongPassword);
+  if (e.status === 429) return new Error(MESSAGES.rateLimited);
+  // Only a newer server rejects the request itself; its detail says what to do.
+  if (e.status === 400) return new Error(e.detail ?? MESSAGES.updateToSignIn);
+  return new Error(MESSAGES.unreachable);
+}
 
 export const DEFAULT_DEVICE_NAME = 'Edge';
 export const BACKOFF_MS = Object.freeze([1000, 2000, 5000, 10000, 30000]);
@@ -776,7 +795,8 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
 
     /**
      * Signs in as a new device (platform extension). Afterwards the status is `locked` (unlock next) or `noVault`.
-     * @throws {ApiError} with the server's detail as message (e.g. 'Wrong name or password.'); Error for a server too old.
+     * @throws {Error} with the text to show: an address the rule refuses (server-url.js), or a failed request
+     *   (signInError: 'Wrong name or password.', "Can't reach the server.", ...).
      */
     async signIn(serverUrl, username, password, deviceName) {
       const url = normalizeServerUrl(serverUrl);
@@ -785,11 +805,16 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
       try {
         info = await anonymous.serverInfo();
       } catch (e) {
-        if (e instanceof ApiError && e.status === 404) throw new Error(MESSAGES.serverTooOld);
-        throw e;
+        throw signInError(e, { infoRequest: true });
       }
       const name = String(deviceName ?? '').trim() || DEFAULT_DEVICE_NAME;
-      const { deviceId, token } = await anonymous.login(username, password, name);
+      let login;
+      try {
+        login = await anonymous.login(username, password, name);
+      } catch (e) {
+        throw signInError(e);
+      }
+      const { deviceId, token } = login;
       const previous = session;
       if (previous) {
         // A second sign-in replaces this device: revoke the old token rather than leave it valid on the server.

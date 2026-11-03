@@ -402,6 +402,29 @@ test('sign in, then unlock with the passphrase', async () => {
   assert.equal(vault.encKey.extractable, false);
 });
 
+test('a failed sign-in always says what failed, in the desktop app words', async () => {
+  const env = await setup({ signedIn: false, wrap: vectors.passphraseWrap[0].wrap });
+  await env.engine.start();
+  const failsWith = async (message, { infoError = null, loginError = null }) => {
+    env.server.infoError = infoError;
+    env.server.loginError = loginError;
+    await assert.rejects(() => env.engine.signIn(SERVER, 'owner', 'dev', 'Edge'), { message });
+    assert.equal(env.engine.status().state, 'signedOut');
+  };
+  await failsWith('Wrong name or password.', { loginError: new ApiError(401, 'Unauthorized', null) });
+  // The rate limiter answers 429 with no body.
+  await failsWith('Too many attempts. Wait a minute and try again.', { loginError: new ApiError(429, null, null) });
+  // Only a newer server rejects the request itself; its detail says what to do.
+  await failsWith('Update PrivatePaste to sign in.', { loginError: new ApiError(400, 'Bad Request', null) });
+  await failsWith('Use a newer app.', { loginError: new ApiError(400, 'Bad Request', 'Use a newer app.') });
+  await failsWith(MESSAGES.serverTooOld, { infoError: new ApiError(404, 'Not Found', null) });
+  // No answer, a proxy's 502, or a web page that isn't a PrivatePaste server.
+  await failsWith("Can't reach the server.", { infoError: new TypeError('Failed to fetch') });
+  await failsWith("Can't reach the server.", { infoError: new ApiError(502, null, null) });
+  await failsWith("Can't reach the server.", { infoError: new SyntaxError('Unexpected token \'<\', "<!doctype "... is not valid JSON') });
+  await failsWith("Can't reach the server.", { loginError: new TypeError('Failed to fetch') });
+});
+
 test('plain http is refused except for this computer, before anything is sent', async () => {
   const env = await setup({ signedIn: false, wrap: vectors.passphraseWrap[0].wrap });
   await env.engine.start();

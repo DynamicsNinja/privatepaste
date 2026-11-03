@@ -108,6 +108,7 @@ export function fakeServer({ wrap, now }) {
     tokens: new Set(),
     info: { protocol: 2, kinds: ['text', 'link', 'image', 'file'], limits: { textKb: 1024, imageMb: 20, fileMb: 25 } },
     infoError: null,
+    loginError: null,
     wrap,
     vaultError: null,
     isOwner: true,
@@ -137,6 +138,7 @@ export function fakeServer({ wrap, now }) {
       },
       async login(username, password, deviceName) {
         server.record('login', username, deviceName);
+        if (server.loginError) throw server.loginError;
         if (password !== 'dev') throw new ApiError(401, 'Unauthorized', 'Wrong name or password.');
         return { deviceId: 'dev-own', token: 'tok-new' };
       },
