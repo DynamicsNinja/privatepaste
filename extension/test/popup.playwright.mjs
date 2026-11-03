@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildFakeExtension, freePort, launchEdge, startServer } from './helpers/local.mjs';
+import { buildFakeExtension, freePort, launchEdge, startServer, waitFor } from './helpers/local.mjs';
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -42,6 +42,10 @@ if (/ficdev\.xyz/i.test(url)) throw new Error('Never run this against the live s
 buildFakeExtension(out);
 
 const ctx = await launchEdge(profile, out, { acceptDownloads: true });
+
+// Playwright's own wait for a page that closes before it commits (the toolbar popup closing itself, Edge closing at the
+// end) rejects with TargetClosedError where nobody awaits it; that's not a failure.
+process.on('unhandledRejection', e => { if (e?.name !== 'TargetClosedError') throw e; });
 
 let failed = false;
 try {
@@ -344,11 +348,26 @@ try {
     }
   }
   step('signed out, the toolbar popup brings the open sign-in tab forward instead of opening another');
-  const tabs = () => ctx.pages().filter(p => p.url().endsWith('/popup.html')).length;
+  // Asked through the extension's own APIs: Playwright reports every page as visible, whatever tab is in front.
+  const signInTabId = await popup.evaluate(async () => (await chrome.tabs.getCurrent()).id);
+  const tabs = () => sw.evaluate(async url =>
+    (await chrome.runtime.getContexts({ contextTypes: ['TAB'], documentUrls: [url] })).length,
+  `chrome-extension://${extensionId}/popup.html`);
+  const popups = () => sw.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ['POPUP'] })).length);
+  const inFront = () => sw.evaluate(async id => (await chrome.tabs.get(id)).active, signInTabId);
   await web.bringToFront();
+  await waitFor('the web tab in front', async () => !(await inFront()), 10000);
   assert.equal(await sw.evaluate(() => chrome.action.openPopup().then(() => 'opened', e => e.message)), 'opened');
-  await until(() => document.visibilityState === 'visible', undefined, 10000);
-  assert.equal(tabs(), 1);
+  // The toolbar popup has run once it brought the sign-in tab forward (with a new tab instead, this one stays behind),
+  // and it closes itself.
+  await waitFor('the sign-in tab in front', inFront, 10000);
+  await waitFor('the toolbar popup to close', async () => (await popups()) === 0, 10000);
+  // Nothing more opens afterwards: still exactly one sign-in tab, and it stays the one in front.
+  for (const end = Date.now() + 2000; Date.now() < end;) {
+    assert.equal(await tabs(), 1, 'one sign-in tab');
+    assert.equal(await inFront(), true, 'the open sign-in tab is in front');
+    await popup.waitForTimeout(200);
+  }
 
   assert.deepEqual(pageErrors, []);
   console.log('PASS');
@@ -356,8 +375,6 @@ try {
   failed = true;
   console.error(e);
 } finally {
-  // Closing Edge rejects Playwright's wait for a tab Edge opened on its own (TargetClosedError); that's not a failure.
-  process.on('unhandledRejection', e => { if (e?.name !== 'TargetClosedError') throw e; });
   await ctx.close().catch(() => {});
   await server?.stop().catch(() => {});
   rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
