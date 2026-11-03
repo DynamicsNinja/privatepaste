@@ -141,8 +141,8 @@ for (const pre of document.querySelectorAll("pre[data-copy]")) {
     pre.parentElement.querySelector(".code-head").append(button);
 }
 
-// Download buttons: release files carry the version in their names, so look up the newest desktop, Android and
-// extension releases (GitHub's release list, cached by this site's nginx as /releases.json) and link straight to the files.
+// Download buttons: release files carry the version in their names, so look up the newest desktop and Android
+// releases (GitHub's release list, cached by this site's nginx as /releases.json) and link straight to the files.
 // The links go through this site's /download/ (nginx fetches the file from GitHub), because a browser only
 // honours the download attribute on a same-origin link: a phone saves the file instead of opening GitHub.
 // Until that answers, or if it can't, they open the Releases page.
@@ -152,9 +152,8 @@ const assetFor = {
     "macos-x64": /-osx-x64\.zip$/,
     linux: /-linux-x64\.tar\.gz$/,
     android: /\.apk$/,
-    edge: /^privatepaste-extension-.*\.zip$/,
 };
-const tagFor = { windows: "desktop-v", macos: "desktop-v", "macos-x64": "desktop-v", linux: "desktop-v", android: "android-v", edge: "extension-v" };
+const tagFor = { windows: "desktop-v", macos: "desktop-v", "macos-x64": "desktop-v", linux: "desktop-v", android: "android-v" };
 
 // Hosted version sign-up: sent with fetch, so the answer shows under the form. The messages are the page's own
 // #notify-* paragraphs, which a plain form post (no JavaScript) comes back to. Missing consent or an address the

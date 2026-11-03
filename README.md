@@ -21,7 +21,7 @@
 <p align="center">
   <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=desktop-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=desktop-v*&label=desktop&style=flat-square&color=5B45D6" alt="Desktop release"></a>
   <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=android-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=android-v*&label=android&style=flat-square&color=5B45D6" alt="Android release"></a>
-  <a href="https://github.com/DynamicsNinja/privatepaste/releases?q=extension-v&expanded=true"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=extension-v*&label=edge%20extension&style=flat-square&color=5B45D6" alt="Edge extension release"></a>
+  <a href="https://microsoftedge.microsoft.com/addons/detail/privatepaste/ohocahginfedbcipoajciabkidmocdgf"><img src="https://img.shields.io/github/v/release/DynamicsNinja/privatepaste?filter=extension-v*&label=edge%20extension&style=flat-square&color=5B45D6" alt="Edge extension release"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20Edge-B7A5FF?style=flat-square" alt="Platforms: Windows, macOS, Linux, Android, Edge">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-B7A5FF?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/self--hosted-Docker-B7A5FF?style=flat-square&logo=docker&logoColor=white" alt="Self-hosted with Docker">
@@ -54,7 +54,7 @@
 | macOS | `osx-arm64` / `osx-x64` `.zip` | Apple Silicon and Intel. Not notarized yet. [Details](docs/desktop.md#macos-and-linux) |
 | Linux | `linux-x64.tar.gz` | Best on X11. [Details](docs/desktop.md#macos-and-linux) |
 | Android | `.apk` | Android 10 or newer, sideloaded. [Details](docs/android.md) |
-| Edge extension | Edge Add-ons (coming soon). For now, `privatepaste-extension-<version>.zip` from the newest `extension-v` [release](https://github.com/DynamicsNinja/privatepaste/releases) | Loaded unpacked in Edge (Developer mode) until the Edge Add-ons listing is live. Syncs while Edge runs. [Details](docs/extension.md) |
+| Edge extension | [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/privatepaste/ohocahginfedbcipoajciabkidmocdgf). Also `privatepaste-extension-<version>.zip` from the newest `extension-v` [release](https://github.com/DynamicsNinja/privatepaste/releases), to load unpacked | Install from Edge Add-ons; updates arrive on their own. Syncs while Edge runs. [Details](docs/extension.md) |
 | Web | Built into the server | Any modern browser. |
 
 ## Quick start
@@ -125,7 +125,7 @@ Each device signs in with a person's name and password once and gets its own dev
 | [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, end-to-end encryption and its reset, backups, clearing history and auto-delete, proxies, local development |
 | [Desktop app](docs/desktop.md) | Install, upgrade, unlocking, adding a device, hotkey, the type filter, pause, pinned clips, copying and saving files, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
 | [Android app](docs/android.md) | Install, unlocking by passphrase or code, adding a device, sharing and receiving files, the type filter, pinned clips, background delivery, battery settings by phone maker, building and releasing |
-| [Edge extension](docs/extension.md) | Install (Load unpacked; Edge Add-ons coming soon), signing in and unlocking, what it syncs and what it can't (password managers, Explorer files, only while Edge runs), the store listing, building and releasing |
+| [Edge extension](docs/extension.md) | Install (Edge Add-ons, or load unpacked), signing in and unlocking, what it syncs and what it can't (password managers, Explorer files, only while Edge runs), the store listing, building and releasing |
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules, end-to-end encryption formats and test vectors, and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 
