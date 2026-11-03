@@ -31,6 +31,7 @@ import { ApiError, isTransient } from './api.js';
 import { inspectLocal, sealLocal, decodeClip, DEFAULT_LIMITS, KNOWN_KINDS, contentHashText, contentHashPixels } from './codec.js';
 import { pngToRgba } from './image.js';
 import { normalizeServerUrl } from './server-url.js';
+import { CACHE_CAPACITY } from './store.js';
 import { unwrapWithPassphrase, WrongPassphraseError, encryptBlob, decryptBlob, openSmall } from '../js/e2e.js';
 
 export const MESSAGES = Object.freeze({
@@ -896,7 +897,10 @@ export function createEngine({ api: makeApi, store, clipboard, clock, WebSocket,
         const clips = pinned
           ? cache.filter(c => c.pinnedAt).sort((a, b) => time(b.pinnedAt) - time(a.pinnedAt) || b.seq - a.seq)
           : cache;
-        return { rows: await toRows(clips, query), nextCursor: SERVER_CURSOR };
+        // The cache is filled by a full catch-up and keeps the newest CACHE_CAPACITY clips plus every pinned one, so
+        // below the capacity (and always for the pinned tab) it already holds the server's whole history.
+        const mayHaveOlder = !pinned && cache.length >= CACHE_CAPACITY;
+        return { rows: await toRows(clips, query), nextCursor: mayHaveOlder ? SERVER_CURSOR : null };
       }
       if (!cursor.startsWith(SERVER_CURSOR)) throw new Error('Unknown history cursor.');
       const page = await currentApi().clips({ cursor: cursor.slice(SERVER_CURSOR.length) || undefined, limit: 50, pinned });

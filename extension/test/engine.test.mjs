@@ -6,7 +6,7 @@ import { fakeClock, fakeClipboard, fakeSockets, fakeServer, settle, until } from
 
 const e2e = await import('../../src/PrivatePaste.Server/wwwroot/js/e2e.js');
 const { createEngine, MESSAGES, BACKOFF_MS, POLL_MS } = await import('../src/core/engine.js');
-const { openStore, memoryBackend } = await import('../src/core/store.js');
+const { openStore, memoryBackend, CACHE_CAPACITY } = await import('../src/core/store.js');
 const { ApiError } = await import('../src/core/api.js');
 const { encodePng } = await import('../src/core/image.js');
 
@@ -486,11 +486,27 @@ test('history decrypts rows, filters and pages through older clips', async () =>
   assert.deepEqual((await env.engine.history({ pinned: true })).rows.map(r => r.id), ['p']);
 
   env.server.pages.push({ items: [await clip({ id: 'a', seq: 1, at: 1000 }), await clip({ id: 'old', seq: 0, at: 500, text: 'older beta' })], nextCursor: 'c2' });
-  const older = await env.engine.history({ cursor: all.nextCursor, query: 'beta' });
+  const older = await env.engine.history({ cursor: 'server:', query: 'beta' });
   assert.deepEqual(older.rows.map(r => r.id), ['old']);
   assert.equal(older.nextCursor, 'server:c2');
   assert.equal(await env.engine.copy('old'), true);
   assert.deepEqual(env.clipboard.written, ['older beta']);
+});
+
+test('history offers older clips only when the cache may not hold the whole history', async () => {
+  // The cache keeps the newest CACHE_CAPACITY clips plus every pinned one, filled from the full catch-up: below the
+  // capacity it already holds everything the server has, so "Load more" would only fetch what is shown.
+  const env = await setup();
+  await connected(env);
+  await env.store.putClips([await clip({ id: 'a', seq: 1, at: 1000 })]);
+  assert.equal((await env.engine.history()).nextCursor, null);
+  assert.equal((await env.engine.history({ pinned: true })).nextCursor, null, 'every pinned clip is cached');
+
+  const many = [];
+  for (let i = 0; i < CACHE_CAPACITY; i++) many.push(await clip({ id: `c${i}`, seq: 10 + i, at: 10_000 + i }));
+  await env.store.putClips(many);
+  assert.equal((await env.engine.history()).nextCursor, 'server:');
+  assert.equal((await env.engine.history({ pinned: true })).nextCursor, null);
 });
 
 test('history rows of images carry the decrypted thumbnail', async () => {
