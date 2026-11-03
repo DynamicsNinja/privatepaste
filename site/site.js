@@ -156,6 +156,49 @@ const assetFor = {
 };
 const tagFor = { windows: "desktop-v", macos: "desktop-v", "macos-x64": "desktop-v", linux: "desktop-v", android: "android-v", edge: "extension-v" };
 
+// Hosted version sign-up: sent with fetch, so the answer shows under the form. The messages are the page's own
+// #notify-* paragraphs, which a plain form post (no JavaScript) comes back to. Missing consent or an address the
+// browser already rejects is answered here, without spending one of the server's few tries a minute.
+const notifyForm = document.querySelector("form.notify");
+if (notifyForm) {
+    const status = notifyForm.querySelector(".notify-status");
+    const submit = notifyForm.querySelector('button[type="submit"]');
+    const email = notifyForm.elements.email;
+    const consent = notifyForm.elements.consent;
+    notifyForm.noValidate = true;
+
+    const show = (result) => {
+        const message = document.getElementById(`notify-${result}`) ?? document.getElementById("notify-failed");
+        status.className = `notify-status ${result === "ok" ? "ok" : "error"}`;
+        status.textContent = message.textContent;
+        if (result === "invalid-email") email.focus();
+        if (result === "no-consent") consent.focus();
+    };
+
+    notifyForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        notifyForm.classList.add("sent");
+        status.textContent = "";
+        if (!email.value.trim() || !email.checkValidity()) return show("invalid-email");
+        if (!consent.checked) return show("no-consent");
+        submit.disabled = true;
+        let result = "failed";
+        try {
+            const response = await fetch(notifyForm.action, {
+                method: "POST",
+                headers: { Accept: "application/json" },
+                body: new URLSearchParams(new FormData(notifyForm)),
+            });
+            result = (await response.json()).result ?? "failed";
+        } catch {
+            // Offline, or an answer that isn't the handler's JSON.
+        }
+        submit.disabled = false;
+        if (result === "ok") notifyForm.reset();
+        show(result);
+    });
+}
+
 fetch("/releases.json")
     .then((response) => (response.ok ? response.json() : []))
     .then((releases) => {

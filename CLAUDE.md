@@ -14,7 +14,7 @@ Self-hosted clipboard sync: an ASP.NET Core server with a web UI, an Avalonia de
 | `tests/PrivatePaste.Tests` | xUnit tests for all .NET projects, including headless Avalonia renders (`Client/DesktopRenderTests.cs`). |
 | `android/` | Gradle project, package `xyz.ficdev.privatepaste` (`api`, `sync`, `service`, `clipboard`, `send`, `storage`, `ui`). Port of the desktop sync engine. |
 | `installer/PrivatePaste.wxs` | Per-user WiX MSI. Dialogs in `PrivatePasteUI.wxs` (Night vault copies of the WixUI dialogs), artwork in `art/` (`scripts/make-installer-art.ps1`), UI preview MSI in `preview/`. |
-| `site/` | Product homepage (https://privatepaste.ficdev.xyz): static page on nginx (`site/Dockerfile`, built from the repo root). Images come from `scripts/make-site-images.py`; the server version on the page is filled in at build from `deploy/dokploy/privatepaste/docker-compose.yml`. |
+| `site/` | Product homepage (https://privatepaste.ficdev.xyz): static page on nginx (`site/Dockerfile`, built from the repo root). Images come from `scripts/make-site-images.py`; the server version on the page is filled in at build from `deploy/dokploy/privatepaste/docker-compose.yml`. The hosted-version sign-up (`POST /notify`) runs in nginx's njs (`site/njs/notify.js`, tests `node --test "site/test/*.test.mjs"`) and keeps emails on the `/data/signups` volume: personal data, never in the repo (`site/README.md`). |
 | `branding/` | Logo, lockups, app icon, platform icons, brand guide. |
 | `scripts/` | Publish, installer, Android keystore, lockup and README-image scripts. |
 

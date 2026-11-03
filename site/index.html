@@ -455,6 +455,39 @@ networks:
             </details>
         </div>
     </section>
+
+    <!-- A plain form post to /notify (nginx + njs/notify.js), which comes back here with #notify-<result>; style.css
+         shows the matching message with :target. site.js sends it with fetch instead and shows the result in place. -->
+    <section class="wrap" id="hosted">
+        <div class="hosted">
+            <div>
+                <h2>Want a hosted version?</h2>
+                <p class="lead">We're considering running PrivatePaste for you, end-to-end encrypted, for a few euros a month. Leave your email and we'll tell you if it happens.</p>
+            </div>
+            <form class="notify" action="/notify" method="post">
+                <label class="field-label" for="notify-email">Email</label>
+                <div class="notify-row">
+                    <input id="notify-email" name="email" type="email" required maxlength="254" autocomplete="email" spellcheck="false" placeholder="you@example.com">
+                    <button class="btn primary" type="submit">Notify me</button>
+                </div>
+                <label class="consent">
+                    <input type="checkbox" name="consent" value="yes" required>
+                    <span>Email me once about a hosted PrivatePaste. You can ask for your address to be deleted any time.</span>
+                </label>
+                <!-- Left empty by people; a bot that fills it in hears "ok" and nothing is kept. -->
+                <div class="trap" aria-hidden="true">
+                    <label>Leave this empty <input name="website" tabindex="-1" autocomplete="off"></label>
+                </div>
+                <p class="notify-status" role="status"></p>
+                <p class="notify-msg ok" id="notify-ok">Thanks, we'll let you know.</p>
+                <p class="notify-msg error" id="notify-invalid-email">That doesn't look like an email address. Check it and try again.</p>
+                <p class="notify-msg error" id="notify-no-consent">Tick the box so we can email you.</p>
+                <p class="notify-msg error" id="notify-too-many">Too many tries. Wait a minute and try again.</p>
+                <p class="notify-msg error" id="notify-failed">Your address couldn't be saved. Try again later.</p>
+                <p class="fine">Kept on our own server and shared with no one. See the <a href="/privacy.html#hosted-sign-up">privacy policy</a>.</p>
+            </form>
+        </div>
+    </section>
 </main>
 
 <footer class="wrap bottom">

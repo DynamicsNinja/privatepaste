@@ -16,3 +16,6 @@ scripts/readme/out/
 scripts/readme/node_modules/
 extension/dist/
 extension/store/out/
+# The homepage's hosted-version sign-up list is personal data (site/README.md): never in the repo.
+hosted*.jsonl
+hosted-emails*.txt
