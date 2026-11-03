@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy policy: PrivatePaste</title>
+    <meta name="description" content="What the PrivatePaste apps, the Edge extension and this website do with your data: clips go only to the server you sign in to, end-to-end encrypted, with no analytics or tracking.">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#15122B" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#F6F4FD" media="(prefers-color-scheme: light)">
+    <link rel="canonical" href="https://privatepaste.ficdev.xyz/privacy.html">
+    <link rel="icon" href="/favicon.ico" sizes="32x32">
+    <link rel="icon" href="/logo.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="preload" href="/fonts/sora-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<!-- No site.js here: this page has no menu, tabs or carousel. -->
+<header class="bar">
+<div class="wrap top">
+    <a class="brand" href="/" aria-label="PrivatePaste home">
+        <img src="/logo.svg" width="32" height="32" alt="">
+        <span class="word">private<span>paste</span></span>
+    </a>
+    <a class="home" href="/">Home</a>
+</div>
+</header>
+
+<main class="wrap policy">
+    <h1>Privacy policy</h1>
+    <p class="lead">Last updated 3 November 2026. This covers the PrivatePaste Edge extension, the desktop app (Windows, macOS, Linux), the Android app, the web app built into the server, and this website.</p>
+
+    <section class="summary" aria-label="In short">
+        <ul>
+            <li><b>Your data goes only to your server.</b> The apps and the extension send data only to the PrivatePaste server you sign in to, which you or someone you trust runs.</li>
+            <li><b>Encrypted before it leaves.</b> Clips are end-to-end encrypted on your device. The server stores them without being able to read them.</li>
+            <li><b>Nothing goes to the developer.</b> The developer runs no service that receives your clips, account or usage.</li>
+            <li><b>No analytics or tracking.</b> No telemetry, ads, crash reporting or third-party requests.</li>
+        </ul>
+    </section>
+
+    <h2>Who handles your data</h2>
+    <p>PrivatePaste is open-source software that you run yourself. Every device signs in to a PrivatePaste server whose address you enter. Whoever runs that server (you, or someone you share it with) holds the data stored on it. The developer of PrivatePaste does not run your server, has no access to it, and receives nothing from the apps.</p>
+
+    <h2>What the Edge extension handles</h2>
+    <ul>
+        <li><b>What you copy.</b> While you are signed in, unlocked and not paused, the extension reads the clipboard about once a second while Edge is running. When the text or image on it changes, it encrypts the new copy and sends it to your server. Files copied in a file manager are not read.</li>
+        <li><b>Clips from your other devices.</b> It receives them from your server, decrypts them, puts text and links on the clipboard, and keeps images and files in its history for you to copy or download.</li>
+        <li><b>Your sign-in.</b> The server address, your name, your password and a device name you choose. The password is sent once, to your server only, to sign in; it is not stored. Your server then gives the extension its own device token.</li>
+        <li><b>Your passphrase.</b> Used on the device to unlock the encryption key. It is never sent anywhere and not stored.</li>
+    </ul>
+    <p>Copies from password managers sync too, because the extension can't tell them apart from other copies. They are encrypted like every clip. Use <b>Pause syncing</b> before copying a secret if you don't want it in your history.</p>
+
+    <h2>End-to-end encryption</h2>
+    <p>Each clip, including its text, image, file names and file contents, is encrypted on your device (AES-256-GCM) with a key that is unlocked by your passphrase before it leaves the device. The server stores only ciphertext. It still sees some details about each clip: who copied it, from which device and platform, when, its kind (text, link, image or file), its size, and whether it is pinned.</p>
+
+    <h2>What is stored on your device</h2>
+    <ul>
+        <li><b>Edge extension:</b> the device token, the encryption key (kept so that it can't be exported, not even by the extension), settings, a cache of the history and copies not yet sent, all in your Edge profile. Like any browser data they are only as safe as your computer account.</li>
+        <li><b>Desktop app:</b> settings, an encrypted cache of the latest clips, received files and logs, with the device token and the encryption key protected by the operating system (Windows Data Protection, the macOS keychain, or the Linux Secret Service).</li>
+        <li><b>Android app:</b> settings, the history and downloaded files in the app's storage, with the device token and the encryption key protected by a key kept in the Android Keystore.</li>
+    </ul>
+    <p>Logs stay on the device and are not sent anywhere.</p>
+
+    <h2>Deleting your data</h2>
+    <ul>
+        <li><b>Sign out</b> in the extension and it deletes the device token, the encryption key, the cached history and unsent copies from your Edge profile. Removing the extension deletes them too. Signing out of the desktop or Android app removes the encryption key and the sign-in from that device.</li>
+        <li>The same happens when the device is signed out from the server's <b>People</b> page.</li>
+        <li>Clips on the server stay until they are deleted. The server's owner can delete clips, clear the history or turn on auto-delete after 7, 30 or 90 days (pinned clips are kept).</li>
+    </ul>
+
+    <h2>Extension permissions</h2>
+    <ul>
+        <li><b>Read and modify the clipboard</b> (<code>clipboardRead</code>, <code>clipboardWrite</code>): to send what you copy and put clips from your other devices on the clipboard.</li>
+        <li><b>Offscreen document</b> (<code>offscreen</code>): a hidden page where the clipboard can be read and the sync keeps running while Edge is open.</li>
+        <li><b>Alarms</b> (<code>alarms</code>): a one-minute timer that restarts that page if Edge has stopped it.</li>
+        <li><b>Access to your server's address</b> (optional host permission): asked for when you sign in, for that one server only.</li>
+    </ul>
+
+    <h2>Sharing</h2>
+    <p>Your data is never sold, shared with advertisers or data brokers, or used for anything other than syncing your clipboard. People who share your server see the shared history, by design.</p>
+
+    <h2>This website</h2>
+    <p>This site sets no cookies and runs no analytics. To show the latest release and serve downloads, the site's server fetches them from GitHub; your browser does not contact GitHub for that. The site's hosting may keep standard web server logs (IP address, page and time) for operating it.</p>
+
+    <h2>Children</h2>
+    <p>PrivatePaste is not directed at children under 13.</p>
+
+    <h2>Changes and contact</h2>
+    <p>Changes to this policy are published on this page with a new date. Questions: open an issue on <a href="https://github.com/DynamicsNinja/privatepaste/issues">GitHub</a>.</p>
+</main>
+
+<footer class="wrap bottom">
+    <span>Open source under the MIT licence</span>
+    <a href="https://github.com/DynamicsNinja/privatepaste">GitHub</a>
+    <a href="https://github.com/DynamicsNinja/privatepaste/blob/main/docs/self-hosting.md">Self-hosting guide</a>
+    <a href="https://github.com/DynamicsNinja/privatepaste#code-signing">Code signing</a>
+    <a href="https://github.com/DynamicsNinja/privatepaste/releases">All releases</a>
+    <a href="/privacy.html">Privacy</a>
+</footer>
+</body>
+</html>

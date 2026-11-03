@@ -1,0 +1,73 @@
+<!doctype html>
+<!-- The store images, drawn by make-images.mjs: ?kind=shot (1280x800 screenshot with a caption), tile-small (440x280),
+     tile-large (1400x560) or logo (300x300). Popup shots come from out/ and are 2x renders of the real popup. -->
+<html lang="en"><head><meta charset="utf-8"><style>
+@font-face { font-family: "Sora"; src: url("../../src/PrivatePaste.Server/wwwroot/fonts/sora-latin.woff2") format("woff2"); font-weight: 100 800; }
+:root { --night: #15122B; --surface: #1D1838; --line: #2E2756; --text: #E9E6F7; --muted: #9A94BD; --accent: #B7A5FF; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font-family: "Sora", "Segoe UI", system-ui, sans-serif; color: var(--text); -webkit-font-smoothing: antialiased; }
+.stage { position: relative; overflow: hidden; background: radial-gradient(70% 90% at 72% 45%, rgba(183, 165, 255, .20), transparent 70%), var(--night); }
+/* A faint keyhole pattern would compete with the popup; a single soft glow is the Night vault look. */
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand img { display: block; }
+.word { font-weight: 600; letter-spacing: -.3px; }
+.word span { color: var(--accent); font-weight: 300; }
+.pop { border-radius: 16px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0, 0, 0, .5), 0 0 0 1px rgba(183, 165, 255, .08); }
+.pop img { display: block; }
+
+/* 1280x800 screenshot */
+.shot { width: 1280px; height: 800px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 64px; padding: 0 96px 0 96px; }
+.shot .brand img { width: 44px; height: 44px; }
+.shot .word { font-size: 26px; }
+.shot h1 { font-size: 46px; line-height: 1.15; letter-spacing: -1px; margin: 44px 0 18px; font-weight: 600; }
+.shot p { font-size: 20px; line-height: 1.55; color: var(--muted); margin: 0; max-width: 470px; }
+
+/* 440x280 small tile */
+.small { width: 440px; height: 280px; display: flex; flex-direction: column; justify-content: center; padding: 0 40px; }
+.small .brand img { width: 56px; height: 56px; }
+.small .word { font-size: 32px; }
+.small p { font-size: 17px; line-height: 1.45; color: var(--muted); margin: 22px 0 0; }
+.small p b { color: var(--text); font-weight: 600; }
+
+/* 1400x560 large tile */
+.large { width: 1400px; height: 560px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 40px; padding: 0 110px 0 110px; }
+.large .brand img { width: 60px; height: 60px; }
+.large .word { font-size: 36px; }
+.large h1 { font-size: 44px; line-height: 1.15; letter-spacing: -1px; margin: 36px 0 16px; font-weight: 600; }
+.large p { font-size: 21px; color: var(--muted); margin: 0; max-width: 560px; line-height: 1.5; }
+/* The popup runs off the bottom edge, like a window that continues below. */
+.large .pop { align-self: start; margin-top: 64px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+
+/* 300x300 store logo: the extension's own logo, transparent around its rounded tile. */
+.logo { width: 300px; height: 300px; display: grid; place-items: center; }
+.logo img { width: 300px; height: 300px; display: block; }
+</style></head><body>
+<script>
+const q = new URLSearchParams(location.search);
+const kind = q.get('kind');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const brand = '<div class="brand"><img src="../../branding/logo.svg" alt=""><span class="word">private<span>paste</span></span></div>';
+// The popup is drawn at a fixed scale so all screenshots match; a tall view is scaled down to fit.
+const pop = (src, scale, maxHeight) =>
+  `<div class="pop"><img src="out/${esc(src)}" style="width:${380 * scale}px;${maxHeight ? `max-height:${maxHeight}px;object-fit:cover;object-position:top` : ''}" onload="fit(this, ${maxHeight || 0})"></div>`;
+function fit(img, maxHeight) {
+  // out/ shots are 2x; keep the aspect ratio, and when a view is taller than the frame, shrink it instead of cropping.
+  const natural = img.naturalHeight / img.naturalWidth * img.getBoundingClientRect().width;
+  if (kind === 'shot' && natural > 700) img.style.width = `${380 * 1.25 * 700 / natural}px`;
+  document.body.dataset.ready = '1';
+}
+let html;
+if (kind === 'shot') {
+  html = `<div class="stage shot"><div>${brand}<h1>${esc(q.get('title'))}</h1><p>${esc(q.get('sub'))}</p></div>${pop(q.get('src'), 1.25)}</div>`;
+} else if (kind === 'tile-small') {
+  html = `<div class="stage small">${brand}<p><b>Your clipboard on every device.</b><br>Self-hosted and end-to-end encrypted.</p></div>`;
+} else if (kind === 'tile-large') {
+  html = `<div class="stage large"><div>${brand}<h1>Your clipboard on every device</h1><p>Copy on your laptop, paste in Edge. Synced through your own PrivatePaste server, end-to-end encrypted.</p></div>${pop(q.get('src'), 1.2, 496)}</div>`;
+} else {
+  html = '<div class="logo"><img src="../../branding/logo.svg" alt=""></div>';
+}
+document.body.innerHTML = html;
+if (!document.querySelector('.pop')) document.body.dataset.ready = '1';
+</script>
+</body></html>

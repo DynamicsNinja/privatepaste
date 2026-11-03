@@ -303,3 +303,16 @@ h2 { font-size: clamp(24px, 3vw, 30px); letter-spacing: -.4px; margin: 0 0 6px; 
     .top nav a { font-size: 16px; color: var(--text); padding: 12px 14px; border-radius: 10px; }
     .top nav a:hover { background: var(--accent-soft); color: var(--accent); }
 }
+
+/* Privacy policy page: one column of text under the same top bar, with a plain link home instead of the menu. */
+.top .home { margin-left: auto; color: var(--muted); text-decoration: none; font-size: 14px; padding: 6px 12px; border-radius: 99px; }
+.top .home:hover { color: var(--accent); background: var(--accent-soft); }
+.policy { max-width: 760px; padding-top: 40px; }
+.policy h1 { font-size: clamp(30px, 4.4vw, 42px); line-height: 1.15; letter-spacing: -.6px; margin: 0 0 10px; }
+.policy h2 { font-size: 20px; letter-spacing: -.2px; margin: 40px 0 8px; }
+.policy p, .policy li { color: var(--muted); font-size: 15px; }
+.policy b { color: var(--text); font-weight: 600; }
+.policy ul { padding-left: 20px; margin: 0; }
+.policy li { margin: 6px 0; }
+.summary { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 20px; }
+.summary li b { display: block; }

@@ -27,6 +27,24 @@ test('build writes the manifest with the given version, permissions and CSP', t 
   assert.equal(manifest.background.service_worker, 'sw.js');
 });
 
+// What the Edge Add-ons (and Chrome Web Store) review checks in the zip: see extension/store/README.md.
+test('the release manifest stays within the store rules', t => {
+  const out = build('--version', '0.6.2');
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'));
+  // The store shows the description as the short description: at most 132 characters.
+  assert.ok(manifest.description.length > 0 && manifest.description.length <= 132, manifest.description);
+  // The listing must not name other browsers.
+  assert.doesNotMatch(`${manifest.name} ${manifest.description}`, /chrome|firefox|safari|opera/i);
+  assert.ok(existsSync(join(out, manifest.icons['128'])), '128px icon');
+  // Server access is asked for at sign-in, for one origin; nothing is granted at install.
+  assert.equal(manifest.host_permissions, undefined);
+  // No remote code: scripts only from the package (and the embedded Argon2 WebAssembly).
+  assert.equal(manifest.content_security_policy.extension_pages.match(/script-src ([^;]*)/)[1], "'self' 'wasm-unsafe-eval'");
+  // The zip is the build folder as is, so nothing test-only may be in it.
+  assert.equal(existsSync(join(out, 'platform', 'fake-clipboard.js')), false);
+});
+
 test('a prerelease version keeps the numbers in version and the full tag in version_name', t => {
   const out = build('--version', '0.6.0-rc1');
   t.after(() => rmSync(out, { recursive: true, force: true }));

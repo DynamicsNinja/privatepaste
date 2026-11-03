@@ -73,3 +73,5 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
 ## Release
 
 For the repository owner: push a tag such as `extension-v0.1.0`. `.github/workflows/extension.yml` runs the tests, builds with the version from the tag, zips the result as `privatepaste-extension-<version>.zip` and attaches it to a GitHub Release (a version with a `-`, like `0.2.0-rc1`, becomes a prerelease).
+
+Edge Add-ons: that zip is what gets uploaded to Partner Center. The listing texts, the images (`store/make-images.mjs`) and the step-by-step for submitting and updating are in `store/` (start with `store/README.md`).

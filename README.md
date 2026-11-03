@@ -54,7 +54,7 @@
 | macOS | `osx-arm64` / `osx-x64` `.zip` | Apple Silicon and Intel. Not notarized yet. [Details](docs/desktop.md#macos-and-linux) |
 | Linux | `linux-x64.tar.gz` | Best on X11. [Details](docs/desktop.md#macos-and-linux) |
 | Android | `.apk` | Android 10 or newer, sideloaded. [Details](docs/android.md) |
-| Edge extension | `privatepaste-extension-<version>.zip` from the newest `extension-v` [release](https://github.com/DynamicsNinja/privatepaste/releases) | Loaded unpacked in Edge (Developer mode). Syncs while Edge runs. [Details](docs/extension.md) |
+| Edge extension | Edge Add-ons (coming soon). For now, `privatepaste-extension-<version>.zip` from the newest `extension-v` [release](https://github.com/DynamicsNinja/privatepaste/releases) | Loaded unpacked in Edge (Developer mode) until the Edge Add-ons listing is live. Syncs while Edge runs. [Details](docs/extension.md) |
 | Web | Built into the server | Any modern browser. |
 
 ## Quick start
@@ -125,7 +125,7 @@ Each device signs in with a person's name and password once and gets its own dev
 | [Self-hosting](docs/self-hosting.md) | Environment variables, keys, people and passwords, end-to-end encryption and its reset, backups, clearing history and auto-delete, proxies, local development |
 | [Desktop app](docs/desktop.md) | Install, upgrade, unlocking, adding a device, hotkey, the type filter, pause, pinned clips, copying and saving files, private copies and the app blocklist, uninstall, building from source; macOS and Linux notes |
 | [Android app](docs/android.md) | Install, unlocking by passphrase or code, adding a device, sharing and receiving files, the type filter, pinned clips, background delivery, battery settings by phone maker, building and releasing |
-| [Edge extension](docs/extension.md) | Install (Load unpacked), signing in and unlocking, what it syncs and what it can't (password managers, Explorer files, only while Edge runs), the store listing sentence, building and releasing |
+| [Edge extension](docs/extension.md) | Install (Load unpacked; Edge Add-ons coming soon), signing in and unlocking, what it syncs and what it can't (password managers, Explorer files, only while Edge runs), the store listing, building and releasing |
 | [API reference](docs/api.md) | Endpoints, WebSocket messages, client rules, end-to-end encryption formats and test vectors, and the content hash, for writing your own client |
 | [Branding](branding/README.md) | Logo, colors and type |
 
@@ -133,7 +133,7 @@ Each device signs in with a person's name and password once and gets its own dev
 
 The Windows app and installer are not code-signed yet, so Windows SmartScreen asks before running them the first time: click **More info**, then **Run anyway** (details in [Desktop app](docs/desktop.md)). The macOS build isn't notarized either. Download the apps only from this repository's [Releases](https://github.com/DynamicsNinja/privatepaste/releases), where GitHub Actions builds them from this source.
 
-PrivatePaste sends data only to the PrivatePaste server you enter when you sign in, which you or someone you trust runs. It sends nothing to the authors or to any other system.
+PrivatePaste sends data only to the PrivatePaste server you enter when you sign in, which you or someone you trust runs. It sends nothing to the authors or to any other system. Details are in the [privacy policy](https://privatepaste.ficdev.xyz/privacy.html).
 
 ## Built with
 
