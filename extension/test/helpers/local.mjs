@@ -90,9 +90,17 @@ export function buildFakeExtension(out) {
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 }
 
-/** Headed Edge on the profile `profile` with only the extension in `out` loaded. */
+/**
+ * The browser the real-browser checks run in: Edge by default; PP_BROWSER=chrome for an installed Chrome, or
+ * PP_BROWSER=chromium for Playwright's bundled Chromium (Chrome's open-source core, for machines without Chrome).
+ */
+export const browserChannel = { chrome: 'chrome', chromium: 'chromium' }[process.env.PP_BROWSER] ?? 'msedge';
+/** The default device name the extension picks in that browser (src/core/browser.js); plain Chromium has no brand. */
+export const browserDeviceName = { chrome: 'Chrome', chromium: 'Browser' }[browserChannel] ?? 'Edge';
+
+/** Headed Edge (or Chrome, see browserChannel) on the profile `profile` with only the extension in `out` loaded. */
 export const launchEdge = (profile, out, options = {}) => chromium.launchPersistentContext(profile, {
-  channel: 'msedge',
+  channel: browserChannel,
   headless: false,
   args: [`--disable-extensions-except=${out}`, `--load-extension=${out}`],
   ...options,

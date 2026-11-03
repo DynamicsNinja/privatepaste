@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { fakeClock, fakeClipboard, fakeSockets, fakeServer, settle, until } from './support/fakes.mjs';
 
 const e2e = await import('../../src/PrivatePaste.Server/wwwroot/js/e2e.js');
-const { createEngine, MESSAGES, BACKOFF_MS, POLL_MS } = await import('../src/core/engine.js');
+const { createEngine, MESSAGES, BACKOFF_MS, POLL_MS, DEFAULT_DEVICE_NAME } = await import('../src/core/engine.js');
 const { openStore, memoryBackend, CACHE_CAPACITY } = await import('../src/core/store.js');
 const { ApiError } = await import('../src/core/api.js');
 const { encodePng } = await import('../src/core/image.js');
@@ -390,9 +390,9 @@ test('sign in, then unlock with the passphrase', async () => {
   await assert.rejects(() => env.engine.signIn(SERVER, 'owner', 'wrong', 'Edge'), /Wrong name or password\./);
   const s = await env.engine.signIn(`${SERVER}/`, 'owner', 'dev', '');
   assert.equal(s.state, 'locked');
-  assert.equal(s.deviceName, 'Edge');
+  assert.equal(s.deviceName, DEFAULT_DEVICE_NAME);   // the browser's own name ("Browser" under Node)
   assert.deepEqual(env.server.calls.find(c => c.name === 'login').args, ['owner', 'Edge']);
-  assert.deepEqual(await env.store.getSession(), { serverUrl: SERVER, token: 'tok-new', deviceId: OWN, deviceName: 'Edge' });
+  assert.deepEqual(await env.store.getSession(), { serverUrl: SERVER, token: 'tok-new', deviceId: OWN, deviceName: DEFAULT_DEVICE_NAME });
 
   await assert.rejects(() => env.engine.unlock('not the passphrase'), { message: MESSAGES.wrongPassphrase });
   await env.engine.unlock(wrapCase.passphrase);

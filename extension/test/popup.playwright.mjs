@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildFakeExtension, freePort, launchEdge, startServer, waitFor } from './helpers/local.mjs';
+import { browserDeviceName, buildFakeExtension, freePort, launchEdge, startServer, waitFor } from './helpers/local.mjs';
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -179,7 +179,7 @@ try {
   const pageErrors = [];
   popup.on('pageerror', e => pageErrors.push(e.message));
   await popup.waitForSelector('#view-signin:not([hidden])', { timeout: 15000 });
-  assert.equal(await popup.inputValue('#device-name'), 'Edge');
+  assert.equal(await popup.inputValue('#device-name'), browserDeviceName);
   assert.equal(await popup.evaluate(() => document.body.classList.contains('in-tab')), true);
 
   step('a failed sign-in says why, and the form stays');
@@ -321,7 +321,7 @@ try {
   await popup.waitForSelector('#view-settings:not([hidden])');
   assert.match(await popup.innerText('#view-settings'), /Copies from password managers sync too: the extension can't tell them apart\./);
   assert.equal(await popup.innerText('#settings-server'), url);
-  assert.equal(await popup.innerText('#settings-device'), 'Edge');
+  assert.equal(await popup.innerText('#settings-device'), browserDeviceName);
   await popup.click('#pause');
   await until(() => document.getElementById('status-text').textContent === 'Paused', undefined, 10000);
   assert.equal(await popup.isChecked('#pause'), true);

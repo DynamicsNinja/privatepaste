@@ -31,6 +31,7 @@ import { ApiError, isTransient } from './api.js';
 import { inspectLocal, sealLocal, decodeClip, DEFAULT_LIMITS, KNOWN_KINDS, contentHashText, contentHashPixels } from './codec.js';
 import { pngToRgba } from './image.js';
 import { normalizeServerUrl } from './server-url.js';
+import { browserName } from './browser.js';
 import { CACHE_CAPACITY } from './store.js';
 import { unwrapWithPassphrase, WrongPassphraseError, encryptBlob, decryptBlob, openSmall } from '../js/e2e.js';
 
@@ -66,7 +67,7 @@ function signInError(e, { infoRequest = false } = {}) {
   return new Error(MESSAGES.unreachable);
 }
 
-export const DEFAULT_DEVICE_NAME = 'Edge';
+export const DEFAULT_DEVICE_NAME = browserName();
 export const BACKOFF_MS = Object.freeze([1000, 2000, 5000, 10000, 30000]);
 export const PING_MS = 20000;
 export const PONG_TIMEOUT_MS = 10000;

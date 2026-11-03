@@ -5,6 +5,7 @@
 // Never log clip content, passphrases or tokens.
 
 import { fromBase64 } from './core/base64.js';
+import { browserName } from './core/browser.js';
 import { createAsk, EngineError, FAILED } from './ui/ask.js';
 import { historyWatch } from './ui/history-watch.js';
 import { formatSize, nextFilter } from './js/e2e.js';
@@ -17,6 +18,8 @@ const DOWNLOAD_FAILED = "Couldn't download the file. Try again.";
 const LOAD_FAILED = "Couldn't load your history.";
 
 const $ = id => document.getElementById(id);
+// The default device name is this browser's name ("Edge", "Chrome", ...): one build serves both stores.
+$('device-name').value = browserName();
 const views = ['signin', 'unlock', 'novault', 'history', 'settings'];
 const list = $('clips');
 const search = $('search');
