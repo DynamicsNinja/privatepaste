@@ -86,6 +86,28 @@ public class DesktopHostTests : IAsyncLifetime
 
     private string TokenPath => Path.Combine(_dir, "token.dat");
 
+    /// <summary>
+    /// The app's log as text. It's opened sharing reads and writes because the logger keeps the file open, and it's retried
+    /// briefly because Windows (or a scanner on the CI runner) can hold the file exclusively for a moment.
+    /// </summary>
+    private async Task<string> ReadLogAsync()
+    {
+        var path = Path.Combine(_dir, "logs", "privatepaste.log");
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return await reader.ReadToEndAsync();
+            }
+            catch (IOException) when (attempt < 50)
+            {
+                await Task.Delay(100);
+            }
+        }
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var until = DateTime.UtcNow + WaitTimeout;
@@ -762,7 +784,7 @@ public class DesktopHostTests : IAsyncLifetime
         Assert.Equal(1, Volatile.Read(ref faults));
         // The log names the type only, never the exception's text. (The line itself isn't asserted: the log drops a write
         // it can't make, e.g. while a scanner holds the file.)
-        Assert.DoesNotContain("denied", File.ReadAllText(Path.Combine(_dir, "logs", "privatepaste.log")));
+        Assert.DoesNotContain("denied", await ReadLogAsync());
     }
 
     [Fact]
@@ -1069,7 +1091,7 @@ public class DesktopHostTests : IAsyncLifetime
         var clip = await ReceiveFileAsync(host, "secret-name.pdf", "pdf bytes");
 
         Assert.Equal(PopupViewModel.CouldNotSaveText, await host.SaveFilesAsync(clip));
-        var log = File.ReadAllText(Path.Combine(_dir, "logs", "privatepaste.log"));
+        var log = await ReadLogAsync();
         Assert.DoesNotContain("secret-name", log);
     }
 
