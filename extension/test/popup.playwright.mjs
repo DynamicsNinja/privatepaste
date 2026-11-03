@@ -5,19 +5,22 @@
 // Without --url it starts its own local server (PP_PASSWORD=dev, a throwaway PP_DATA_DIR, a free port) and stops it at
 // the end; with --url the server must be FRESH (no vault yet). Never point it at the live server. It builds the extension
 // with the FAKE clipboard, loads it into a headed Edge with a throwaway profile, sets up encryption through the web UI,
-// uploads clips from the web (another device), then drives popup.html: sign in, unlock, rows, chips, search, tabs, Copy
-// (text through the engine, an image through navigator.clipboard.write, stubbed here so the real clipboard is never
-// written), Download, Pause syncing, the settings note and Sign out. With PP_SCREENSHOT_DIR set it saves the history
-// view in dark and light. Two sign-ins (the web, the extension): well under the server's 5 a minute.
+// uploads clips from the web (another device), then opens the toolbar popup (chrome.action.openPopup), which hands
+// sign-in over to a tab, and drives popup.html in that tab: failed sign-ins and their messages, sign in, unlock, rows,
+// chips, search, tabs, Copy (text through the engine, an image through navigator.clipboard.write, stubbed here so the
+// real clipboard is never written), Download, Pause syncing, the settings note and Sign out. With PP_SCREENSHOT_DIR set
+// it saves the views in dark and light. Three sign-ins (the web, a wrong password, the extension): under the server's
+// 5 a minute.
 //
 // The built manifest gets host_permissions for http://localhost/*, so the Sign in click's permissions.request finds the
-// origin granted and shows no prompt (Playwright can't click a browser prompt).
+// origin granted and shows no prompt (Playwright can't click a browser prompt). That prompt is why sign-in runs in a
+// tab: Edge closes the toolbar popup when it opens.
 
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildFakeExtension, launchEdge, startServer } from './helpers/local.mjs';
+import { buildFakeExtension, freePort, launchEdge, startServer } from './helpers/local.mjs';
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -130,11 +133,10 @@ try {
   ]);
 
   // ---- the popup ----
-  step('the popup opens on sign-in');
-  const popup = await ctx.newPage();
-  await popup.setViewportSize({ width: 380, height: 600 });
-  // Never write the real clipboard: the image Copy goes through navigator.clipboard.write, recorded here instead.
-  await popup.addInitScript(() => {
+  // Never write the real clipboard: the image Copy goes through navigator.clipboard.write, recorded here instead. On the
+  // context, so it also runs in the sign-in tab the toolbar popup opens.
+  await ctx.addInitScript(() => {
+    if (location.protocol !== 'chrome-extension:') return;
     window.__writes = [];
     Object.defineProperty(navigator.clipboard, 'write', {
       configurable: true,
@@ -153,6 +155,15 @@ try {
     chrome.runtime.sendMessage = (message, ...rest) => { window.__asked.push(message?.type); return send(message, ...rest); };
     Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { window.__writes.push({ types: ['text'] }); } });
   });
+
+  // Edge closes the toolbar popup when the host permission prompt opens, so signing in there ended with no message.
+  step('signed out, the toolbar popup opens the sign-in form in a tab');
+  await web.bringToFront();
+  const opened = ctx.waitForEvent('page', { timeout: 15000 });
+  assert.equal(await sw.evaluate(() => chrome.action.openPopup().then(() => 'opened', e => e.message)), 'opened');
+  const popup = await opened;
+  await popup.waitForURL(/\/popup\.html$/);
+  await popup.setViewportSize({ width: 380, height: 600 });
   // page.waitForFunction evaluates a string in the page, which the extension's CSP blocks; this polls with evaluate.
   const until = async (fn, arg, timeout = 20000) => {
     const end = Date.now() + timeout;
@@ -163,9 +174,33 @@ try {
   };
   const pageErrors = [];
   popup.on('pageerror', e => pageErrors.push(e.message));
-  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await popup.waitForSelector('#view-signin:not([hidden])', { timeout: 15000 });
   assert.equal(await popup.inputValue('#device-name'), 'Edge');
+  assert.equal(await popup.evaluate(() => document.body.classList.contains('in-tab')), true);
+
+  step('a failed sign-in says why, and the form stays');
+  const failedSignIn = async (server, username, password, message) => {
+    await popup.fill('#server', server);
+    await popup.fill('#username', username);
+    await popup.fill('#password', password);
+    await popup.click('#signin-form button[type=submit]');
+    await until(text => {
+      const error = document.getElementById('signin-error');
+      return !error.hidden && error.textContent === text && !document.getElementById('signin-form').hasAttribute('aria-busy');
+    }, message, 20000);
+    assert.equal(await popup.isVisible('#view-signin'), true);
+  };
+  await failedSignIn(url, 'owner', 'not the password', 'Wrong name or password.');
+  await failedSignIn(`http://localhost:${await freePort()}`, 'owner', 'dev', "Can't reach the server.");
+  await failedSignIn('http://paste.example.com', 'owner', 'dev', 'The server address must use https:// (http:// is only allowed for localhost).');
+  if (shots) {
+    for (const scheme of ['dark', 'light']) {
+      await popup.emulateMedia({ colorScheme: scheme });
+      await popup.waitForTimeout(400);
+      await popup.screenshot({ path: join(shots, `ext-signin-failed-${scheme}.png`) });
+    }
+    await popup.emulateMedia({ colorScheme: 'dark' });
+  }
 
   step('sign in');
   await popup.fill('#server', url);
@@ -236,9 +271,8 @@ try {
   await popup.fill('#search', 'nothing matches this');
   assert.deepEqual(await visibleIds(), []);
   assert.equal(await popup.innerText('#empty'), 'No clips match that search.');
-  await popup.waitForSelector('#search-older:not([hidden])');
-  await popup.click('#search-older');
-  await popup.waitForSelector('#search-older', { state: 'hidden', timeout: 20000 });
+  // Six clips: the engine's cache holds the whole history, so there is nothing older to search.
+  assert.equal(await popup.isVisible('#search-older'), false);
   await popup.fill('#search', '');
   assert.equal((await visibleIds()).length, 6);
 
@@ -309,6 +343,13 @@ try {
       await popup.screenshot({ path: join(shots, `ext-popup-signin-${scheme}.png`) });
     }
   }
+  step('signed out, the toolbar popup brings the open sign-in tab forward instead of opening another');
+  const tabs = () => ctx.pages().filter(p => p.url().endsWith('/popup.html')).length;
+  await web.bringToFront();
+  assert.equal(await sw.evaluate(() => chrome.action.openPopup().then(() => 'opened', e => e.message)), 'opened');
+  await until(() => document.visibilityState === 'visible', undefined, 10000);
+  assert.equal(tabs(), 1);
+
   assert.deepEqual(pageErrors, []);
   console.log('PASS');
 } catch (e) {

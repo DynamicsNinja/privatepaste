@@ -32,8 +32,9 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   so before a release run it once with text on the clipboard and once with a large screenshot (it reports ms per read).
 - Popup, real Edge, by hand: `node extension/test/popup.playwright.mjs [--url <fresh local server>]` starts its own
   local server (`PP_PASSWORD=dev`, a throwaway data folder) unless `--url` is given, builds with the fake clipboard,
-  sets up encryption on the web UI and drives `popup.html`: sign in, unlock, rows, chips, search, tabs, Copy, Download,
-  Pause syncing, Sign out. The image Copy's `navigator.clipboard.write` is stubbed, so the real clipboard is never
+  sets up encryption on the web UI, opens the toolbar popup (`chrome.action.openPopup`), which hands sign-in over to a
+  tab, and drives `popup.html` there: failed sign-ins and their messages, sign in, unlock, rows, chips, search, tabs,
+  Copy, Download, Pause syncing, Sign out. The image Copy's `navigator.clipboard.write` is stubbed, so the real clipboard is never
   written. With `PP_SCREENSHOT_DIR` set it saves the popup in dark and light.
 - Real Edge, by hand: `node extension/test/socket.playwright.mjs` starts its own local server (throwaway data), loads a
   fake-clipboard build and checks that the sync socket opens with the subprotocol token and that a clip from another
@@ -51,7 +52,10 @@ To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick
   clipboard poller (`core/poller.js`, once a second) and the sync engine (`engine-host.js`).
 - `popup.html` / `popup.js`, the toolbar popup (the manifest's `action`), holds no keys: it asks the engine through runtime messages
   (`messages.js`, answered by the offscreen document; bytes cross as base64) and draws the rows with `ui/rows.js`.
-  It asks for the host permission of the server's origin in the Sign in click. Copy on an image row is written by the
+  It asks for the host permission of the server's origin in the Sign in click. Edge closes the toolbar popup as soon as
+  that prompt opens, which would end the sign-in with no message, so while signed out the popup opens the same page in a
+  tab (or brings an open one forward) and closes itself: the tab stays open behind the prompt and shows what failed.
+  Every sign-in failure is a plain message, in the desktop app's words where it has one. Copy on an image row is written by the
   popup itself (`navigator.clipboard.write`), after telling the engine so the poller doesn't send it back.
   While open it refreshes every 2 s, asking only for the status and `engine.historyVersion` (a counter the engine bumps
   on every cache change); rows are fetched and decrypted only when that moved. Downloads go through a blob URL made by

@@ -80,6 +80,13 @@ export function viewFor(status) {
   }
 }
 
+/**
+ * Whether the toolbar popup opens the sign-in form in a tab instead of showing it. Signing in asks for the server's
+ * host permission, and Edge closes the toolbar popup as soon as that prompt opens, so a sign-in started there ends with
+ * no message at all. A tab stays open behind the prompt and shows what failed.
+ */
+export const signInInTab = (view, { inTab }) => view === 'signin' && !inTab;
+
 /** The type filter first, then the search over the text (file names for a file clip), as on the web. */
 export function visibleRows(rows, { filter = 'all', query = '' } = {}) {
   const q = query.trim().toLowerCase();

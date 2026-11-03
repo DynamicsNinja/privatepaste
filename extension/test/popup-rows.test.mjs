@@ -66,6 +66,12 @@ test('which view a status opens', () => {
   for (const state of ['syncing', 'offline', 'paused', 'serverTooOld', 'appTooOld']) assert.equal(rows.viewFor({ state }), 'history');
 });
 
+test('the toolbar popup hands sign-in over to a tab; a tab signs in itself', () => {
+  assert.equal(rows.signInInTab('signin', { inTab: false }), true);
+  assert.equal(rows.signInInTab('signin', { inTab: true }), false);
+  for (const view of ['unlock', 'novault', 'history', 'settings']) assert.equal(rows.signInInTab(view, { inTab: false }), false);
+});
+
 test('filter and search: type first, then text and file names', () => {
   const list = [
     { id: 1, kind: 'text', text: 'Meeting moved' },

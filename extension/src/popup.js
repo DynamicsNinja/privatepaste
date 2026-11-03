@@ -1,4 +1,5 @@
-// The toolbar popup: sign in, unlock, and the history with search, History/Pinned, the type chips, Copy and Download.
+// The toolbar popup: sign in (in a tab), unlock, and the history with search, History/Pinned, the type chips, Copy and
+// Download.
 // It holds no keys and no clips at rest: every answer comes from the engine in the offscreen document (messages.js),
 // which decrypts. Rows are built with DOM APIs and textContent only, so clip content never goes through innerHTML.
 // Never log clip content, passphrases or tokens.
@@ -61,6 +62,29 @@ const icon = (templateId, selector) => $(templateId).content.querySelector(selec
 
 // ---- views ----
 
+// The same page runs as the toolbar popup and, for signing in, in a tab (ui.signInInTab says why).
+const inTab = !!(await chrome.tabs.getCurrent());
+document.body.classList.toggle('in-tab', inTab);
+let handingOff = false;
+
+/** Shows the sign-in tab (an open one, or a new one) and closes the popup. */
+async function openSignInTab() {
+  if (handingOff) return;
+  handingOff = true;
+  const url = chrome.runtime.getURL('popup.html');
+  try {
+    const [open] = await chrome.runtime.getContexts({ contextTypes: ['TAB'], documentUrls: [url] });
+    if (open) {
+      await chrome.tabs.update(open.tabId, { active: true });
+      await chrome.windows.update(open.windowId, { focused: true });
+    } else {
+      await chrome.tabs.create({ url });
+    }
+  } finally {
+    window.close();
+  }
+}
+
 function render(next) {
   status = next;
   const pill = ui.statusPill(status);
@@ -71,6 +95,10 @@ function render(next) {
   }
 
   let name = ui.viewFor(status);
+  if (ui.signInInTab(name, { inTab })) {
+    openSignInTab();
+    return;
+  }
   if (name === 'history' && settingsOpen) name = 'settings';
   if (name !== 'history' && name !== 'settings') settingsOpen = false;
   for (const v of views) $(`view-${v}`).hidden = v !== name;
@@ -116,7 +144,8 @@ async function busy(form, errorLine, work) {
 $('signin-form').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.currentTarget;
-  // The host permission must be asked for here, in the click, before anything is awaited.
+  // The host permission must be asked for here, in the click, before anything is awaited. This form only runs in a tab
+  // (ui.signInInTab), which stays open behind the prompt, so whatever the sign-in answers is shown.
   const pattern = ui.originPattern($('server').value);
   const granted = pattern ? chrome.permissions.request({ origins: [pattern] }).catch(() => false) : Promise.resolve(true);
   busy(form, $('signin-error'), async () => {
