@@ -173,6 +173,63 @@ public class AuthApiTests
         Assert.False(devices.Single(d => d.Name == "A").IsCurrent);
     }
 
+    private static async Task<DeviceDto> DeviceAsync(HttpClient client, string name) =>
+        (await client.GetFromJsonAsync<DeviceDto[]>("/api/devices", ProtocolJson.Options))!.Single(d => d.Name == name);
+
+    private static HttpRequestMessage WithAppVersion(string path, string version)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, path);
+        request.Headers.TryAddWithoutValidation(ProtocolHeaders.AppVersion, version);
+        return request;
+    }
+
+    [Fact]
+    public async Task Login_records_app_version()
+    {
+        using var factory = new PrivatePasteFactory();
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ProtocolHeaders.AppVersion, "0.6.3");
+        Assert.Equal(HttpStatusCode.OK, (await LoginRaw(client, PrivatePasteFactory.Password, name: "A")).StatusCode);
+
+        Assert.Equal("0.6.3", (await DeviceAsync(await factory.LoginAsync("B"), "A")).AppVersion);
+    }
+
+    [Fact]
+    public async Task Device_without_app_version_has_none()
+    {
+        using var factory = new PrivatePasteFactory();
+        var client = await factory.LoginAsync("A");
+        Assert.Null((await DeviceAsync(client, "A")).AppVersion);
+    }
+
+    [Fact]
+    public async Task App_version_follows_an_upgrade_right_away()
+    {
+        using var factory = new PrivatePasteFactory();
+        var client = await factory.LoginAsync("A");
+        // Twice within the minute the last-seen time is kept for: a new version is still saved at once.
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(WithAppVersion("/api/devices", "0.6.2"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(WithAppVersion("/api/devices", "0.7.0-rc1"))).StatusCode);
+        Assert.Equal("0.7.0-rc1", (await DeviceAsync(client, "A")).AppVersion);
+
+        // A request without the header keeps what was saved.
+        Assert.Equal("0.7.0-rc1", (await DeviceAsync(client, "A")).AppVersion);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("0.6.3 <script>")]
+    [InlineData("123456789012345678901234567890123")]
+    public async Task Malformed_app_version_is_ignored(string version)
+    {
+        using var factory = new PrivatePasteFactory();
+        var client = await factory.LoginAsync("A");
+        await client.SendAsync(WithAppVersion("/api/devices", "0.6.3"));
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(WithAppVersion("/api/devices", version))).StatusCode);
+        Assert.Equal("0.6.3", (await DeviceAsync(client, "A")).AppVersion);
+    }
+
     [Fact]
     public async Task Logout_revokes_own_token()
     {

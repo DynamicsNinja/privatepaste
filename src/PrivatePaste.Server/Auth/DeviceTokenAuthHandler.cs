@@ -96,7 +96,7 @@ public sealed class DeviceTokenAuthHandler(
         if (token.Length > MaxTokenLength)
             return AuthenticateResult.Fail("Invalid token.");
 
-        var found = await devices.FindByTokenAsync(token);
+        var found = await devices.FindByTokenAsync(token, AppVersionHeader.Read(Request));
         if (found is null)
             return AuthenticateResult.Fail("Invalid token.");
 

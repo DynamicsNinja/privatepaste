@@ -259,6 +259,8 @@ CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
         Assert.Equal(1, Count(after, "SELECT count(*) FROM devices"));
         Assert.Equal(2, Count(after, "SELECT value FROM counters WHERE name = 'seq'"));
         Assert.Equal(4, Count(after, "SELECT count(*) FROM pragma_table_info('clips') WHERE name IN ('payload', 'pinned_at', 'source_user_id', 'source_device_platform')"));
+        Assert.Equal(2, Count(after, "SELECT count(*) FROM pragma_table_info('devices') WHERE name IN ('user_id', 'app_version')"));
+        Assert.Equal(1, Count(after, "SELECT count(*) FROM devices WHERE app_version IS NULL"));
         Assert.Empty(Directory.GetFiles(BlobDir));
         Assert.Equal(0, Count(after, "SELECT count(*) FROM settings WHERE name = 'e2e_blob_wipe_pending'"));
     }

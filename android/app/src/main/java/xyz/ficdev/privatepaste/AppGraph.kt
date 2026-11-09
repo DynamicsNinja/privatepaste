@@ -181,7 +181,9 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         }
     }
 
-    private fun api(baseUrl: HttpUrl, token: String?) = PrivatePasteApi(baseUrl, token, client)
+    private fun api(baseUrl: HttpUrl, token: String?) = PrivatePasteApi(baseUrl, token, client, appVersion)
+
+    private val appVersion: String by lazy { versionName() }
 
     /** Seals and opens clips with the vault key held right now; null while locked. Read it per use, never keep it. */
     private fun codec(): ClipCodec? = sessions.vaultKey.value?.let(::ClipCodec)
@@ -544,7 +546,7 @@ class AppGraph(private val app: PrivatePasteApp, keys: KeyProvider, private val 
         override val isBatteryExempt: () -> Boolean = { BatteryOptimization.isExempt(app) }
         override val areNotificationsEnabled: () -> Boolean = { NotificationManagerCompat.from(app).areNotificationsEnabled() }
         override val requestBatteryExemption: () -> Intent = { BatteryOptimization.requestIntent(app) }
-        override val appVersion: String = versionName()
+        override val appVersion: String = this@AppGraph.appVersion
         override val cachedImage: (String) -> ByteArray? = ::cachedImage
         override fun onUnauthorized() = unauthorized(_current.value)
         override val vaultState: StateFlow<VaultState> = sessions.vaultState

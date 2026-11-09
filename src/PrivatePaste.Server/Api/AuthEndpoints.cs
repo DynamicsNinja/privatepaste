@@ -12,8 +12,8 @@ public static class AuthEndpoints
 
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/auth/login", async (LoginRequest request, SignInVerifier signIn, DeviceRepository devices,
-            CancellationToken ct) =>
+        app.MapPost("/api/auth/login", async (LoginRequest request, HttpRequest http, SignInVerifier signIn,
+            DeviceRepository devices, CancellationToken ct) =>
         {
             // Apps from before there were people send no name. Answered before any hashing: it costs nothing to ask.
             if (string.IsNullOrWhiteSpace(request.Username))
@@ -38,7 +38,8 @@ public static class AuthEndpoints
             if (platform.Length > MaxDeviceNameLength) platform = platform[..MaxDeviceNameLength];
 
             // Tied to the stamp read before the (possibly queued) hash, so a reset or removal in between wins.
-            if (await devices.CreateAsync(name, platform, user!.Id, user.SecurityStamp) is not (var device, var token))
+            if (await devices.CreateAsync(name, platform, user!.Id, user.SecurityStamp,
+                    AppVersionHeader.Read(http)) is not (var device, var token))
                 return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, detail: "Wrong name or password.");
             return Results.Ok(new LoginResponse(device.Id, token));
         }).RequireRateLimiting("login").AllowAnonymous();

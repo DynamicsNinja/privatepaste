@@ -7,6 +7,12 @@ public static class ProtocolHeaders
     public const string Version = "2";
 
     /// <summary>
+    /// The app's own version ("0.6.3"), sent by device apps on every request including sign-in. The server keeps the
+    /// latest one per device to show who runs what; a missing or malformed value is ignored, never refused.
+    /// </summary>
+    public const string AppVersion = "X-PrivatePaste-App-Version";
+
+    /// <summary>
     /// For browsers, which can't set headers on a WebSocket upgrade: offering this subprotocol on <c>/ws</c> counts as the
     /// protocol header, and the server selects it when it accepts the socket.
     /// </summary>

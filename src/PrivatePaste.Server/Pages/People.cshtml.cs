@@ -36,8 +36,13 @@ public class PeopleModel(UserRepository users, DeviceRepository devices, Connect
     /// <summary>A refused rename, reset or removal, shown on that person's card.</summary>
     public (Guid PersonId, string Message)? CardError { get; private set; }
 
-    public string Seen(DeviceDto device) =>
-        device.LastSeenAt is { } seen ? "Seen " + TimeAgo.Format(seen, time.GetUtcNow()) : "Not seen yet";
+    /// <summary>"Windows · v0.6.3 · Seen 2 min ago"; the version is left out for an app that never reported one.</summary>
+    public string Details(DeviceDto device)
+    {
+        var seen = device.LastSeenAt is { } at ? "Seen " + TimeAgo.Format(at, time.GetUtcNow()) : "Not seen yet";
+        var platform = PlatformIcons.For(device.Platform).Label;
+        return device.AppVersion is { } version ? $"{platform} · v{version} · {seen}" : $"{platform} · {seen}";
+    }
 
     public async Task<IActionResult> OnGetAsync()
     {

@@ -63,7 +63,14 @@ public sealed record ClipPage(IReadOnlyList<ClipDto> Items, string? NextCursor);
 
 public sealed record SyncResponse(IReadOnlyList<ClipDto> Clips, IReadOnlyList<Guid> DeletedIds, long LatestSeq, bool HasMore);
 
-public sealed record DeviceDto(Guid Id, string Name, string Platform, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool IsCurrent);
+public sealed record DeviceDto(Guid Id, string Name, string Platform, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool IsCurrent)
+{
+    /// <summary>
+    /// The app version the device last sent (<see cref="ProtocolHeaders.AppVersion"/>), or null when it never sent one
+    /// (an app from before versions were reported).
+    /// </summary>
+    public string? AppVersion { get; init; }
+}
 
 /// <summary>Server settings. <see cref="AutoDeleteDays"/> is null (off), 7, 30 or 90.</summary>
 public sealed record SettingsDto(int? AutoDeleteDays);

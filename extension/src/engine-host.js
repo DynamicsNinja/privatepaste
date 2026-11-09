@@ -15,8 +15,9 @@ export const STATUS_MESSAGE = 'engine.statusChanged';
  * @returns the engine (see core/engine.js), with `ready`: a promise that settles once the stored state is loaded.
  */
 export function startEngine({ clipboard, startPolling }) {
+  const appVersion = chrome.runtime.getManifest().version;
   const engine = createEngine({
-    api: ({ serverUrl, token }) => createApi({ serverUrl, token, fetch: (url, init) => fetch(url, init) }),
+    api: ({ serverUrl, token }) => createApi({ serverUrl, token, appVersion, fetch: (url, init) => fetch(url, init) }),
     store: openStore(indexedDB),
     clipboard,
     clock: { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: id => clearTimeout(id) },

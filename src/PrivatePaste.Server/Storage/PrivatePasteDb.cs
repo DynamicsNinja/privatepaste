@@ -125,6 +125,9 @@ public sealed class PrivatePasteDb(ServerOptions options, ILogger<PrivatePasteDb
         AddColumnIfMissing(conn, "devices", "user_id");
         AddColumnIfMissing(conn, "clips", "source_user_id");
 
+        // The app version each device last reported; devices from before stay NULL until their app sends one.
+        AddColumnIfMissing(conn, "devices", "app_version");
+
         // Here, not in Schema.sql: that script runs before this method, when an old database has no pinned_at yet.
         using var index = conn.CreateCommand();
         index.CommandText = "CREATE INDEX IF NOT EXISTS ix_clips_pinned ON clips(pinned_at DESC, seq DESC) " +

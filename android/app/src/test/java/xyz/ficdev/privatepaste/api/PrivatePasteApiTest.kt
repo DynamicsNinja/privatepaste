@@ -81,6 +81,22 @@ class PrivatePasteApiTest {
         assertEquals("android", body["platform"]!!.jsonPrimitive.content)
     }
 
+    @Test fun appVersion_isSentOnSignInAndLaterCalls() = runBlocking<Unit> {
+        server.enqueue(json("""{"deviceId":"d1","token":"t1"}"""))
+        PrivatePasteApi(server.url("/"), null, client, "0.6.3").login("Ana", "pw", "Pixel")
+        assertEquals("0.6.3", take().getHeader("X-PrivatePaste-App-Version"))
+
+        server.enqueue(json("""{"protocol":2,"kinds":["text"],"limits":{"textKb":1,"imageMb":1}}"""))
+        PrivatePasteApi(server.url("/"), "tok", client, "0.6.3").serverInfo()
+        assertEquals("0.6.3", take().getHeader("X-PrivatePaste-App-Version"))
+    }
+
+    @Test fun appVersion_isLeftOutWhenUnknown() = runBlocking<Unit> {
+        server.enqueue(json("""{"deviceId":"d1","token":"t1"}"""))
+        api().login("Ana", "pw", "Pixel")
+        assertNull(take().getHeader("X-PrivatePaste-App-Version"))
+    }
+
     @Test fun login_sendsUsername() = runBlocking<Unit> {
         server.enqueue(json("""{"deviceId":"d1","token":"t1"}"""))
         api().login("Ana", "pw", "Pixel")

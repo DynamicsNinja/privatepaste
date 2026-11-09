@@ -45,6 +45,15 @@ public sealed class DesktopHost : IAsyncDisposable
     /// <summary>How often a state only someone else can change (no vault yet, an old server) is asked about again.</summary>
     public static readonly TimeSpan RecheckInterval = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// This build's version, sent to the server on every request (<see cref="ProtocolHeaders.AppVersion"/>). The publish
+    /// scripts set it with <c>-p:Version</c>; the "+commit" suffix a local build gets is dropped.
+    /// </summary>
+    public static string? AppVersion { get; } = typeof(DesktopHost).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion
+        .Split('+')[0] is { Length: > 0 } v ? v : null;
+
     private readonly INotifier _notifier;
     private readonly FileLog _log;
     private readonly TimeProvider _time;
@@ -255,8 +264,8 @@ public sealed class DesktopHost : IAsyncDisposable
             LoginResponse login;
             try
             {
-                login = await new PrivatePasteApi(http, _time).LoginAsync(username.Trim(), password, deviceName,
-                    Platform.PlatformName, _shutdown.Token);
+                login = await new PrivatePasteApi(http, _time) { AppVersion = AppVersion }.LoginAsync(username.Trim(),
+                    password, deviceName, Platform.PlatformName, _shutdown.Token);
             }
             catch (Exception e)
             {
@@ -427,7 +436,7 @@ public sealed class DesktopHost : IAsyncDisposable
     private Session StartSession(Uri server, string token, Guid deviceId, HttpClient? http = null)
     {
         http ??= CreateHttpClient(server);
-        var api = new PrivatePasteApi(http, _time) { Token = token };
+        var api = new PrivatePasteApi(http, _time) { Token = token, AppVersion = AppVersion };
         // Both take the codec only while unlocked: until then copies wait in the queue and nothing is fetched.
         var coordinator = new ClipboardCoordinator(
             Platform.Clipboard, api, () => Codec, Cache, _queue, new EchoGuard(_time, EchoWindow), _notifier, _time, () => _paused,
@@ -1338,6 +1347,8 @@ public sealed class HostTransport
         var socket = new ClientWebSocket();
         socket.Options.SetRequestHeader("Authorization", "Bearer " + token);
         socket.Options.SetRequestHeader(ProtocolHeaders.Name, ProtocolHeaders.Version);
+        if (DesktopHost.AppVersion is { } version)
+            socket.Options.SetRequestHeader(ProtocolHeaders.AppVersion, version);
         try
         {
             await socket.ConnectAsync(uri, ct);

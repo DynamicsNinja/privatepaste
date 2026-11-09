@@ -39,6 +39,14 @@ test('every call sends the protocol header and the bearer token', async () => {
   }
 });
 
+test('the app version goes on every call, sign-in included, when known', async () => {
+  const { fetch, calls } = fakeFetch(() => json({ deviceId: 'd1', token: 't1' }));
+  await createApi({ serverUrl: 'http://x', fetch, appVersion: '0.6.3' }).login('owner', 'dev', 'Edge');
+  await createApi({ serverUrl: 'http://x', token: 't1', fetch, appVersion: '0.6.3' }).me();
+  await createApi({ serverUrl: 'http://x', token: 't1', fetch }).me();
+  assert.deepEqual(calls.map(c => c.headers.get('X-PrivatePaste-App-Version')), ['0.6.3', '0.6.3', null]);
+});
+
 test('login sends platform extension and returns the device token', async () => {
   const { fetch, calls } = fakeFetch(() => json({ deviceId: 'd1', token: 't1' }));
   const api = createApi({ serverUrl: 'http://localhost:5202', fetch });

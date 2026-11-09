@@ -46,11 +46,14 @@ import kotlin.coroutines.resumeWithException
  * Typed client for the PrivatePaste server API (README "API"). [baseUrl] must end with `/` (see `ServerUrl`).
  * Every failure is an [ApiException]; coroutine cancellation cancels the underlying OkHttp call.
  * Each call gets its own timeout through `Call.timeout()`, so [client] should leave `callTimeout` unset.
+ * [appVersion] goes out on every request, the WebSocket upgrade included, so the server can show which version each
+ * device runs.
  */
 class PrivatePasteApi(
     private val baseUrl: HttpUrl,
     private val token: String?,
     private val client: OkHttpClient,
+    private val appVersion: String? = null,
 ) : SyncApi {
     /** Timeout of calls that are not uploads. Tests shorten it. */
     internal var requestTimeout: Duration = REQUEST_TIMEOUT
@@ -210,6 +213,7 @@ class PrivatePasteApi(
 
     private fun request(url: HttpUrl, authorized: Boolean = true): Request.Builder {
         val builder = Request.Builder().url(url).header(PROTOCOL_HEADER, PROTOCOL_VERSION)
+        if (!appVersion.isNullOrEmpty()) builder.header(APP_VERSION_HEADER, appVersion)
         if (authorized && !token.isNullOrEmpty()) builder.header("Authorization", "Bearer $token")
         return builder
     }
@@ -309,6 +313,7 @@ class PrivatePasteApi(
 
     companion object {
         private const val PROTOCOL_HEADER = "X-PrivatePaste-Protocol"
+        private const val APP_VERSION_HEADER = "X-PrivatePaste-App-Version"
         private const val PROTOCOL_VERSION = "2"
         private val REQUEST_TIMEOUT: Duration = Duration.ofSeconds(30)
         private val WS_CONNECT_TIMEOUT: Duration = Duration.ofSeconds(15)

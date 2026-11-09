@@ -28,6 +28,9 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
     /// <summary>Sent as a Bearer token when set.</summary>
     public string? Token { get; set; }
 
+    /// <summary>Sent as <see cref="ProtocolHeaders.AppVersion"/> on every request when set, so the server can show it.</summary>
+    public string? AppVersion { get; init; }
+
     /// <summary>The timeout of each call that is not an upload.</summary>
     public TimeSpan RequestTimeout { get; init; } = BaseTimeout;
 
@@ -228,6 +231,7 @@ public sealed class PrivatePasteApi(HttpClient http, TimeProvider? time = null)
         var req = new HttpRequestMessage(method, url);
         if (Token is { Length: > 0 } t) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", t);
         req.Headers.Add(ProtocolHeaders.Name, ProtocolHeaders.Version);
+        if (AppVersion is { Length: > 0 } v) req.Headers.TryAddWithoutValidation(ProtocolHeaders.AppVersion, v);
         return req;
     }
 

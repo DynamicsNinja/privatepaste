@@ -43,6 +43,25 @@ public class ApiClientTests
     }
 
     [Fact]
+    public async Task AppVersion_ReachesTheServer()
+    {
+        using var server = new PrivatePasteFactory();
+        var api = new PrivatePasteApi(server.CreateClient()) { AppVersion = "0.6.3" };
+        await api.LoginAsync(PrivatePasteFactory.OwnerName, PrivatePasteFactory.Password, "PC-app", "windows");
+
+        var other = await server.LoginAsync("Other");
+        var devices = (await other.GetFromJsonAsync<DeviceDto[]>("/api/devices", ProtocolJson.Options))!;
+        Assert.Equal("0.6.3", devices.Single(d => d.Name == "PC-app").AppVersion);
+    }
+
+    [Fact]
+    public void DesktopHost_AppVersion_HasNoCommitSuffix()
+    {
+        Assert.NotNull(PrivatePaste.Desktop.DesktopHost.AppVersion);
+        Assert.DoesNotContain('+', PrivatePaste.Desktop.DesktopHost.AppVersion);
+    }
+
+    [Fact]
     public async Task Login_then_upload_and_list()
     {
         using var server = new PrivatePasteFactory();

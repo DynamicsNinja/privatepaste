@@ -41,6 +41,22 @@ public class PeoplePageTests
     }
 
     [Fact]
+    public async Task People_ShowsAppVersion_WhenTheDeviceReportedOne()
+    {
+        using var f = new PrivatePasteFactory();
+        var phone = await f.LoginAsync("Owner-phone", "android");
+        await f.LoginAsync("Owner-pc");
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/devices");
+        request.Headers.Add(ProtocolHeaders.AppVersion, "0.6.3");
+        (await phone.SendAsync(request)).EnsureSuccessStatusCode();
+        var web = await f.LoginWebAsync();
+
+        var html = WebUtility.HtmlDecode(await web.GetStringAsync("/people"));
+        Assert.Contains(" · Android · v0.6.3 · Seen ", html);
+        Assert.Matches(" · Windows · (Seen|Not seen yet)", html);
+    }
+
+    [Fact]
     public async Task People_RegularPerson_SeesOnlyOwnCard_NoAddForm()
     {
         using var f = new PrivatePasteFactory();

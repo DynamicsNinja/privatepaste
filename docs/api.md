@@ -16,6 +16,10 @@ Send `X-PrivatePaste-Protocol: 2` on every request, including the WebSocket upgr
 
 Read `GET /api/server-info` at sign-in and on every reconnect, before any vault or clip call. A server from before protocol 2 doesn't have it (404): tell the user `Update your PrivatePaste server to keep syncing.` and don't sync.
 
+### App version
+
+Device apps also send their own version as `X-PrivatePaste-App-Version: 0.6.3` on every request, sign-in included (and on the WebSocket upgrade where the platform can set headers). The server keeps the latest one per device and lists it as `appVersion` in `GET /api/devices` and on the People page. It's informational: a missing value or one that isn't 1-32 letters, digits, `.`, `-` or `+` is ignored, never refused, and a request without it keeps the stored version.
+
 ## Authentication
 
 `POST /api/auth/login` with a person's name and password returns a device token for that person. Send it on every other request as `Authorization: Bearer <token>`, including the WebSocket upgrade request. A token stays valid until the device logs out or is revoked; it is not tied to the password, so changing your own password keeps your devices signed in. When the owner resets a person's password or removes them, though, all that person's tokens are revoked (see [Changing the password](self-hosting.md#changing-the-password)).
@@ -33,7 +37,7 @@ The web UI uses a session cookie instead. Cookie-authenticated `POST`/`PUT`/`DEL
 | `POST` | `/api/auth/login` | none | Body `{username, password, deviceName, platform}` (device name 1-50 chars; `username` is matched case-insensitively). Returns `{deviceId, token}`. 400 with detail `Update PrivatePaste to sign in.` when `username` is missing or blank (apps from before there were people), 401 with detail `Wrong name or password.` for an unknown name or a wrong password, 429 when rate-limited or too many logins are being checked at once. |
 | `POST` | `/api/auth/logout` | bearer | Revokes the calling device's token and closes its WebSockets. 204. |
 | `GET` | `/api/me` | bearer | `{name, isOwner}` for the person signed in. |
-| `GET` | `/api/devices` | bearer | Lists devices: `[{id, name, platform, createdAt, lastSeenAt, isCurrent}]`. The owner gets every person's devices; anyone else only their own. |
+| `GET` | `/api/devices` | bearer | Lists devices: `[{id, name, platform, createdAt, lastSeenAt, isCurrent, appVersion}]`. `appVersion` is the last [app version](#app-version) the device sent, or null. The owner gets every person's devices; anyone else only their own. |
 | `DELETE` | `/api/devices/{id}` | bearer | Revokes a device and closes its WebSockets. 204, or 404 when there is no such device or it belongs to someone else (the owner can revoke anyone's). |
 | `GET` | `/api/vault` | bearer | The passphrase wrap of the vault key, `{keyId, kdf, nonce, wrappedKey}` (see [Vault wrap](#vault-wrap)), or 404 when encryption isn't set up yet. |
 | `PUT` | `/api/vault` | bearer, owner | Body: a wrap. Creates the vault when there is none (201), or replaces the wrap when its `keyId` is the current one, as when the passphrase changes (200). 409 with detail `Encryption is already set up with a different key.` otherwise; 400 for a wrap that fails the checks in [Vault wrap](#vault-wrap). Returns the wrap. |
@@ -115,7 +119,7 @@ The server closes the socket with status 1008 (`revoked`) when the device is rev
 
 ## Client rules
 
-- Send `X-PrivatePaste-Protocol: 2` on every request. Read `/api/server-info` at sign-in and on every reconnect; a 404 there means the server is too old (`Update your PrivatePaste server to keep syncing.`). A 426 from the server means this app is too old (`Update PrivatePaste to keep syncing.`).
+- Send `X-PrivatePaste-Protocol: 2` on every request, and your app's version as `X-PrivatePaste-App-Version`. Read `/api/server-info` at sign-in and on every reconnect; a 404 there means the server is too old (`Update your PrivatePaste server to keep syncing.`). A 426 from the server means this app is too old (`Update PrivatePaste to keep syncing.`).
 - Only create kinds the server lists in `kinds`, and check sizes against its `limits`.
 - **Never apply a clip of a kind you don't know.** Parse an unknown `kind` without failing (keep it as "unknown"), show it as `Update PrivatePaste to see this clip`, and never put it on the clipboard. Later releases add kinds within protocol 2, and this keeps them compatible both ways. Ignore unknown fields in the payload, too.
 - Before syncing, compare the `keyId` of your stored vault key with `GET /api/vault`. When it differs (or the vault is gone), or `vault.reset` arrives, or an upload gets 409 titled `Encryption was reset`: delete the stored key, clear the local history cache, thumbnails and upload queue, and ask for the new passphrase (`Encryption was reset. Enter the new passphrase.`). Do the same the first time you meet an encrypted server with a cache from before, so no plaintext lingers on the device.

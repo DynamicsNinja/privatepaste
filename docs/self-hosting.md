@@ -58,6 +58,8 @@ The owner manages people on the **People** page of the web UI (History, People, 
 - **Remove**: signs out all their devices and web sessions at once. Their past clips stay in the history under their name. The name can be reused later.
 - **Sign out** a single device, for any person.
 
+Each device is listed with its platform, the app version it runs and when it was last seen ("Windows · v0.6.3 · Seen 2 min ago"). After an update, the new version shows as soon as the app next reaches the server.
+
 Anyone changes their own password under **Settings > Change password** (it signs them out of their other browsers; their devices stay signed in) and signs out their own devices on the People page. Only the owner sees auto-delete and Clear history, and the server refuses them to anyone else. History rows show a name chip once the server has more than one person.
 
 ## Changing the password

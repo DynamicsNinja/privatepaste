@@ -3,6 +3,7 @@
 
 export const PROTOCOL_HEADER = 'X-PrivatePaste-Protocol';
 export const PROTOCOL_VERSION = '2';
+export const APP_VERSION_HEADER = 'X-PrivatePaste-App-Version';
 export const PLATFORM = 'extension';
 
 /** A non-success answer from the server: its status and, for a problem response, its title and detail. */
@@ -21,14 +22,16 @@ export const isTransient = e =>
   !(e instanceof ApiError) || e.status >= 500 || e.status === 408 || e.status === 429;
 
 /**
- * @param {{serverUrl: string, token?: string, fetch: typeof fetch}} options
+ * @param {{serverUrl: string, token?: string, fetch: typeof fetch, appVersion?: string}} options
+ *   appVersion: the extension's version, sent on every call so the server can show which version each device runs.
  */
-export function createApi({ serverUrl, token, fetch }) {
+export function createApi({ serverUrl, token, fetch, appVersion }) {
   const base = serverUrl.replace(/\/+$/, '');
   const path = id => encodeURIComponent(id);
 
   async function send(method, url, { body, json } = {}) {
     const headers = { [PROTOCOL_HEADER]: PROTOCOL_VERSION };
+    if (appVersion) headers[APP_VERSION_HEADER] = appVersion;
     if (token) headers.Authorization = `Bearer ${token}`;
     if (json !== undefined) {
       headers['Content-Type'] = 'application/json';

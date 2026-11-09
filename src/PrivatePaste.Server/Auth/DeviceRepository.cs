@@ -21,7 +21,7 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
     /// that landed after the check must not be outlived by a device signed in with the old password.
     /// </summary>
     public async Task<(DeviceDto Device, string Token)?> CreateAsync(string name, string platform, Guid userId,
-        string securityStamp)
+        string securityStamp, string? appVersion = null)
     {
         var id = Guid.NewGuid();
         var token = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
@@ -30,8 +30,8 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO devices(id, name, platform, token_hash, created_at, user_id)
-            SELECT @id, @name, @platform, @hash, @at, id FROM users
+            INSERT INTO devices(id, name, platform, token_hash, created_at, user_id, app_version)
+            SELECT @id, @name, @platform, @hash, @at, id, @version FROM users
             WHERE id = @user AND security_stamp = @stamp AND removed_at IS NULL
             """;
         cmd.Parameters.AddWithValue("@id", id.ToString());
@@ -41,19 +41,21 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         cmd.Parameters.AddWithValue("@at", Format(now));
         cmd.Parameters.AddWithValue("@user", userId.ToString());
         cmd.Parameters.AddWithValue("@stamp", securityStamp);
+        cmd.Parameters.AddWithValue("@version", appVersion ?? (object)DBNull.Value);
         if (await cmd.ExecuteNonQueryAsync() == 0)
             return null;
 
-        return (new DeviceDto(id, name, platform, now, null, false), token);
+        return (new DeviceDto(id, name, platform, now, null, false) { AppVersion = appVersion }, token);
     }
 
     /// <summary>The device with this token, unless it is revoked or its person was removed.</summary>
-    public async Task<AuthenticatedDevice?> FindByTokenAsync(string token)
+    /// <param name="appVersion">The version the app reports now, saved when it differs from the stored one; null keeps it.</param>
+    public async Task<AuthenticatedDevice?> FindByTokenAsync(string token, string? appVersion = null)
     {
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT d.id, d.name, d.platform, d.created_at, d.last_seen_at, u.id, u.is_owner FROM devices d
+            SELECT d.id, d.name, d.platform, d.created_at, d.last_seen_at, d.app_version, u.id, u.is_owner FROM devices d
             JOIN users u ON u.id = d.user_id
             WHERE d.token_hash = @hash AND d.revoked_at IS NULL AND u.removed_at IS NULL
             """;
@@ -61,21 +63,24 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         AuthenticatedDevice? found;
         await using (var r = await cmd.ExecuteReaderAsync())
             found = await r.ReadAsync()
-                ? new AuthenticatedDevice(Read(r, null), Guid.Parse(r.GetString(5)), r.GetInt64(6) != 0)
+                ? new AuthenticatedDevice(Read(r, null), Guid.Parse(r.GetString(6)), r.GetInt64(7) != 0)
                 : null;
         if (found is null)
             return null;
 
         var device = found.Device;
         var now = time.GetUtcNow();
-        if (device.LastSeenAt is null || now - device.LastSeenAt >= LastSeenInterval)
+        var version = appVersion ?? device.AppVersion;
+        // An upgrade shows at once, not only when the last-seen time is next due.
+        if (device.LastSeenAt is null || now - device.LastSeenAt >= LastSeenInterval || version != device.AppVersion)
         {
             await using var update = conn.CreateCommand();
-            update.CommandText = "UPDATE devices SET last_seen_at = @at WHERE id = @id";
+            update.CommandText = "UPDATE devices SET last_seen_at = @at, app_version = @version WHERE id = @id";
             update.Parameters.AddWithValue("@at", Format(now));
+            update.Parameters.AddWithValue("@version", version ?? (object)DBNull.Value);
             update.Parameters.AddWithValue("@id", device.Id.ToString());
             await update.ExecuteNonQueryAsync();
-            found = found with { Device = device with { LastSeenAt = now } };
+            found = found with { Device = device with { LastSeenAt = now, AppVersion = version } };
         }
 
         return found;
@@ -87,7 +92,7 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
         await using var conn = db.Open();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, platform, created_at, last_seen_at FROM devices
+            SELECT id, name, platform, created_at, last_seen_at, app_version FROM devices
             WHERE revoked_at IS NULL AND (@user IS NULL OR user_id = @user) ORDER BY created_at, id
             """;
         cmd.Parameters.AddWithValue("@user", userId?.ToString() ?? (object)DBNull.Value);
@@ -143,7 +148,10 @@ public sealed class DeviceRepository(PrivatePasteDb db, TimeProvider time)
     {
         var id = Guid.Parse(r.GetString(0));
         return new DeviceDto(id, r.GetString(1), r.GetString(2), Parse(r.GetString(3)),
-            r.IsDBNull(4) ? null : Parse(r.GetString(4)), id == currentId);
+            r.IsDBNull(4) ? null : Parse(r.GetString(4)), id == currentId)
+        {
+            AppVersion = r.IsDBNull(5) ? null : r.GetString(5),
+        };
     }
 
     private static string HashToken(string token) =>
