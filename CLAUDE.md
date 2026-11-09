@@ -66,7 +66,7 @@ Each is a tag push; CI tests, builds and creates the GitHub Release:
 |---|---|---|
 | `desktop-vX.Y.Z` | `.github/workflows/desktop.yml` | Windows MSI and zip, macOS arm64/x64 zips, Linux tar.gz |
 | `android-vX.Y.Z` | `.github/workflows/android.yml` | Signed APK (keystore from repo secrets) |
-| `extension-vX.Y.Z` | `.github/workflows/extension.yml` | `privatepaste-extension-X.Y.Z.zip` (load unpacked) |
+| `extension-vX.Y.Z` | `.github/workflows/extension.yml` | `privatepaste-extension-X.Y.Z.zip`; uploaded to [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/privatepaste/ohocahginfedbcipoajciabkidmocdgf) by hand (`extension/store/README.md`) |
 | `server-vX.Y.Z` | `.github/workflows/server.yml` | `ghcr.io/dynamicsninja/privatepaste:X.Y.Z` and `latest` (linux/amd64, linux/arm64) |
 
 A version with a `-` (e.g. `0.2.0-rc1`) is a prerelease. The MSI version drops the suffix, so an RC and its final share a version. When a release changes the server image, update the image tag in `deploy/dokploy/privatepaste/` too (the homepage takes its version and compose examples' tag from there).

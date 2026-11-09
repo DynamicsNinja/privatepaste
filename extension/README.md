@@ -19,7 +19,7 @@ comes the same way (`wwwroot/fonts/` to `fonts/`). `--version` defaults to
 tests drive with the runtime messages `{type: 'test.clipboard.set', text?, pngBase64?}` and
 `{type: 'test.clipboard.get'}`. Automated tests must use it: the real clipboard is synced by the owner's desktop app.
 
-To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick the output folder.
+Published at [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/privatepaste/ohocahginfedbcipoajciabkidmocdgf). To try a build: `edge://extensions`, turn on Developer mode, Load unpacked, pick the output folder.
 
 ## Tests
 

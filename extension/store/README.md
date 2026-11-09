@@ -89,8 +89,8 @@ PrivatePaste has no shared server. If a reviewer can't run Docker and rejects fo
 review server on its own domain with a review-only password, put in the notes and taken down after approval. Never
 the real server.
 
-After approval, the listing URL is on the extension's **Overview** page. Put it in `README.md`, `docs/extension.md`
-and the homepage's Edge pill, replacing the "coming soon" lines.
+After approval, the listing URL is on the extension's **Overview** page. It is live:
+<https://microsoftedge.microsoft.com/addons/detail/privatepaste/ohocahginfedbcipoajciabkidmocdgf>, linked from `README.md`, `docs/extension.md`, `extension/README.md` and the homepage's Edge pill.
 
 ## 5. Updates
 
